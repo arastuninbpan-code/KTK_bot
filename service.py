@@ -5,7 +5,7 @@ import time
 from datetime import date, datetime, timedelta
 from datetime import time as dtime
 
-from core import Row, diff, norm, parse_rows, phones_in
+from core import Row, diff, match_phones, parse_rows, phones_in
 
 log = logging.getLogger("planner")
 SEND_PAUSE_SEC = 0.05
@@ -21,8 +21,9 @@ def sync(store, source, now: datetime):
     rows = [r.to_dict() for r in parse_rows(source.rows(), now.date())]
     first_run = store.meta("initialized") is None
     if not first_run:  # первый запуск — молча запоминаем, чтобы не завалить всех уведомлениями
+        users = store.users()
         for _kind, person, text in diff(store.schedule(), rows, now.date()):
-            for phone in store.phones_by_name(person):
+            for phone in match_phones(person, users):
                 store.add_note(phone, text, now.isoformat(timespec="minutes"))
     store.set_schedule(rows)
     store.set_meta("initialized", True)
@@ -52,12 +53,11 @@ def start_of(row: Row, tz):
 
 def reminders(store, now: datetime):
     """За сутки и за час до смены (если время указано), иначе накануне вечером. Каждое напоминание — один раз."""
-    users = {}
-    for u in store.users():
-        users.setdefault(u["name_norm"], []).append(u["phone"])
+    users = store.users()
     batches = {}
     for r in map(lambda d: Row(**d), store.schedule()):
-        if not r.person or norm(r.person) not in users:
+        phones = match_phones(r.person, users) if r.person else []
+        if not phones:
             continue
         start = start_of(r, now.tzinfo)
         if start:
@@ -68,7 +68,7 @@ def reminders(store, now: datetime):
         for kind, trigger, grace, title in rules:
             if not (trigger <= now < trigger + grace) or (start and now >= start):
                 continue
-            for phone in users[norm(r.person)]:
+            for phone in phones:
                 key = f"{kind}|{r.key}|{r.time}"
                 if not store.digest_sent(phone, key):
                     store.set_digest(phone, key)

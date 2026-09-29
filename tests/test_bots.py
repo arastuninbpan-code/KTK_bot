@@ -128,3 +128,12 @@ def test_stop_and_removed_employee():
     src.emps.pop()
     service.cycle(store, src, chans, now(1))
     assert store.chats_for("9000000002") == []
+
+
+def test_surname_only_in_schedule_still_reaches_the_person():
+    store, src, tg, _, chans = setup()
+    src.emps[0] = ("Иванова А. А", "+7 900 000-00-01")  # в списке без точки, в расписании только фамилия
+    src.table.append(["04.10\n12.00", "", "Иванова", "", "", "", ""])
+    handle(store, tg, {"chat_id": 5, "text": "", "phone": "9000000001"}, now(1))
+    handle(store, tg, {"chat_id": 5, "text": "/shifts", "phone": None}, now(1))
+    assert "04.10" in texts(tg, 5)[-1] and "Ближайших смен нет" not in texts(tg, 5)[-1]

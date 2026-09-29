@@ -2,14 +2,16 @@
 import re
 from datetime import datetime
 
-from core import Row, looks_like_phone, norm, norm_phone
+from core import Row, looks_like_phone, match_phones, norm_phone
 
 HELP = "/shifts — мои ближайшие смены\n/schedule — афиша ближайших событий\n/stop — отключить уведомления"
 
 
 def my_shifts(store, user: dict, today: str) -> str:
+    users = store.users()
     rows = sorted((r for r in map(lambda d: Row(**d), store.schedule())
-                   if r.date >= today and norm(r.person) == user["name_norm"]), key=lambda r: (r.date, r.time))
+                   if r.date >= today and r.person and user["phone"] in match_phones(r.person, users)),
+                  key=lambda r: (r.date, r.time))
     return "\n".join(r.describe() for r in rows) or "Ближайших смен нет."
 
 

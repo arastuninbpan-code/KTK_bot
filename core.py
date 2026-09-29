@@ -12,6 +12,34 @@ def norm(s) -> str:
     return " ".join(re.sub(r"\.\s+", ".", s).split())  # «М. В.» и «М.В.» — одно и то же
 
 
+WORD = r"[^\W\d_]+(?:-[^\W\d_]+)*"  # слово из букв, дефисные фамилии — одно слово
+
+
+def person_key(name) -> tuple:
+    """(фамилия, инициалы) без учёта регистра, точек и пробелов: «Дьячков Н. А», «Дьячков Н.А.», «дьячков» -> ('дьячков', 'на'/'')."""
+    words = re.findall(WORD, str(name).lower().replace("ё", "е"))
+    if not words:
+        return "", ""
+    return words[0], "".join(w[0] for w in words[1:])
+
+
+def match_phones(person: str, users: list) -> list:
+    """Телефоны сотрудников, которых в расписании обозначает запись `person`.
+    Фамилия должна совпасть; инициалы, если указаны с обеих сторон, тоже (можно неполные: «Н» и «Н.А.»).
+    Если в расписании одна фамилия, а таких сотрудников несколько (однофамильцы), никого не выбираем: лучше промолчать, чем написать не тому."""
+    surname, initials = person_key(person)
+    if not surname:
+        return []
+    found = []
+    for u in users:
+        s, i = person_key(u["name"])
+        if s == surname and (not initials or not i or i.startswith(initials) or initials.startswith(i)):
+            found.append((u["phone"], (s, i)))
+    if not initials and len({k for _, k in found}) > 1:
+        return []
+    return [p for p, _ in found]
+
+
 def norm_phone(s) -> str:
     """Любой вид номера -> только цифры без кода страны: «8 (930) 702-91-09», «+7 930 702 91 09»,
     «79307029109», «930.702.91.09» — всё это «9307029109». Чужие форматы (не 11 цифр с 7/8) остаются цифрами как есть."""

@@ -50,10 +50,6 @@ class Store:
         r = self._run("SELECT * FROM users WHERE phone=?", (phone,)).fetchone()
         return dict(r) if r else None
 
-    def phones_by_name(self, name: str) -> list:
-        return [r["phone"] for r in
-                self._run("SELECT phone FROM users WHERE name_norm=?", (norm(name),)).fetchall()]
-
     # --- чаты (Telegram / MAX) ---
     def bind(self, channel: str, chat_id, phone: str):
         self._run("INSERT INTO chats VALUES(?,?,?) ON CONFLICT(channel,chat_id) DO UPDATE SET phone=excluded.phone",
