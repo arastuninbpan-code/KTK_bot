@@ -7,6 +7,12 @@ import httpx
 from service import Gone
 
 
+def check(r):
+    """Как raise_for_status, но без адреса запроса: в адресе Telegram есть токен, а логи Actions в публичном репозитории видны всем."""
+    if r.status_code >= 400:
+        raise RuntimeError(f"HTTP {r.status_code}: {r.text[:200]}")
+
+
 class Telegram:
     name = "telegram"
 
@@ -23,11 +29,11 @@ class Telegram:
         r = self.http.post("/sendMessage", json=body)
         if r.status_code == 403:  # бот заблокирован пользователем
             raise Gone()
-        r.raise_for_status()
+        check(r)
 
     def poll(self, cursor, timeout=30):
         r = self.http.get("/getUpdates", params={"timeout": timeout, "offset": cursor or 0})
-        r.raise_for_status()
+        check(r)
         events = []
         for u in r.json()["result"]:
             cursor = u["update_id"] + 1
@@ -57,14 +63,14 @@ class Max:
         r = self.http.post("/messages", params={"user_id": chat_id}, json=body)
         if r.status_code == 403:
             raise Gone()
-        r.raise_for_status()
+        check(r)
 
     def poll(self, cursor, timeout=30):
         params = {"timeout": timeout, "types": "message_created,bot_started"}
         if cursor is not None:
             params["marker"] = cursor
         r = self.http.get("/updates", params=params)
-        r.raise_for_status()
+        check(r)
         data = r.json()
         events = []
         for u in data.get("updates", []):
