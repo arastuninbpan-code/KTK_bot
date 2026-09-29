@@ -49,7 +49,7 @@ h1, h2, h3 { font-family: var(--h); font-weight: 700; }
 .steps { margin: 0 0 18px; padding: 0; list-style: none; counter-reset: s; display: grid; gap: 12px; }
 .steps li { counter-increment: s; display: flex; gap: 12px; align-items: flex-start; font-weight: 700; }
 .steps li::before { content: counter(s); flex: none; width: 30px; height: 30px; border-radius: 50%; background: var(--orange); color: #fff; border: 2.5px solid var(--navy); display: grid; place-items: center; font: 700 15px var(--h); }
-.code-input { width: 100%; text-align: center; font: 700 34px var(--h); letter-spacing: .28em; padding: 12px 8px 12px 20px; border-radius: 16px; border: var(--line); background: var(--light); }
+.code-input { width: 100%; text-align: center; font: 700 28px var(--h); letter-spacing: .12em; text-transform: uppercase; padding: 12px 8px; border-radius: 16px; border: var(--line); background: var(--light); }
 .code-input::placeholder { color: #8fc5e0; }
 .error { min-height: 22px; margin: 8px 2px 0; color: var(--coral); font-weight: 800; font-size: 14px; }
 .hint { min-height: 22px; margin: 8px 2px 0; color: var(--navy); font-weight: 800; font-size: 14px; animation: blink 1.2s ease-in-out infinite; }

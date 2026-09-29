@@ -120,18 +120,18 @@ function confirmDialog(title, text, okLabel, onOk) {
 function loginView() {
   let busy = false;
   const err = h("div", {class: "error", role: "alert"});
-  const input = h("input", {class: "code-input", inputmode: "numeric", autocomplete: "one-time-code", maxlength: "7", placeholder: "••••••", "aria-label": "Код из бота",
-    oninput: () => { input.value = input.value.replace(/\D/g, "").slice(0, 6); err.textContent = ""; if (input.value.length === 6) go(); }});
+  const input = h("input", {class: "code-input", autocomplete: "username", autocapitalize: "characters", spellcheck: "false", maxlength: "32", placeholder: "ЛОГИН", "aria-label": "Ваш логин",
+    oninput: () => { err.textContent = ""; }, onkeydown: (e) => { if (e.key === "Enter") go(); }});
   const btn = h("button", {class: "btn", onclick: () => go()}, "Войти");
   async function go() {
     if (busy) return;
-    if (input.value.length < 6) { err.textContent = "Введите 6 цифр из бота"; return; }
+    if (!input.value.trim()) { err.textContent = "Введите ваш логин"; return; }
     busy = true; btn.disabled = true; btn.textContent = "Входим…"; err.className = "hint"; err.textContent = "Идёт загрузка, подождите несколько секунд…"; input.disabled = true;
     try {
-      const r = await api("POST", "/api/login", {code: input.value});
+      const r = await api("POST", "/api/login", {login: input.value.trim()});
       state.token = r.token; localStorage.setItem("ktk_token", r.token);
       await load();
-    } catch (e) { err.className = "error"; err.textContent = e.message; input.disabled = false; input.value = ""; input.focus(); } finally { busy = false; btn.disabled = false; btn.textContent = "Войти"; }
+    } catch (e) { err.className = "error"; err.textContent = e.message; input.disabled = false; input.focus(); } finally { busy = false; btn.disabled = false; btn.textContent = "Войти"; }
   }
   return h("main", {class: "login"},
     h("div", {class: "hero-wrap"}, h("img", {class: "hero", src: "avatar.webp", alt: "Пилот с бумажным самолётиком"}), splash()),
@@ -139,9 +139,9 @@ function loginView() {
     h("p", {class: "sub"}, "Ваши смены и события в одном месте"),
     h("div", {class: "card"},
       h("ol", {class: "steps"},
-        h("li", {}, h("span", {}, "Откройте бота и нажмите «Поделиться номером»")),
-        h("li", {}, h("span", {}, ["Отправьте боту ", h("b", {}, "/login"), ": он пришлёт код"])),
-        h("li", {}, h("span", {}, "Введите код здесь"))),
+        h("li", {}, h("span", {}, "Откройте бота и поделитесь номером (или пришлите логин)")),
+        h("li", {}, h("span", {}, ["Напишите боту ", h("b", {}, "/login"), ": он пришлёт ваш логин"])),
+        h("li", {}, h("span", {}, "Введите логин здесь"))),
       input, err,
       h("div", {class: "stack"}, btn, h("a", {class: "btn light", href: CFG.BOT_URL || "#", target: "_blank", rel: "noopener"}, icon("plane"), "Открыть бота"))));
 }

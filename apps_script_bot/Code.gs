@@ -377,17 +377,21 @@ const HELP = [
   "<b>Что я умею</b>",
   "/shifts — ваши ближайшие смены",
   "/schedule — афиша с составом",
-  "/login — код для входа в приложение",
+  "/login — ваш логин для входа в приложение",
   "/stop — отключить уведомления",
 ].join("\n");
 
 const msgWelcome = (name) => `✈️ <b>Готово, ${esc(name)}!</b>\nТеперь я буду присылать уведомления о ваших сменах.\n\n${HELP}`;
-const msgAskPhone = "💬 <b>Здравствуйте!</b>\nЧтобы получать уведомления о сменах, поделитесь номером телефона: нажмите кнопку ниже или напишите номер сообщением.";
-const msgUnknownPhone = "💬 <b>Этого номера нет в списке сотрудников.</b>\nОбратитесь к администратору, чтобы вас добавили.";
+const msgAskPhone = "💬 <b>Здравствуйте!</b>\nЧтобы получать уведомления о сменах, поделитесь номером телефона (кнопка ниже) или пришлите свой логин, который выдал администратор.";
+const msgUnknownPhone = "💬 <b>Этого номера нет в списке сотрудников.</b>\nОбратитесь к администратору, чтобы вас добавили. Если у вас есть логин, просто пришлите его сюда.";
 const msgStopped = "💬 <b>Уведомления отключены.</b>\nЧтобы включить снова, напишите /start.";
 const msgConnected = (name) => `💬 <b>${esc(name)}</b>, вы подключены.\n\n${HELP}`;
 const msgBlocked = "💬 <b>Доступ закрыт.</b>\nОбратитесь к администратору.";
-const msgLogin = (code) => `🔑 <b>Код для входа</b>\n\n<code>${code}</code>\n\nВведите его в приложении. Код действует сутки, им можно входить на любом устройстве.`;
+const msgLogin = (login) => `🔑 <b>Ваш логин</b>
+
+<code>${esc(login)}</code>
+
+Введите его в приложении. Логин постоянный: его выдаёт и может изменить администратор.`;
 
 /** Кнопка под сообщением: «Открыть в приложении». Если адрес приложения не задан — без кнопки. */
 const appButton = (url) => (url ? {button: {text: "Открыть в приложении", url}} : undefined);
@@ -421,7 +425,7 @@ function telegramEvent(update) {
 // ===== lib/store.mjs =====
 // Хранилище поверх таблицы: сотрудники и роли, чаты, снимок расписания, коды входа, блокировка.
 
-const TABS = {schedule: "Расписание", staff: "Сотрудники", chats: "Подписчики", state: "_служебное", codes: "_вход", lock: "_замок"};
+const TABS = {schedule: "Расписание", staff: "Сотрудники", chats: "Подписчики", state: "_служебное", lock: "_замок"};
 const SUBS_HEADER = ["Канал", "ID чата", "Телефон", "ФИО"];
 const ROLE_LABELS = {admin: "Админ", editor: "Редактор", reader: "Читатель", blocked: "Заблокирован"};
 const CHUNK = 40000; // лимит ячейки Google — 50 000 знаков
@@ -434,6 +438,9 @@ function parseRole(text) {
   if (/редактор/.test(t)) return "editor";
   return "reader";
 }
+/** Логин для сравнения: без регистра, пробелов и дефисов. */
+const normLogin = (t) => String(t || "").toLowerCase().replace(/[\s\-_.]/g, "");
+const LOGIN_ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZ23456789";
 const canEdit = (role) => role === "admin" || role === "editor";
 
 class Store {
@@ -443,13 +450,13 @@ class Store {
     this.now = now;
   }
 
-  // --- сотрудники: ФИО | Телефон | Роль (Админ / Редактор / Читатель / Заблокирован) ---
+  // --- сотрудники: ФИО | Телефон | Роль (Админ / Редактор / Читатель / Заблокирован) | Логин ---
   users() {
     const out = [];
-    for (const [name = "", phones = "", role = ""] of this.book.get(TABS.staff).slice(1)) {
+    for (const [name = "", phones = "", role = "", login = ""] of this.book.get(TABS.staff).slice(1)) {
       const n = String(name).trim();
       if (!n) continue;
-      for (const phone of phonesIn(phones)) out.push({name: n, phone, role: parseRole(role)});
+      for (const phone of phonesIn(phones)) out.push({name: n, phone, role: parseRole(role), login: String(login).trim()});
     }
     return out;
   }
@@ -496,31 +503,38 @@ class Store {
     this.book.replaceColumnA(TABS.state, chunks.length ? chunks : [""]);
   }
 
-  // --- коды входа: лист «_вход» (хеш кода | телефон | срок в мс) ---
-  hash(code) { return platform.sha256hex(`${this.secret}:${code}`).slice(0, 32); }
+  // --- логины: колонка D «Логин» в листе «Сотрудники». Выдаёт и меняет администратор прямо в таблице ---
+  hash(text) { return platform.sha256hex(`${this.secret}:${text}`).slice(0, 32); }
 
-  issueCode(phone) {
-    this.book.ensure(TABS.codes, ["Хеш", "Телефон", "Действует до"]);
-    const code = String(platform.randomInt(1000000)).padStart(6, "0");
-    const rows = this.book.get(TABS.codes);
-    for (let i = rows.length; i >= 2; i--) {
-      if (!rows[i - 1]?.[0] || Number(rows[i - 1][2]) < this.now() || rows[i - 1][1] === phone) this.book.clearRow(TABS.codes, i);
-    }
-    this.book.append(TABS.codes, [this.hash(code), phone, this.now() + 24 * 3600 * 1000]);
-    return code;
+  /** Отметка логина внутри сессии: после смены логина в таблице старые входы перестают работать. */
+  loginMark(login) { return this.hash("login:" + normLogin(login)); }
+
+  /** Сотрудник по логину (с учётом заблокированных — решает вызывающий). */
+  findByLogin(text) {
+    const key = normLogin(text);
+    return key ? this.users().find((u) => normLogin(u.login) === key) || null : null;
   }
 
-  /** Возвращает телефон, если код верный и не просрочен (код многоразовый, живёт сутки); иначе null. */
-  consumeCode(code) {
-    const h = this.hash(String(code).replace(/\D/g, ""));
-    const rows = this.book.get(TABS.codes);
+  /** Всем сотрудникам без логина выдаёт случайный (6 знаков, без похожих букв и цифр). Возвращает число выданных. */
+  ensureLogins() {
+    const rows = this.book.get(TABS.staff);
+    if (rows.length < 2) return 0;
+    const used = new Set(rows.slice(1).map((r) => normLogin(r[3])).filter(Boolean));
+    let n = 0;
     for (let i = 1; i < rows.length; i++) {
-      const [hash, phone, exp] = rows[i];
-      if (hash === h && Number(exp) >= this.now()) {
-        return phone;
-      }
+      const r = rows[i];
+      if (!String(r[0] || "").trim() || normLogin(r[3])) continue;
+      let login;
+      do {
+        login = LOGIN_ALPHABET[platform.randomInt(23)]; // первый знак — буква, чтобы логин не путали с номером
+        for (let k = 0; k < 5; k++) login += LOGIN_ALPHABET[platform.randomInt(LOGIN_ALPHABET.length)];
+      } while (used.has(normLogin(login)));
+      used.add(normLogin(login));
+      this.book.set(TABS.staff, i + 1, [r[0] || "", r[1] || "", r[2] || "", login]);
+      n++;
     }
-    return null;
+    if (n && !String(rows[0][3] || "").trim()) this.book.set(TABS.staff, 1, [rows[0][0] || "ФИО", rows[0][1] || "Телефон", rows[0][2] || "Роль", "Логин"]);
+    return n;
   }
 
   // --- блокировка, чтобы два прохода не разослали одно и то же дважды ---
@@ -598,11 +612,11 @@ function handleApi(req, deps) {
   try {
     // --- без входа ---
     if (method === "POST" && path === "/api/login") {
-      const phone = store.consumeCode(body.code || "");
-      if (!phone) { platform.sleep(400); throw new HttpError(401, "Код неверный или устарел. Отправьте боту /login и введите новый код."); }
-      const user = store.users().find((u) => u.phone === phone);
-      if (!user || user.role === "blocked") throw new HttpError(403, "Доступ закрыт. Обратитесь к администратору.");
-      return {status: 200, body: {token: makeToken({sub: phone}, secret, undefined, now()), user: publicUser(user)}};
+      store.ensureLogins();
+      const user = store.findByLogin(body.login);
+      if (!user) { platform.sleep(400); throw new HttpError(401, "Такого логина нет. Отправьте боту /login: он пришлёт ваш логин."); }
+      if (user.role === "blocked") throw new HttpError(403, "Доступ закрыт. Обратитесь к администратору.");
+      return {status: 200, body: {token: makeToken({sub: user.phone, l: store.loginMark(user.login)}, secret, undefined, now()), user: publicUser(user)}};
     }
 
     // --- нужен вход ---
@@ -610,7 +624,7 @@ function handleApi(req, deps) {
     if (!session) throw new HttpError(401, "Нужно войти");
     const users = store.users();
     const me = users.find((u) => u.phone === session.sub);
-    if (!me || me.role === "blocked") throw new HttpError(401, "Нужно войти");
+    if (!me || me.role === "blocked" || !me.login || session.l !== store.loginMark(me.login)) throw new HttpError(401, "Нужно войти");
     const today = todayIso(now());
 
     if (method === "GET" && path === "/api/schedule") {
@@ -686,6 +700,10 @@ function handleMessage({store, channel, ev, appUrl = "", now = Date.now()}) {
   const users = store.users();
   const btn = appButton(appUrl);
 
+  // логин, выданный администратором: сразу узнаём человека
+  const byLogin = !phone && text && !text.startsWith("/") ? users.find((x) => x.login && normLogin(x.login) === normLogin(text)) : null;
+  if (byLogin) phone = byLogin.phone;
+
   if (phone) {
     const u = users.find((x) => x.phone === phone);
     if (!u) return channel.send(chat, msgUnknownPhone);
@@ -708,7 +726,11 @@ function handleMessage({store, channel, ev, appUrl = "", now = Date.now()}) {
   if (cmd === "/schedule") {
     return channel.send(chat, afishaText(parseGrid(store.book.get(TABS.schedule), today).filter((r) => r.date >= today)), btn);
   }
-  if (cmd === "/login") return channel.send(chat, msgLogin(store.issueCode(user.phone)), btn);
+  if (cmd === "/login") {
+    store.ensureLogins();
+    const fresh = store.users().find((x) => x.phone === user.phone);
+    return channel.send(chat, msgLogin(fresh.login), btn);
+  }
   if (cmd === "/stop") {
     store.unbind(channel.name, chat);
     return channel.send(chat, msgStopped, "remove");
@@ -718,6 +740,7 @@ function handleMessage({store, channel, ev, appUrl = "", now = Date.now()}) {
 
 /** Сверяет расписание с прошлой версией, рассылает уведомления и напоминания. senders: {telegram: {send}, ...} */
 function runCycle({store, senders, now = Date.now(), appUrl = "", log = console}) {
+  store.ensureLogins();
   const users = store.activeUsers();
   const table = store.book.get(TABS.schedule);
   const snap = store.snapshot();
@@ -1028,8 +1051,9 @@ function styleSchedule_(sheet) {
 
 /** Роли выпадающим списком с цветом: Админ / Редактор / Читатель / Заблокирован. */
 function styleStaff_(sheet) {
-  const cols = Math.max(3, sheet.getLastColumn());
+  const cols = Math.max(4, sheet.getLastColumn());
   if (String(sheet.getRange(1, 3).getValue()).trim() === "") sheet.getRange(1, 3).setValue("Роль");
+  if (String(sheet.getRange(1, 4).getValue()).trim() === "") sheet.getRange(1, 4).setValue("Логин");
   styleHeader_(sheet, cols);
   const last = Math.max(sheet.getMaxRows(), 2);
   const rng = sheet.getRange(2, 3, last - 1, 1);
@@ -1043,4 +1067,6 @@ function styleStaff_(sheet) {
   sheet.setColumnWidth(1, 240);
   sheet.setColumnWidth(2, 170);
   sheet.setColumnWidth(3, 150);
+  sheet.setColumnWidth(4, 150);
+  sheet.getRange(2, 4, Math.max(sheet.getMaxRows() - 1, 1), 1).setFontFamily("Roboto Mono").setHorizontalAlignment("center");
 }

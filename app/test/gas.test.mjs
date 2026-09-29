@@ -44,10 +44,10 @@ test("вход по коду из бота и работа приложения:
   tg(g, msg(6, "", {user_id: 6, phone_number: "9000000002"})); // Петрова (Читатель)
   g.run("everyMinute()"); // первый снимок расписания (тихо)
   tg(g, msg(6, "/login"));
-  const code = sentTo(g, 6).at(-1).body.text.match(/<code>(\d{6})<\/code>/)[1];
-  const login = api(g, {method: "POST", path: "/api/login", body: {code}});
+  const code = sentTo(g, 6).at(-1).body.text.match(/<code>([^<]+)<\/code>/)[1];
+  const login = api(g, {method: "POST", path: "/api/login", body: {login: code}});
   assert.equal(login._status, 200); assert.equal(login.user.roleLabel, "Читатель");
-  assert.equal(api(g, {method: "POST", path: "/api/login", body: {code}})._status, 200); // код многоразовый
+  assert.equal(api(g, {method: "POST", path: "/api/login", body: {login: code}})._status, 200); // логин постоянный
 
   const sched = api(g, {method: "GET", path: "/api/schedule", token: login.token});
   assert.deepEqual(sched.events.map((e) => e.title), ["Спектакль «Бука»", "Сказки из старого чемодана"]);
@@ -55,8 +55,8 @@ test("вход по коду из бота и работа приложения:
   assert.equal(api(g, {method: "POST", path: "/api/events", token: login.token, body: {event: {date: "2026-10-06", title: "X"}}})._status, 403);
 
   tg(g, msg(5, "/login")); // админ
-  const adminCode = sentTo(g, 5).at(-1).body.text.match(/<code>(\d{6})<\/code>/)[1];
-  const admin = api(g, {method: "POST", path: "/api/login", body: {code: adminCode}});
+  const adminCode = sentTo(g, 5).at(-1).body.text.match(/<code>([^<]+)<\/code>/)[1];
+  const admin = api(g, {method: "POST", path: "/api/login", body: {login: adminCode}});
   assert.equal(admin.user.canEdit, true);
   const before = sentTo(g, 6).length;
   const ev = {date: "2026-10-06", time: "15:00", title: "Экскурсия", hall: "большая сцена", roles: {"Администратор/ Капельдинер": ["Петрова Л.Н."]}};

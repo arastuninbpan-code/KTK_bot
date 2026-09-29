@@ -2,7 +2,7 @@
 import {normPhone, phonesIn} from "./core.mjs";
 import {platform} from "./platform.mjs";
 
-export const TABS = {schedule: "Расписание", staff: "Сотрудники", chats: "Подписчики", state: "_служебное", codes: "_вход", lock: "_замок"};
+export const TABS = {schedule: "Расписание", staff: "Сотрудники", chats: "Подписчики", state: "_служебное", lock: "_замок"};
 export const SUBS_HEADER = ["Канал", "ID чата", "Телефон", "ФИО"];
 export const ROLE_LABELS = {admin: "Админ", editor: "Редактор", reader: "Читатель", blocked: "Заблокирован"};
 const CHUNK = 40000; // лимит ячейки Google — 50 000 знаков
@@ -15,6 +15,9 @@ export function parseRole(text) {
   if (/редактор/.test(t)) return "editor";
   return "reader";
 }
+/** Логин для сравнения: без регистра, пробелов и дефисов. */
+export const normLogin = (t) => String(t || "").toLowerCase().replace(/[\s\-_.]/g, "");
+const LOGIN_ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZ23456789";
 export const canEdit = (role) => role === "admin" || role === "editor";
 
 export class Store {
@@ -24,13 +27,13 @@ export class Store {
     this.now = now;
   }
 
-  // --- сотрудники: ФИО | Телефон | Роль (Админ / Редактор / Читатель / Заблокирован) ---
+  // --- сотрудники: ФИО | Телефон | Роль (Админ / Редактор / Читатель / Заблокирован) | Логин ---
   users() {
     const out = [];
-    for (const [name = "", phones = "", role = ""] of this.book.get(TABS.staff).slice(1)) {
+    for (const [name = "", phones = "", role = "", login = ""] of this.book.get(TABS.staff).slice(1)) {
       const n = String(name).trim();
       if (!n) continue;
-      for (const phone of phonesIn(phones)) out.push({name: n, phone, role: parseRole(role)});
+      for (const phone of phonesIn(phones)) out.push({name: n, phone, role: parseRole(role), login: String(login).trim()});
     }
     return out;
   }
@@ -77,31 +80,38 @@ export class Store {
     this.book.replaceColumnA(TABS.state, chunks.length ? chunks : [""]);
   }
 
-  // --- коды входа: лист «_вход» (хеш кода | телефон | срок в мс) ---
-  hash(code) { return platform.sha256hex(`${this.secret}:${code}`).slice(0, 32); }
+  // --- логины: колонка D «Логин» в листе «Сотрудники». Выдаёт и меняет администратор прямо в таблице ---
+  hash(text) { return platform.sha256hex(`${this.secret}:${text}`).slice(0, 32); }
 
-  issueCode(phone) {
-    this.book.ensure(TABS.codes, ["Хеш", "Телефон", "Действует до"]);
-    const code = String(platform.randomInt(1000000)).padStart(6, "0");
-    const rows = this.book.get(TABS.codes);
-    for (let i = rows.length; i >= 2; i--) {
-      if (!rows[i - 1]?.[0] || Number(rows[i - 1][2]) < this.now() || rows[i - 1][1] === phone) this.book.clearRow(TABS.codes, i);
-    }
-    this.book.append(TABS.codes, [this.hash(code), phone, this.now() + 24 * 3600 * 1000]);
-    return code;
+  /** Отметка логина внутри сессии: после смены логина в таблице старые входы перестают работать. */
+  loginMark(login) { return this.hash("login:" + normLogin(login)); }
+
+  /** Сотрудник по логину (с учётом заблокированных — решает вызывающий). */
+  findByLogin(text) {
+    const key = normLogin(text);
+    return key ? this.users().find((u) => normLogin(u.login) === key) || null : null;
   }
 
-  /** Возвращает телефон, если код верный и не просрочен (код многоразовый, живёт сутки); иначе null. */
-  consumeCode(code) {
-    const h = this.hash(String(code).replace(/\D/g, ""));
-    const rows = this.book.get(TABS.codes);
+  /** Всем сотрудникам без логина выдаёт случайный (6 знаков, без похожих букв и цифр). Возвращает число выданных. */
+  ensureLogins() {
+    const rows = this.book.get(TABS.staff);
+    if (rows.length < 2) return 0;
+    const used = new Set(rows.slice(1).map((r) => normLogin(r[3])).filter(Boolean));
+    let n = 0;
     for (let i = 1; i < rows.length; i++) {
-      const [hash, phone, exp] = rows[i];
-      if (hash === h && Number(exp) >= this.now()) {
-        return phone;
-      }
+      const r = rows[i];
+      if (!String(r[0] || "").trim() || normLogin(r[3])) continue;
+      let login;
+      do {
+        login = LOGIN_ALPHABET[platform.randomInt(23)]; // первый знак — буква, чтобы логин не путали с номером
+        for (let k = 0; k < 5; k++) login += LOGIN_ALPHABET[platform.randomInt(LOGIN_ALPHABET.length)];
+      } while (used.has(normLogin(login)));
+      used.add(normLogin(login));
+      this.book.set(TABS.staff, i + 1, [r[0] || "", r[1] || "", r[2] || "", login]);
+      n++;
     }
-    return null;
+    if (n && !String(rows[0][3] || "").trim()) this.book.set(TABS.staff, 1, [rows[0][0] || "ФИО", rows[0][1] || "Телефон", rows[0][2] || "Роль", "Логин"]);
+    return n;
   }
 
   // --- блокировка, чтобы два прохода не разослали одно и то же дважды ---

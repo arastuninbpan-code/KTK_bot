@@ -276,8 +276,9 @@ function styleSchedule_(sheet) {
 
 /** Роли выпадающим списком с цветом: Админ / Редактор / Читатель / Заблокирован. */
 function styleStaff_(sheet) {
-  const cols = Math.max(3, sheet.getLastColumn());
+  const cols = Math.max(4, sheet.getLastColumn());
   if (String(sheet.getRange(1, 3).getValue()).trim() === "") sheet.getRange(1, 3).setValue("Роль");
+  if (String(sheet.getRange(1, 4).getValue()).trim() === "") sheet.getRange(1, 4).setValue("Логин");
   styleHeader_(sheet, cols);
   const last = Math.max(sheet.getMaxRows(), 2);
   const rng = sheet.getRange(2, 3, last - 1, 1);
@@ -291,4 +292,6 @@ function styleStaff_(sheet) {
   sheet.setColumnWidth(1, 240);
   sheet.setColumnWidth(2, 170);
   sheet.setColumnWidth(3, 150);
+  sheet.setColumnWidth(4, 150);
+  sheet.getRange(2, 4, Math.max(sheet.getMaxRows() - 1, 1), 1).setFontFamily("Roboto Mono").setHorizontalAlignment("center");
 }

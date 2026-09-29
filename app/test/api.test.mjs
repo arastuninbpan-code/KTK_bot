@@ -11,7 +11,7 @@ function make() {
   ctx.changes = 0;
   ctx.deps = {store: ctx.store, secret: "s3", now: () => NOW, afterChange: () => { ctx.changes++; }};
   ctx.call = (method, path, token, body = {}) => handleApi({method, path, token, body}, ctx.deps);
-  ctx.login = (phone) => handleApi({method: "POST", path: "/api/login", body: {code: ctx.store.issueCode(phone)}}, ctx.deps);
+  ctx.login = (phone) => { ctx.store.ensureLogins(); return handleApi({method: "POST", path: "/api/login", body: {login: ctx.store.users().find((u) => u.phone === phone).login}}, ctx.deps); };
   return ctx;
 }
 const NEW = {date: "2026-10-06", time: "15:00", title: "Экскурсия", hall: "большая сцена", roles: {"Администратор/ Капельдинер": ["Петрова Л.Н."]}};
@@ -22,10 +22,15 @@ test("вход по коду: верный, повторный, неверный
   assert.equal(ok.status, 200);
   assert.deepEqual(ok.body.user, {name: "Петрова Л.Н.", role: "reader", roleLabel: "Читатель", canEdit: false});
   assert.equal(readToken(ok.body.token, "s3", NOW).sub, "9000000002");
-  const code = ctx.store.issueCode("9000000002");
-  ctx.call("POST", "/api/login", "", {code});
-  assert.equal(ctx.call("POST", "/api/login", "", {code}).status, 200); // код многоразовый
-  assert.equal(ctx.call("POST", "/api/login", "", {code: "000000" === code ? "111111" : "000000"}).status, 401);
+  const login = ctx.store.users().find((u) => u.phone === "9000000002").login;
+  assert.equal(ctx.call("POST", "/api/login", "", {login: login.toLowerCase()}).status, 200); // регистр не важен
+  assert.equal(ctx.call("POST", "/api/login", "", {login: "нет-такого"}).status, 401);
+  // директор поменял логин в таблице: старый логин и старые входы перестали работать
+  const staff = ctx.store.book.get("Сотрудники"); const i = staff.findIndex((r) => r[3] === login);
+  ctx.store.book.set("Сотрудники", i + 1, [staff[i][0], staff[i][1], staff[i][2], "НОВЫЙ-77"]);
+  assert.equal(ctx.call("POST", "/api/login", "", {login}).status, 401);
+  assert.equal(ctx.call("GET", "/api/schedule", ok.body.token).status, 401);
+  assert.equal(ctx.call("POST", "/api/login", "", {login: "новый 77"}).status, 200);
   assert.equal(ctx.call("GET", "/api/schedule", "мусор").status, 401);
   assert.equal(ctx.login("9000000005").status, 403); // Орлова заблокирована
 });

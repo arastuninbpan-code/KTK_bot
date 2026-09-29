@@ -35,11 +35,11 @@ export function handleApi(req, deps) {
   try {
     // --- без входа ---
     if (method === "POST" && path === "/api/login") {
-      const phone = store.consumeCode(body.code || "");
-      if (!phone) { platform.sleep(400); throw new HttpError(401, "Код неверный или устарел. Отправьте боту /login и введите новый код."); }
-      const user = store.users().find((u) => u.phone === phone);
-      if (!user || user.role === "blocked") throw new HttpError(403, "Доступ закрыт. Обратитесь к администратору.");
-      return {status: 200, body: {token: makeToken({sub: phone}, secret, undefined, now()), user: publicUser(user)}};
+      store.ensureLogins();
+      const user = store.findByLogin(body.login);
+      if (!user) { platform.sleep(400); throw new HttpError(401, "Такого логина нет. Отправьте боту /login: он пришлёт ваш логин."); }
+      if (user.role === "blocked") throw new HttpError(403, "Доступ закрыт. Обратитесь к администратору.");
+      return {status: 200, body: {token: makeToken({sub: user.phone, l: store.loginMark(user.login)}, secret, undefined, now()), user: publicUser(user)}};
     }
 
     // --- нужен вход ---
@@ -47,7 +47,7 @@ export function handleApi(req, deps) {
     if (!session) throw new HttpError(401, "Нужно войти");
     const users = store.users();
     const me = users.find((u) => u.phone === session.sub);
-    if (!me || me.role === "blocked") throw new HttpError(401, "Нужно войти");
+    if (!me || me.role === "blocked" || !me.login || session.l !== store.loginMark(me.login)) throw new HttpError(401, "Нужно войти");
     const today = todayIso(now());
 
     if (method === "GET" && path === "/api/schedule") {

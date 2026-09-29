@@ -2,7 +2,7 @@
 import {looksLikePhone, matchPhones, normPhone, parseGrid, planCycle, todayIso} from "./core.mjs";
 import {afishaText, appButton, msgAskPhone, msgBlocked, msgChange, msgConnected, msgLogin, msgReminder, msgStopped, msgUnknownPhone, msgWelcome, shiftsText} from "./format.mjs";
 import {Gone} from "./telegram.mjs";
-import {TABS} from "./store.mjs";
+import {normLogin, TABS} from "./store.mjs";
 
 /**
  * channel: {name, send(chatId, text, options)}; options: "contact" | "remove" | {button: {text, url}}
@@ -15,6 +15,10 @@ export function handleMessage({store, channel, ev, appUrl = "", now = Date.now()
   if (!phone && looksLikePhone(text)) phone = normPhone(text); // номер, введённый вручную
   const users = store.users();
   const btn = appButton(appUrl);
+
+  // логин, выданный администратором: сразу узнаём человека
+  const byLogin = !phone && text && !text.startsWith("/") ? users.find((x) => x.login && normLogin(x.login) === normLogin(text)) : null;
+  if (byLogin) phone = byLogin.phone;
 
   if (phone) {
     const u = users.find((x) => x.phone === phone);
@@ -38,7 +42,11 @@ export function handleMessage({store, channel, ev, appUrl = "", now = Date.now()
   if (cmd === "/schedule") {
     return channel.send(chat, afishaText(parseGrid(store.book.get(TABS.schedule), today).filter((r) => r.date >= today)), btn);
   }
-  if (cmd === "/login") return channel.send(chat, msgLogin(store.issueCode(user.phone)), btn);
+  if (cmd === "/login") {
+    store.ensureLogins();
+    const fresh = store.users().find((x) => x.phone === user.phone);
+    return channel.send(chat, msgLogin(fresh.login), btn);
+  }
   if (cmd === "/stop") {
     store.unbind(channel.name, chat);
     return channel.send(chat, msgStopped, "remove");
@@ -48,6 +56,7 @@ export function handleMessage({store, channel, ev, appUrl = "", now = Date.now()
 
 /** Сверяет расписание с прошлой версией, рассылает уведомления и напоминания. senders: {telegram: {send}, ...} */
 export function runCycle({store, senders, now = Date.now(), appUrl = "", log = console}) {
+  store.ensureLogins();
   const users = store.activeUsers();
   const table = store.book.get(TABS.schedule);
   const snap = store.snapshot();

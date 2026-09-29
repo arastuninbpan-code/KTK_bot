@@ -23,7 +23,7 @@ class Range {
   merge() { this.sheet.styleLog.push(["merge", this.r]); return this; }
   setDataValidation(rule) { this.sheet.styleLog.push(["validation", rule]); return this; }
 }
-for (const m of ["setNumberFormat", "setBackground", "setFontColor", "setFontWeight", "setHorizontalAlignment", "setVerticalAlignment", "setWrap", "setBorder", "setFontSize"]) {
+for (const m of ["setNumberFormat", "setBackground", "setFontColor", "setFontWeight", "setHorizontalAlignment", "setVerticalAlignment", "setWrap", "setBorder", "setFontSize", "setFontFamily"]) {
   Range.prototype[m] = function (...a) { this.sheet.styleLog.push([m, this.r, ...a]); return this; };
 }
 

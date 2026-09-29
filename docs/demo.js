@@ -1,5 +1,5 @@
 "use strict";
-// Демо-режим (?demo): приложение работает само по себе, на выдуманных данных, без сервера. Код входа: 000000 — админ, 111111 — читатель.
+// Демо-режим (?demo): приложение работает само по себе, на выдуманных данных, без сервера. Логин ADMIN — админ, READER — читатель.
 (function () {
   if (!/[?&]demo\b/.test(location.search)) return;
   const now = new Date(Date.now() + 3 * 3600e3);
@@ -15,11 +15,11 @@
     {row: 5, date: iso(6), dateEnd: "", time: "11:00", title: "Спектакль «Мери Поппинс»", hall: "большая сцена", roles: {[A]: ["Иванова М.В.", "Сидорова Л.Р."], [G]: ["Морозова Н.М."], [K]: ["Орлова А.В."], [M]: ["Кузнецова Е.Н."]}},
     {row: 6, date: iso(8), dateEnd: iso(12), time: "", title: "Фестиваль в Барнауле", hall: "", roles: {}},
   ].map((e) => ({...e, rev: "d" + e.row}));
-  const users = {"000000": {name: "Иванова М.В.", role: "admin", roleLabel: "Админ", canEdit: true}, "111111": {name: "Петрова Л.Н.", role: "reader", roleLabel: "Читатель", canEdit: false}};
+  const users = {"ADMIN": {name: "Иванова М.В.", role: "admin", roleLabel: "Админ", canEdit: true}, "READER": {name: "Петрова Л.Н.", role: "reader", roleLabel: "Читатель", canEdit: false}};
   const view = (u) => events.slice().sort((a, b) => (a.date + a.time).localeCompare(b.date + b.time)).map((e) => ({...e, mine: Object.entries(e.roles).filter(([, n]) => n.includes(u.name)).map(([r]) => r)}));
   window.KTK_DEMO = {
     call(method, path, body, token) {
-      if (method === "POST" && path === "/api/login") return users[body.code] ? {status: 200, data: {token: "demo:" + body.code, user: users[body.code]}} : {status: 401, data: {error: "В демо-режиме коды: 000000 (админ) и 111111 (читатель)"}};
+      if (method === "POST" && path === "/api/login") return users[String(body.login).toUpperCase()] ? {status: 200, data: {token: "demo:" + String(body.login).toUpperCase(), user: users[String(body.login).toUpperCase()]}} : {status: 401, data: {error: "В демо-режиме логины: ADMIN (админ) и READER (читатель)"}};
       const u = users[String(token).replace("demo:", "")];
       if (!u) return {status: 401, data: {error: "Нужно войти"}};
       if (method === "GET") return {status: 200, data: {today: iso(0), me: u, roles: [A, G, K, M, S], events: view(u), staff: u.canEdit ? STAFF : undefined}};

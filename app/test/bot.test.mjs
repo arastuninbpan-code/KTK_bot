@@ -35,21 +35,26 @@ test("/shifts, /schedule, /login с кнопкой «Открыть в прил�
   say(ctx, ch, 5, "/schedule@k_t_k_bot");
   assert.match(lastTo(ch, 5).text, /💬 <b>Афиша<\/b>/);
   say(ctx, ch, 5, "/login");
-  const code = lastTo(ch, 5).text.match(/<code>(\d{6})<\/code>/)[1];
-  assert.equal(ctx.store.consumeCode(code), "9000000001");
-  assert.equal(ctx.store.consumeCode(code), "9000000001"); // многоразовый
+  const login = lastTo(ch, 5).text.match(/<code>([^<]+)<\/code>/)[1];
+  assert.equal(ctx.store.findByLogin(login).phone, "9000000001");
+  say(ctx, ch, 5, "/login"); // логин постоянный
+  assert.match(lastTo(ch, 5).text, new RegExp(login));
   say(ctx, ch, 5, "/stop");
   assert.equal(ctx.store.chats().length, 0);
   assert.equal(lastTo(ch, 5).options, "remove");
 });
 
-test("коды входа: просрочка и чужой код", () => {
-  let t = msk(1, 10);
-  const ctx = setup(); ctx.store.now = () => t;
-  const code = ctx.store.issueCode("9000000001");
-  assert.equal(ctx.store.consumeCode("000000" === code ? "111111" : "000000"), null);
-  t += 25 * 3600 * 1000;
-  assert.equal(ctx.store.consumeCode(code), null);
+test("бот узнаёт человека по логину из таблицы; заблокированному и чужому логину не верит", () => {
+  const ctx = setup(); const ch = fakeChannel();
+  ctx.store.ensureLogins();
+  const login = (ph) => ctx.store.users().find((u) => u.phone === ph).login;
+  say(ctx, ch, 7, login("9000000002").toLowerCase()); // Петрова
+  assert.match(lastTo(ch, 7).text, /Петрова Л\.Н\./);
+  assert.equal(ctx.store.chats().find((c) => c.chatId === "7").phone, "9000000002");
+  say(ctx, ch, 8, login("9000000005")); // Орлова заблокирована
+  assert.match(lastTo(ch, 8).text, /Доступ закрыт/);
+  say(ctx, ch, 9, "ЛЕВЫЙ99");
+  assert.equal(lastTo(ch, 9).options, "contact");
 });
 
 test("runCycle: короткие уведомления с кнопкой только тому, кого касается; повторов нет; заблокированным не пишем", () => {
