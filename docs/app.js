@@ -77,8 +77,12 @@ async function api(method, path, body) {
     ({status, data} = window.KTK_DEMO.call(method, path, body, state.token));
   } else if (CFG.API_URL) {
     // text/plain — «простой» запрос, без предварительной проверки CORS (Apps Script её не поддерживает)
-    const r = await fetch(CFG.API_URL, {method: "POST", headers: {"Content-Type": "text/plain;charset=utf-8"}, redirect: "follow", body: JSON.stringify({method, path, token: state.token, body})});
-    data = await r.json().catch(() => ({error: "Нет связи с сервером"}));
+    let r, raw = "";
+    try {
+      r = await fetch(CFG.API_URL, {method: "POST", headers: {"Content-Type": "text/plain;charset=utf-8"}, redirect: "follow", body: JSON.stringify({method, path, token: state.token, body})});
+      raw = await r.text();
+    } catch (e) { throw new Error("Нет связи с сервером (" + e.message + "). Проверьте, что доступ веб-приложения «Все», а не «Только я»."); }
+    try { data = JSON.parse(raw); } catch (e) { throw new Error("Сервер ответил не так, как ждали (код " + r.status + "): " + raw.replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").slice(0, 160)); }
     status = data._status || (r.ok ? 200 : r.status);
   } else {
     const r = await fetch(path, {method, headers: {"Content-Type": "application/json", ...(state.token ? {Authorization: "Bearer " + state.token} : {})}, body: method === "GET" ? undefined : JSON.stringify(body || {})});
