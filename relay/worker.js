@@ -20,13 +20,19 @@ export default {
 
     if (url.pathname === "/api") {
       if (request.method === "OPTIONS") return new Response(null, {status: 204, headers: CORS});
-      if (request.method !== "POST") return new Response("ok", {headers: CORS});
+      if (request.method !== "POST") return new Response("ktk-api ok", {headers: CORS});
       const base = env.GAS_URL.split("?")[0]; // без секрета Telegram: это запрос сайта, а не бота
+      const json = (obj) => new Response(JSON.stringify(obj), {status: 200, headers: {...CORS, "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store"}});
       try {
-        const r = await fetch(base, {method: "POST", headers: {"Content-Type": "text/plain;charset=utf-8"}, body: await request.text(), redirect: "follow"});
-        return new Response(await r.text(), {status: 200, headers: {...CORS, "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store"}});
+        const ctl = new AbortController();
+        const timer = setTimeout(() => ctl.abort(), 25000);
+        const r = await fetch(base, {method: "POST", headers: {"Content-Type": "text/plain;charset=utf-8"}, body: await request.text(), redirect: "follow", signal: ctl.signal});
+        clearTimeout(timer);
+        const text = await r.text();
+        try { JSON.parse(text); } catch (e) { return json({error: "Google ответил не так, как ждали (код " + r.status + "): " + text.replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").slice(0, 150)}); }
+        return new Response(text, {status: 200, headers: {...CORS, "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store"}});
       } catch (e) {
-        return new Response(JSON.stringify({error: "Сервер расписания не отвечает. Попробуйте ещё раз."}), {status: 200, headers: {...CORS, "Content-Type": "application/json; charset=utf-8"}});
+        return json({error: "Воркер не дождался Google (" + e.message + ")"});
       }
     }
 
