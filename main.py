@@ -71,7 +71,12 @@ def run_once(store, source, state, channels, tz):
     for name, ch in channels.items():
         key = f"cursor:{name}"
         events, cursor = ch.poll(store.meta(key), timeout=0)
+        seen = set()
         for e in events:
+            sig = (e["chat_id"], e["text"], e["phone"])
+            if sig in seen:  # несколько одинаковых сообщений подряд (например, /start) — отвечаем один раз
+                continue
+            seen.add(sig)
             handle(store, ch, e, datetime.now(tz))
         if cursor is not None:
             store.set_meta(key, cursor)

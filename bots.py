@@ -2,9 +2,8 @@
 import re
 from datetime import datetime
 
-from core import Row, norm, norm_phone
+from core import Row, looks_like_phone, norm, norm_phone
 
-PHONE_TEXT = re.compile(r"^\+?[\d\s\-()]{10,}$")
 HELP = "/shifts — мои ближайшие смены\n/schedule — афиша ближайших событий\n/stop — отключить уведомления"
 
 
@@ -26,7 +25,7 @@ def afisha(store, today: str, limit: int = 15) -> str:
 def handle(store, channel, event: dict, now: datetime):
     chat, text = event["chat_id"], (event.get("text") or "").strip()
     phone = norm_phone(event["phone"]) if event.get("phone") else None
-    if not phone and PHONE_TEXT.match(text):  # номер, введённый вручную
+    if not phone and looks_like_phone(text):  # номер, введённый вручную
         phone = norm_phone(text)
 
     if phone:

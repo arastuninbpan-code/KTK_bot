@@ -3,7 +3,7 @@ import logging
 import time
 from datetime import datetime, timedelta
 
-from core import Row, diff, norm, norm_phone, parse_rows
+from core import Row, diff, norm, parse_rows, phones_in
 
 log = logging.getLogger("planner")
 SEND_PAUSE_SEC = 0.05
@@ -11,8 +11,8 @@ DIGEST_HOUR = 18  # вечером накануне присылаем «зав�
 
 
 def sync_users(store, source):
-    users = [(norm_phone(p), name.strip()) for p, name in source.employees()]
-    store.set_users([(p, n) for p, n in users if p and n])
+    users = [(phone, name.strip()) for raw, name in source.employees() for phone in phones_in(raw)]
+    store.set_users([(p, n) for p, n in users if n])
 
 
 def sync(store, source, now: datetime):

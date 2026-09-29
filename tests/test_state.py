@@ -78,3 +78,11 @@ def test_state_survives_between_runs_and_avoids_needless_writes():
     st = SheetState(book)
     main.run_once(Store(), src, st, {"telegram": Poller("telegram", [[]])}, TZ)  # запуск 3: ничего не изменилось
     assert book.sheets["_служебное"].cells == before
+
+
+def test_repeated_identical_messages_get_one_reply():
+    book, src = FakeBook(), Src()
+    same = {"chat_id": 5, "text": "/start", "phone": None}
+    tg = Poller("telegram", [[same, dict(same), dict(same)]])
+    main.run_once(Store(), src, SheetState(book), {"telegram": tg}, TZ)
+    assert len([1 for c, t in tg.sent if c == "5"]) == 1

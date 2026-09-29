@@ -13,8 +13,23 @@ def norm(s) -> str:
 
 
 def norm_phone(s) -> str:
+    """Любой вид номера -> только цифры без кода страны: «8 (930) 702-91-09», «+7 930 702 91 09»,
+    «79307029109», «930.702.91.09» — всё это «9307029109». Чужие форматы (не 11 цифр с 7/8) остаются цифрами как есть."""
     digits = re.sub(r"\D", "", str(s))
-    return digits[-10:] if len(digits) >= 10 else digits
+    if len(digits) == 11 and digits[0] in "78":
+        return digits[1:]
+    return digits
+
+
+def phones_in(s) -> list:
+    """В ячейке может быть несколько номеров: через запятую, «;», «/» или с новой строки."""
+    found = [norm_phone(p) for p in re.split(r"[;,/\n]", str(s))]
+    return [p for p in found if len(p) >= 7]
+
+
+def looks_like_phone(text: str) -> bool:
+    """Сообщение — это номер, а не команда или слова: есть 10–12 цифр и нет ни одной буквы."""
+    return 10 <= len(re.sub(r"\D", "", text)) <= 12 and not re.search(r"[^\W\d_]", text)
 
 
 @dataclass(frozen=True)
