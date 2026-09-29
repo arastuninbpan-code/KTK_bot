@@ -1,0 +1,10 @@
+{
+  "name": "ktk-schedule",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test test/*.test.mjs",
+    "dev": "node dev/server.mjs"
+  },
+  "engines": {"node": ">=20"}
+}

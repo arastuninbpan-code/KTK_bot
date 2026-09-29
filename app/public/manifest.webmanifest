@@ -1,0 +1,9 @@
+{
+  "name": "Расписание театра",
+  "short_name": "Расписание",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#dcf1fd",
+  "theme_color": "#dcf1fd",
+  "icons": [{"src": "/avatar.webp", "sizes": "1254x1254", "type": "image/webp", "purpose": "any"}]
+}
