@@ -7,6 +7,7 @@
  *   SHEET_ID            — ID таблицы
  *   TELEGRAM_BOT_TOKEN  — токен бота
  *   WEBAPP_URL          — адрес веб-приложения (заканчивается на /exec) из окна «Развертывание»
+ *   RELAY_URL           — (рекомендуется) адрес посредника Cloudflare, см. relay/worker.js
  *   WEBHOOK_SECRET      — создаётся сам при запуске setup()
  *
  * Установка: setup() → «Начать развертывание → Веб-приложение» → setWebhook(). Подробно — в README.
@@ -500,16 +501,22 @@ function setup() {
   console.log("Готово: таймеры созданы. Теперь разверните веб-приложение и запустите setWebhook().");
 }
 
-/** Говорит Telegram присылать сообщения на адрес веб-приложения. Запускать после развертывания. */
+/**
+ * Говорит Telegram, куда присылать сообщения. Если задано свойство RELAY_URL (адрес посредника Cloudflare, см. relay/worker.js),
+ * сообщения идут через него: Apps Script отвечает на POST перенаправлением (302), Telegram считает это ошибкой и тормозит.
+ * Без посредника используется адрес веб-приложения /exec (из свойства WEBAPP_URL).
+ */
 function setWebhook() {
-  // Из редактора getUrl() отдаёт тестовый адрес /dev (он открыт только владельцу и даёт Telegram ошибку 401),
-  // поэтому публичный адрес /exec берём из свойства WEBAPP_URL (копируется из окна «Развертывание»).
-  const url = prop_("WEBAPP_URL") || ScriptApp.getService().getUrl();
-  if (!url) throw new Error("Сначала разверните веб-приложение: Начать развертывание → Новое развертывание → Веб-приложение.");
-  if (!/\/exec$/.test(url)) throw new Error("Нужен адрес веб-приложения, оканчивающийся на /exec. Впишите его в свойство скрипта WEBAPP_URL.");
+  let target = prop_("RELAY_URL");
+  if (!target) {
+    // Из редактора getUrl() отдаёт тестовый адрес /dev (даёт Telegram ошибку 401), поэтому нужен публичный адрес /exec.
+    const url = prop_("WEBAPP_URL") || ScriptApp.getService().getUrl();
+    if (!url || !/\/exec$/.test(url)) throw new Error("Нужен адрес веб-приложения, оканчивающийся на /exec (свойство WEBAPP_URL) или RELAY_URL.");
+    target = url + "?secret=" + encodeURIComponent(prop_("WEBHOOK_SECRET"));
+  }
   const r = UrlFetchApp.fetch(`https://api.telegram.org/bot${prop_("TELEGRAM_BOT_TOKEN")}/setWebhook`, {
     method: "post", contentType: "application/json", muteHttpExceptions: true,
-    payload: JSON.stringify({url: url + "?secret=" + encodeURIComponent(prop_("WEBHOOK_SECRET")), allowed_updates: ["message"]}),
+    payload: JSON.stringify({url: target, allowed_updates: ["message"]}),
   });
   console.log(r.getContentText());
 }
