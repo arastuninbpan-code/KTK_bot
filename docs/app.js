@@ -126,12 +126,12 @@ function loginView() {
   async function go() {
     if (busy) return;
     if (input.value.length < 6) { err.textContent = "Введите 6 цифр из бота"; return; }
-    busy = true; btn.disabled = true;
+    busy = true; btn.disabled = true; btn.textContent = "Входим…"; err.className = "hint"; err.textContent = "Идёт загрузка, подождите несколько секунд…"; input.disabled = true;
     try {
       const r = await api("POST", "/api/login", {code: input.value});
       state.token = r.token; localStorage.setItem("ktk_token", r.token);
       await load();
-    } catch (e) { err.textContent = e.message; input.value = ""; input.focus(); } finally { busy = false; btn.disabled = false; }
+    } catch (e) { err.className = "error"; err.textContent = e.message; input.disabled = false; input.value = ""; input.focus(); } finally { busy = false; btn.disabled = false; btn.textContent = "Войти"; }
   }
   return h("main", {class: "login"},
     h("div", {class: "hero-wrap"}, h("img", {class: "hero", src: "avatar.webp", alt: "Пилот с бумажным самолётиком"}), splash()),

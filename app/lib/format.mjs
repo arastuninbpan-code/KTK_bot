@@ -107,7 +107,7 @@ export const msgUnknownPhone = "💬 <b>Этого номера нет в спи
 export const msgStopped = "💬 <b>Уведомления отключены.</b>\nЧтобы включить снова, напишите /start.";
 export const msgConnected = (name) => `💬 <b>${esc(name)}</b>, вы подключены.\n\n${HELP}`;
 export const msgBlocked = "💬 <b>Доступ закрыт.</b>\nОбратитесь к администратору.";
-export const msgLogin = (code) => `🔑 <b>Код для входа</b>\n\n<code>${code}</code>\n\nВведите его в приложении. Код действует 10 минут и подходит один раз.`;
+export const msgLogin = (code) => `🔑 <b>Код для входа</b>\n\n<code>${code}</code>\n\nВведите его в приложении. Код действует сутки, им можно входить на любом устройстве.`;
 
 /** Кнопка под сообщением: «Открыть в приложении». Если адрес приложения не задан — без кнопки. */
 export const appButton = (url) => (url ? {button: {text: "Открыть в приложении", url}} : undefined);

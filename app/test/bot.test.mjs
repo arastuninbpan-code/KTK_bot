@@ -37,7 +37,7 @@ test("/shifts, /schedule, /login с кнопкой «Открыть в прил�
   say(ctx, ch, 5, "/login");
   const code = lastTo(ch, 5).text.match(/<code>(\d{6})<\/code>/)[1];
   assert.equal(ctx.store.consumeCode(code), "9000000001");
-  assert.equal(ctx.store.consumeCode(code), null); // одноразовый
+  assert.equal(ctx.store.consumeCode(code), "9000000001"); // многоразовый
   say(ctx, ch, 5, "/stop");
   assert.equal(ctx.store.chats().length, 0);
   assert.equal(lastTo(ch, 5).options, "remove");

@@ -387,7 +387,7 @@ const msgUnknownPhone = "💬 <b>Этого номера нет в списке 
 const msgStopped = "💬 <b>Уведомления отключены.</b>\nЧтобы включить снова, напишите /start.";
 const msgConnected = (name) => `💬 <b>${esc(name)}</b>, вы подключены.\n\n${HELP}`;
 const msgBlocked = "💬 <b>Доступ закрыт.</b>\nОбратитесь к администратору.";
-const msgLogin = (code) => `🔑 <b>Код для входа</b>\n\n<code>${code}</code>\n\nВведите его в приложении. Код действует 10 минут и подходит один раз.`;
+const msgLogin = (code) => `🔑 <b>Код для входа</b>\n\n<code>${code}</code>\n\nВведите его в приложении. Код действует сутки, им можно входить на любом устройстве.`;
 
 /** Кнопка под сообщением: «Открыть в приложении». Если адрес приложения не задан — без кнопки. */
 const appButton = (url) => (url ? {button: {text: "Открыть в приложении", url}} : undefined);
@@ -506,18 +506,17 @@ class Store {
     for (let i = rows.length; i >= 2; i--) {
       if (!rows[i - 1]?.[0] || Number(rows[i - 1][2]) < this.now() || rows[i - 1][1] === phone) this.book.clearRow(TABS.codes, i);
     }
-    this.book.append(TABS.codes, [this.hash(code), phone, this.now() + 10 * 60 * 1000]);
+    this.book.append(TABS.codes, [this.hash(code), phone, this.now() + 24 * 3600 * 1000]);
     return code;
   }
 
-  /** Возвращает телефон и гасит код, если он верный и не просрочен; иначе null. */
+  /** Возвращает телефон, если код верный и не просрочен (код многоразовый, живёт сутки); иначе null. */
   consumeCode(code) {
     const h = this.hash(String(code).replace(/\D/g, ""));
     const rows = this.book.get(TABS.codes);
     for (let i = 1; i < rows.length; i++) {
       const [hash, phone, exp] = rows[i];
       if (hash === h && Number(exp) >= this.now()) {
-        this.book.clearRow(TABS.codes, i + 1);
         return phone;
       }
     }
