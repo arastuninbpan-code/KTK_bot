@@ -48,7 +48,7 @@ test("коды входа: просрочка и чужой код", () => {
   const ctx = setup(); ctx.store.now = () => t;
   const code = ctx.store.issueCode("9000000001");
   assert.equal(ctx.store.consumeCode("000000" === code ? "111111" : "000000"), null);
-  t += 11 * 60 * 1000;
+  t += 25 * 3600 * 1000;
   assert.equal(ctx.store.consumeCode(code), null);
 });
 

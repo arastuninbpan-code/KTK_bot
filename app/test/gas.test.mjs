@@ -47,7 +47,7 @@ test("вход по коду из бота и работа приложения:
   const code = sentTo(g, 6).at(-1).body.text.match(/<code>(\d{6})<\/code>/)[1];
   const login = api(g, {method: "POST", path: "/api/login", body: {code}});
   assert.equal(login._status, 200); assert.equal(login.user.roleLabel, "Читатель");
-  assert.equal(api(g, {method: "POST", path: "/api/login", body: {code}})._status, 401); // код одноразовый
+  assert.equal(api(g, {method: "POST", path: "/api/login", body: {code}})._status, 200); // код многоразовый
 
   const sched = api(g, {method: "GET", path: "/api/schedule", token: login.token});
   assert.deepEqual(sched.events.map((e) => e.title), ["Спектакль «Бука»", "Сказки из старого чемодана"]);

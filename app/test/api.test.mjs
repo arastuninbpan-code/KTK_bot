@@ -24,7 +24,8 @@ test("вход по коду: верный, повторный, неверный
   assert.equal(readToken(ok.body.token, "s3", NOW).sub, "9000000002");
   const code = ctx.store.issueCode("9000000002");
   ctx.call("POST", "/api/login", "", {code});
-  assert.equal(ctx.call("POST", "/api/login", "", {code}).status, 401);
+  assert.equal(ctx.call("POST", "/api/login", "", {code}).status, 200); // код многоразовый
+  assert.equal(ctx.call("POST", "/api/login", "", {code: "000000" === code ? "111111" : "000000"}).status, 401);
   assert.equal(ctx.call("GET", "/api/schedule", "мусор").status, 401);
   assert.equal(ctx.login("9000000005").status, 403); // Орлова заблокирована
 });

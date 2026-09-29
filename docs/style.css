@@ -52,9 +52,9 @@ h1, h2, h3 { font-family: var(--h); font-weight: 700; }
 .code-input { width: 100%; text-align: center; font: 700 34px var(--h); letter-spacing: .28em; padding: 12px 8px 12px 20px; border-radius: 16px; border: var(--line); background: var(--light); }
 .code-input::placeholder { color: #8fc5e0; }
 .error { min-height: 22px; margin: 8px 2px 0; color: var(--coral); font-weight: 800; font-size: 14px; }
-.hint { min-height: 22px; margin: 8px 2px 0; color: var(--navy); font-weight: 800; font-size: 14px; animation: pulse 1.2s ease-in-out infinite; }
+.hint { min-height: 22px; margin: 8px 2px 0; color: var(--navy); font-weight: 800; font-size: 14px; animation: blink 1.2s ease-in-out infinite; }
 .btn:disabled { opacity: .7; }
-@keyframes pulse { 50% { opacity: .45; } }
+@keyframes blink { 50% { opacity: .45; } }
 
 .btn { display: inline-flex; align-items: center; justify-content: center; gap: 8px; width: 100%; padding: 13px 18px; border: var(--line); border-radius: 16px; background: var(--blue); color: #fff; font-weight: 900; font-size: 17px; box-shadow: 3px 3px 0 var(--navy); transition: transform .08s, box-shadow .08s; text-decoration: none; }
 .btn:active { transform: translate(3px, 3px); box-shadow: 0 0 0 var(--navy); }
