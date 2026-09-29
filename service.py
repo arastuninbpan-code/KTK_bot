@@ -1,13 +1,14 @@
-"""Один цикл работы: синхронизация с таблицей -> уведомления -> вечерняя сводка -> доставка push."""
+"""Один цикл работы: синхронизация с таблицей -> уведомления об изменениях -> напоминания -> рассылка."""
 import logging
+import re
 import time
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
+from datetime import time as dtime
 
 from core import Row, diff, norm, parse_rows, phones_in
 
 log = logging.getLogger("planner")
 SEND_PAUSE_SEC = 0.05
-DIGEST_HOUR = 18  # вечером накануне присылаем «завтра у вас…»
 
 
 def sync_users(store, source):
@@ -27,19 +28,54 @@ def sync(store, source, now: datetime):
     store.set_meta("initialized", True)
 
 
-def digests(store, now: datetime):
-    if now.hour < DIGEST_HOUR:
-        return
-    tomorrow = (now.date() + timedelta(days=1)).isoformat()
-    schedule = [Row(**r) for r in store.schedule()]
+# Напоминания перед сменой: (вид, за сколько до начала, насколько можно опоздать с отправкой, заголовок).
+# Опоздание ограничено, чтобы только что добавленную смену не «догоняли» сразу двумя напоминаниями.
+REMINDERS = [
+    ("day", timedelta(hours=24), timedelta(hours=3), "📅 Завтра"),
+    ("hour", timedelta(hours=1), timedelta(minutes=30), "⏰ Через час"),
+]
+EVE_HOUR = 18  # смены без времени: напоминание накануне вечером
+FIRST_TIME = re.compile(r"\b(\d{1,2})[.:](\d{2})\b")
+
+
+def start_of(row: Row, tz):
+    """Начало смены (самое раннее из указанных времён) или None, если время не указано."""
+    m = FIRST_TIME.search(row.time)
+    if not m:
+        return None
+    d = date.fromisoformat(row.date)
+    try:
+        return datetime(d.year, d.month, d.day, int(m.group(1)), int(m.group(2)), tzinfo=tz)
+    except ValueError:
+        return None
+
+
+def reminders(store, now: datetime):
+    """За сутки и за час до смены (если время указано), иначе накануне вечером. Каждое напоминание — один раз."""
+    users = {}
     for u in store.users():
-        if store.digest_sent(u["phone"], tomorrow):
+        users.setdefault(u["name_norm"], []).append(u["phone"])
+    batches = {}
+    for r in map(lambda d: Row(**d), store.schedule()):
+        if not r.person or norm(r.person) not in users:
             continue
-        mine = [r for r in schedule if r.date == tomorrow and norm(r.person) == u["name_norm"]]
-        if mine:
-            body = "\n".join(r.describe() for r in mine)
-            store.add_note(u["phone"], f"⏰ Завтра у вас:\n{body}", now.isoformat(timespec="minutes"))
-        store.set_digest(u["phone"], tomorrow)
+        start = start_of(r, now.tzinfo)
+        if start:
+            rules = [(kind, start - off, grace, title) for kind, off, grace, title in REMINDERS]
+        else:
+            eve = datetime.combine(date.fromisoformat(r.date) - timedelta(days=1), dtime(EVE_HOUR), tzinfo=now.tzinfo)
+            rules = [("eve", eve, timedelta(hours=6), "📅 Завтра")]
+        for kind, trigger, grace, title in rules:
+            if not (trigger <= now < trigger + grace) or (start and now >= start):
+                continue
+            for phone in users[norm(r.person)]:
+                key = f"{kind}|{r.key}|{r.time}"
+                if not store.digest_sent(phone, key):
+                    store.set_digest(phone, key)
+                    batches.setdefault((phone, title), []).append(r.describe())
+    for (phone, title), lines in batches.items():
+        store.add_note(phone, f"{title}:\n" + "\n".join(lines), now.isoformat(timespec="minutes"))
+    store.prune_digests((now.date() - timedelta(days=2)).isoformat())
 
 
 class Gone(Exception):
@@ -65,5 +101,5 @@ def deliver(store, channels: dict):
 
 def cycle(store, source, channels: dict, now: datetime):
     sync(store, source, now)
-    digests(store, now)
+    reminders(store, now)
     deliver(store, channels)

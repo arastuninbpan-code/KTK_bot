@@ -98,6 +98,10 @@ class Store:
     def digest_sent(self, phone: str, day: str) -> bool:
         return self._run("SELECT 1 FROM digests WHERE phone=? AND day=?", (phone, day)).fetchone() is not None
 
+    def prune_digests(self, before_iso: str):
+        """Забывает отметки о напоминаниях для прошедших дат (ключ вида «вид|ГГГГ-ММ-ДД|…» или просто дата)."""
+        self._run("DELETE FROM digests WHERE substr(day, instr(day, '|') + 1, 10) < ?", (before_iso,))
+
     def set_digest(self, phone: str, day: str):
         self._run("INSERT OR IGNORE INTO digests VALUES(?,?)", (phone, day))
 

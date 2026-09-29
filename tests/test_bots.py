@@ -76,15 +76,47 @@ def test_changes_go_to_all_bound_channels_only_for_that_person():
     assert len(tg.sent) == n  # повторов нет
 
 
-def test_digest_and_views():
+def test_views():
     store, src, tg, _, chans = setup()
     handle(store, tg, {"chat_id": 5, "text": "", "phone": "9000000001"}, now(1))
-    service.cycle(store, src, chans, now(3, 18))
-    assert "Завтра у вас" in texts(tg, 5)[-1]
     handle(store, tg, {"chat_id": 5, "text": "/shifts", "phone": None}, now(3))
     assert "Спектакль «Бука»" in texts(tg, 5)[-1]
     handle(store, tg, {"chat_id": 5, "text": "/schedule", "phone": None}, now(3))
     assert "Администратор: Иванова А.А." in texts(tg, 5)[-1]
+
+
+def reminders_for(store, src, chans, tg, *moments):
+    for m in moments:
+        service.cycle(store, src, chans, m)
+    return [t for c, t in tg.sent if c == "5" and ("Завтра" in t or "Через час" in t)]
+
+
+def test_day_and_hour_reminders_once_each():
+    store, src, tg, _, chans = setup()  # смена 04.10 в 11:00
+    handle(store, tg, {"chat_id": 5, "text": "", "phone": "9000000001"}, now(1))
+    got = reminders_for(store, src, chans, tg, now(3, 10), now(3, 12))  # до срока за сутки и внутри окна
+    assert len(got) == 1 and got[0].startswith("📅 Завтра")
+    got = reminders_for(store, src, chans, tg, now(3, 12), now(4, 9))  # повтор не шлём; за час ещё рано
+    assert len(got) == 1
+    got = reminders_for(store, src, chans, tg, now(4, 10), now(4, 10), now(4, 11))  # за час: один раз; после начала — нет
+    assert len(got) == 2 and got[1].startswith("⏰ Через час")
+
+
+def test_shift_without_time_reminds_evening_before():
+    store, src, tg, _, chans = setup()
+    src.table.append(["07.10", "Репетиция", "", "", "", "", ""])
+    src.table[-1][2] = "Иванова А.А."
+    handle(store, tg, {"chat_id": 5, "text": "", "phone": "9000000001"}, now(1))
+    got = reminders_for(store, src, chans, tg, now(6, 17), now(6, 18), now(6, 19))
+    assert len(got) == 1 and "Репетиция" in got[0]
+
+
+def test_late_added_shift_is_not_chased_by_day_reminder():
+    store, src, tg, _, chans = setup()
+    handle(store, tg, {"chat_id": 5, "text": "", "phone": "9000000001"}, now(1))
+    service.cycle(store, src, chans, now(4, 6))  # за 5 часов до смены: «за сутки» уже не актуально
+    assert reminders_for(store, src, chans, tg) == []
+    assert len(reminders_for(store, src, chans, tg, now(4, 10))) == 1  # а за час напомним
 
 
 def test_stop_and_removed_employee():
