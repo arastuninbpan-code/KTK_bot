@@ -7,7 +7,7 @@ const vm = require("vm");
 const ctx = vm.createContext({console});
 vm.runInContext(fs.readFileSync(__dirname + "/Code.gs", "utf8") + `
 this.api = {normPhone_, phonesIn_, looksLikePhone_, personKey_, matchPhones_, parseGrid_, diff_, reminders_,
-            handleEvent_, planCycle_, todayIso_, telegramEvent_, describe_};`, ctx);
+            handleEvent_, planCycle_, todayIso_, telegramEvent_, describe_, hostOf_};`, ctx);
 // Результаты из изолированного контекста приводим к обычным объектам, иначе строгое сравнение массивов не сработает.
 const plain = (x) => (x === undefined ? x : JSON.parse(JSON.stringify(x)));
 const A = Object.fromEntries(Object.entries(ctx.api).map(([k, f]) => [k, (...a) => plain(f(...a))]));
@@ -179,4 +179,10 @@ test("Telegram: чужой контакт и группы игнорируютс
   const foreign = A.telegramEvent_({message: {chat: {id: 5, type: "private"}, from: {id: 5}, contact: {user_id: 9, phone_number: "+7 930"}}});
   assert.strictEqual(foreign.phone, null);
   assert.strictEqual(A.telegramEvent_({message: {chat: {id: -1, type: "group"}, from: {id: 5}, text: "hi"}}), null);
+});
+
+test("hostOf_ показывает только адрес сайта, без секретной части", () => {
+  assert.strictEqual(A.hostOf_("https://ktk-relay.x.workers.dev/секрет123?a=b"), "ktk-relay.x.workers.dev");
+  assert.strictEqual(A.hostOf_(""), "");
+  assert.strictEqual(A.hostOf_(undefined), "");
 });

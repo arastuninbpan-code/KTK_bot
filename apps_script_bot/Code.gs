@@ -501,6 +501,11 @@ function setup() {
   console.log("Готово: таймеры созданы. Теперь разверните веб-приложение и запустите setWebhook().");
 }
 
+/** Только адрес сайта из ссылки (в Apps Script нет встроенного URL); секретную часть не показываем. */
+function hostOf_(u) {
+  return String(u || "").replace(/^https?:\/\/([^\/?#]+).*$/, "$1");
+}
+
 /**
  * Говорит Telegram, куда присылать сообщения. Если задано свойство RELAY_URL (адрес посредника Cloudflare, см. relay/worker.js),
  * сообщения идут через него: Apps Script отвечает на POST перенаправлением (302), Telegram считает это ошибкой и тормозит.
@@ -514,7 +519,7 @@ function setWebhook() {
     if (!url || !/\/exec$/.test(url)) throw new Error("Нужен адрес веб-приложения, оканчивающийся на /exec (свойство WEBAPP_URL) или RELAY_URL.");
     target = url + "?secret=" + encodeURIComponent(prop_("WEBHOOK_SECRET"));
   }
-  console.log("Вебхук будет на: " + new URL(target).host); // только адрес сайта, без секретов
+  console.log("Вебхук будет на: " + hostOf_(target)); // только адрес сайта, без секретов
   const r = UrlFetchApp.fetch(`https://api.telegram.org/bot${prop_("TELEGRAM_BOT_TOKEN")}/setWebhook`, {
     method: "post", contentType: "application/json", muteHttpExceptions: true,
     payload: JSON.stringify({url: target, allowed_updates: ["message"]}),
@@ -526,7 +531,7 @@ function setWebhook() {
 function webhookInfo() {
   const r = UrlFetchApp.fetch(`https://api.telegram.org/bot${prop_("TELEGRAM_BOT_TOKEN")}/getWebhookInfo`, {muteHttpExceptions: true});
   const info = JSON.parse(r.getContentText()).result || {};
-  console.log(JSON.stringify({host: info.url ? new URL(info.url).host : "", pending: info.pending_update_count, last_error: info.last_error_message}));
+  console.log(JSON.stringify({host: hostOf_(info.url), pending: info.pending_update_count, last_error: info.last_error_message}));
 }
 
 function deleteWebhook() {
