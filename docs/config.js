@@ -1,6 +1,6 @@
 // Настройки приложения. API_URL — адрес веб-приложения Google Apps Script (заканчивается на /exec).
-// Если пусто, запросы идут на тот же сайт (/api/...): так работает локальный стенд.
+// Запросы идут через Cloudflare-посредника (relay/worker.js), а он — в Google Apps Script.
 window.KTK = {
-  API_URL: "https://script.google.com/macros/s/AKfycbzVhNa1N9hEyE9h4OdtebikEofHTdASFK45WCPGPBsaXUC_YfVBRcZ_W4Cv9pdUk9vsXg/exec",
+  API_URL: "https://solitary-fire-f032.a-rastuninbpan.workers.dev/api",
   BOT_URL: "https://t.me/k_t_k_bot",
 };
