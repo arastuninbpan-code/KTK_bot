@@ -79,8 +79,17 @@ async function api(method, path, body) {
     // text/plain — «простой» запрос, без предварительной проверки CORS (Apps Script её не поддерживает)
     let r, raw = "";
     try {
-      r = await fetch(CFG.API_URL, {method: "POST", headers: {"Content-Type": "text/plain;charset=utf-8"}, redirect: "follow", body: JSON.stringify({method, path, token: state.token, body})});
-      raw = await r.text();
+      // Apps Script иногда «просыпается» долго и обрывает первый запрос — пробуем ещё раз (только чтение: запись повторять нельзя)
+      for (let attempt = 0; ; attempt++) {
+        try {
+          const ctl = new AbortController(); const timer = setTimeout(() => ctl.abort(), 30000);
+          try {
+            r = await fetch(CFG.API_URL, {method: "POST", headers: {"Content-Type": "text/plain;charset=utf-8"}, redirect: "follow", signal: ctl.signal, body: JSON.stringify({method, path, token: state.token, body})});
+            raw = await r.text();
+          } finally { clearTimeout(timer); }
+          break;
+        } catch (e) { if (method !== "GET" || attempt >= 1) throw e; }
+      }
     } catch (e) { throw new Error("Нет связи с сервером (" + e.message + "). Проверьте, что доступ веб-приложения «Все», а не «Только я»."); }
     try { data = JSON.parse(raw); } catch (e) { throw new Error("Сервер ответил не так, как ждали (код " + r.status + "): " + raw.replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").slice(0, 160)); }
     status = data._status || (r.ok ? 200 : r.status);
@@ -95,7 +104,7 @@ async function api(method, path, body) {
 }
 
 function logout() {
-  localStorage.removeItem("ktk_token");
+  try { localStorage.removeItem("ktk_token"); localStorage.removeItem("ktk_cache"); } catch (_) {}
   Object.assign(state, {token: "", me: null, events: [], ready: false});
   render();
 }
@@ -209,9 +218,15 @@ async function load(manual = false) {
   try {
     const d = await api("GET", "/api/schedule");
     Object.assign(state, {me: d.me, events: d.events, roles: d.roles, staff: d.staff || [], today: d.today, ready: true});
+    try { localStorage.setItem("ktk_cache", JSON.stringify({me: d.me, events: d.events, roles: d.roles, staff: d.staff || [], today: d.today})); } catch (_) {}
     render();
     if (manual) toast("Обновлено");
-  } catch (e) { if (state.token) { toast(e.message, {bad: true}); if (!state.ready) { state.ready = false; logout(); } } }
+  } catch (e) {
+    if (!state.token) return; // 401: api() уже вернул на экран входа
+    toast(e.message, {bad: true});
+    if (!state.ready) root.replaceChildren(h("div", {class: "loading"}, h("div", {class: "empty"}, cloud(), h("h3", {}, "Не удалось загрузить"), h("p", {}, e.message),
+      h("div", {class: "stack"}, h("button", {class: "btn", onclick: () => { render(); load(); }}, "Повторить"), h("button", {class: "btn light", onclick: logout}, "Выйти")))));
+  }
 }
 
 // ---------- редактирование: администратор и редактор ----------
@@ -288,5 +303,9 @@ function picker(role, selected, onDone) {
 
 // ---------- старт ----------
 render();
-if (state.token) load();
+if (state.token) {
+  // сначала показываем прошлое расписание, чтобы не ждать сервер, потом обновляем
+  try { const c = JSON.parse(localStorage.getItem("ktk_cache") || "null"); if (c && c.events) Object.assign(state, c, {ready: true}); } catch (_) {}
+  load();
+}
 setInterval(() => { if (state.token && state.ready && !document.querySelector(".overlay") && !document.hidden) load(); }, 60000);

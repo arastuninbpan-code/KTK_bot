@@ -30,23 +30,26 @@ function secret_() {
 
 // ---------- книга: тот же интерфейс, что у MemoryBook в тестах ----------
 class GasBook {
-  constructor() { this.ss = SpreadsheetApp.openById(prop_("SHEET_ID")); }
+  constructor() { this.ss = SpreadsheetApp.openById(prop_("SHEET_ID")); this.memo = {}; } // memo: лист читаем один раз за запрос (это самое медленное место)
   sheet(tab) {
     const s = this.ss.getSheetByName(tab);
     if (!s) throw new Error("Нет листа «" + tab + "»");
     return s;
   }
   ensure(tab, header) {
+    this.memo = {};
     if (this.ss.getSheetByName(tab)) return;
     const s = this.ss.insertSheet(tab);
     if (header) s.getRange(1, 1, 1, header.length).setNumberFormat("@").setValues([header.map(String)]);
   }
   get(tab) {
+    if (this.memo[tab]) return this.memo[tab];
     const s = this.sheet(tab);
-    if (s.getLastRow() === 0) return [];
-    return s.getRange(1, 1, s.getLastRow(), Math.max(1, s.getLastColumn())).getDisplayValues();
+    const rows = s.getLastRow() === 0 ? [] : s.getRange(1, 1, s.getLastRow(), Math.max(1, s.getLastColumn())).getDisplayValues();
+    return (this.memo[tab] = rows);
   }
   set(tab, row, values) {
+    this.memo = {};
     const s = this.sheet(tab);
     const width = Math.max(values.length, s.getLastColumn());
     const padded = values.map(String);
@@ -55,13 +58,15 @@ class GasBook {
   }
   append(tab, values) { this.set(tab, this.sheet(tab).getLastRow() + 1, values); }
   insert(tab, beforeRow) {
+    this.memo = {};
     const s = this.sheet(tab);
     if (beforeRow > s.getMaxRows()) s.insertRowsAfter(s.getMaxRows(), 1);
     else s.insertRowBefore(beforeRow);
   }
-  remove(tab, row) { this.sheet(tab).deleteRow(row); }
-  clearRow(tab, row) { const s = this.sheet(tab); s.getRange(row, 1, 1, s.getMaxColumns()).clearContent(); }
+  remove(tab, row) { this.memo = {}; this.sheet(tab).deleteRow(row); }
+  clearRow(tab, row) { this.memo = {}; const s = this.sheet(tab); s.getRange(row, 1, 1, s.getMaxColumns()).clearContent(); }
   replaceColumnA(tab, values) {
+    this.memo = {};
     const s = this.sheet(tab);
     s.clear();
     if (values.length) s.getRange(1, 1, values.length, 1).setNumberFormat("@").setValues(values.map((v) => [String(v)]));
