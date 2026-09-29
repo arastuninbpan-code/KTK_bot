@@ -1,10 +1,12 @@
 // Оформление сообщений для мессенджеров (HTML-разметка Telegram: <b>, <s>, <code>).
+// Короткие сообщения с эмодзи в тон логотипа: ✈️ назначение, 💬 информация, ❗ срочное (за час).
 
 const MONTHS = ["января", "февраля", "марта", "апреля", "мая", "июня", "июля", "августа", "сентября", "октября", "ноября", "декабря"];
 const WD_LONG = ["воскресенье", "понедельник", "вторник", "среда", "четверг", "пятница", "суббота"];
-const WD_SHORT = ["вс", "пн", "вт", "ср", "чт", "пт", "сб"];
+const WD_SHORT = ["Вс", "Пн", "Вт", "Ср", "Чт", "Пт", "Сб"];
 
 export const esc = (s) => String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+const cap = (s) => (s ? s[0].toUpperCase() + s.slice(1) : s);
 
 const parts = (iso) => {
   const d = new Date(Date.parse(iso + "T00:00:00Z"));
@@ -13,38 +15,43 @@ const parts = (iso) => {
 /** «воскресенье, 4 октября» */
 export const dateLong = (iso) => { const p = parts(iso); return `${WD_LONG[p.wd]}, ${p.day} ${p.month}`; };
 /** «Вс, 4 октября» */
-export const dateShort = (iso) => { const p = parts(iso); return `${WD_SHORT[p.wd][0].toUpperCase()}${WD_SHORT[p.wd].slice(1)}, ${p.day} ${p.month}`; };
+export const dateShort = (iso) => { const p = parts(iso); return `${WD_SHORT[p.wd]}, ${p.day} ${p.month}`; };
 
 export const roleText = (role) => String(role || "").replace(/\s*\/\s*/g, " / ");
 export const timeText = (t) => String(t || "").split(/,\s*/).filter(Boolean).join(" и ");
 
-/** Блок одной смены. opts.old — прежняя версия (показываем «было → стало»); opts.strike — смена отменена. */
+/**
+ * Блок одной смены: жирное название, дата · время, зал, роль.
+ * opts.old — прежняя версия (показываем «было → стало»); opts.strike — смена отменена; opts.withDate=false — без даты.
+ */
 export function shiftBlock(r, opts = {}) {
   const {old, strike, withDate = true} = opts;
-  const lines = [`🎭 ${strike ? `<s>${esc(r.event)}</s>` : `<b>${esc(r.event)}</b>`}`];
-  if (withDate) lines.push(`🗓 ${dateLong(r.date)}`);
-  if (old && old.time !== r.time) lines.push(`⏰ ${old.time ? `<s>${timeText(old.time)}</s> → ` : ""}<b>${timeText(r.time) || "время уточняется"}</b>`);
-  else if (r.time) lines.push(`⏰ ${timeText(r.time)}`);
-  if (old && old.hall !== r.hall) lines.push(`📍 ${old.hall ? `<s>${esc(old.hall)}</s> → ` : ""}<b>${esc(r.hall) || "уточняется"}</b>`);
-  else if (r.hall) lines.push(`📍 ${esc(r.hall)}`);
+  const lines = [strike ? `<b><s>${esc(r.event)}</s></b>` : `<b>${esc(r.event)}</b>`];
+  const when = [];
+  if (withDate) when.push(`🗓 ${dateShort(r.date)}`);
+  if (old && old.time !== r.time) when.push(`⏰ ${old.time ? `<s>${timeText(old.time)}</s> → ` : ""}<b>${timeText(r.time) || "время уточняется"}</b>`);
+  else if (r.time) when.push(`⏰ ${timeText(r.time)}`);
+  if (when.length) lines.push(when.join(" · "));
+  if (old && old.hall !== r.hall) lines.push(`📍 ${old.hall ? `<s>${esc(cap(old.hall))}</s> → ` : ""}<b>${esc(cap(r.hall)) || "уточняется"}</b>`);
+  else if (r.hall) lines.push(`📍 ${esc(cap(r.hall))}`);
   if (r.role) lines.push(`👤 ${esc(roleText(r.role))}`);
   return lines.join("\n");
 }
 
-export const msgAdded = (r) => `🆕 <b>Вам назначена смена</b>\n\n${shiftBlock(r)}`;
-export const msgChanged = (r, old) => `✏️ <b>Смена изменена</b>\n\n${shiftBlock(r, {old})}`;
-export const msgRemoved = (r) => `❌ <b>Смена отменена</b>\n\n${shiftBlock(r, {strike: true})}`;
+export const msgAdded = (r) => `✈️ <b>Вам назначена смена</b>\n\n${shiftBlock(r)}`;
+export const msgChanged = (r, old) => `💬 <b>Смена изменена</b>\n\n${shiftBlock(r, {old})}`;
+export const msgRemoved = (r) => `💬 <b>Смена отменена</b>\n\n${shiftBlock(r, {strike: true})}`;
 
 export function msgChange(kind, row, old) {
   return kind === "added" ? msgAdded(row) : kind === "removed" ? msgRemoved(row) : msgChanged(row, old);
 }
 
-/** Напоминание: kind = "day" (за сутки / накануне) или "hour"; rows — смены одного человека. */
+/** Напоминание: kind = "day" (за сутки / накануне) или "hour" (❗ срочное); rows — смены одного человека. */
 export function msgReminder(kind, rows) {
   const many = rows.length > 1;
   const head = kind === "hour"
-    ? `⏰ <b>${many ? "Через час у вас смены" : "Через час у вас смена"}</b>`
-    : `📅 <b>${many ? "Завтра у вас смены" : "Завтра у вас смена"}</b>`;
+    ? `❗ <b>${many ? "Через час у вас смены" : "Через час у вас смена"}</b>`
+    : `💬 <b>${many ? "Завтра у вас смены" : "Завтра у вас смена"}</b>`;
   return `${head}\n\n${rows.map((r) => shiftBlock(r, {withDate: kind !== "hour"})).join("\n\n")}`;
 }
 
@@ -52,8 +59,8 @@ const byDate = (a, b) => (a.date + a.time).localeCompare(b.date + b.time);
 
 /** Список смен человека, сгруппированный по дням. */
 export function shiftsText(rows) {
-  if (!rows.length) return "📭 <b>Ближайших смен пока нет</b>";
-  const out = ["📋 <b>Ваши ближайшие смены</b>"];
+  if (!rows.length) return "💬 <b>Ближайших смен пока нет</b>";
+  const out = ["💬 <b>Ваши ближайшие смены</b>"];
   let day = "";
   for (const r of [...rows].sort(byDate)) {
     if (r.date !== day) { day = r.date; out.push(`\n🗓 <b>${dateShort(r.date)}</b>`); }
@@ -73,13 +80,13 @@ export function afishaText(rows, limit = 12) {
       m.set(r.role, [...(m.get(r.role) || []), r.person]);
     }
   }
-  if (!events.size) return "📭 <b>Событий пока нет</b>";
-  const out = ["🎭 <b>Афиша</b>"];
+  if (!events.size) return "💬 <b>Событий пока нет</b>";
+  const out = ["💬 <b>Афиша</b>"];
   let day = "";
   for (const {r, roles} of [...events.values()].slice(0, limit)) {
     if (r.date !== day) { day = r.date; out.push(`\n🗓 <b>${dateShort(r.date)}</b>`); }
-    const meta = [r.time && `⏰ ${timeText(r.time)}`, r.hall && `📍 ${esc(r.hall)}`].filter(Boolean).join(" · ");
-    out.push(`🎭 <b>${esc(r.event)}</b>${meta ? `\n${meta}` : ""}`);
+    const meta = [r.time && `⏰ ${timeText(r.time)}`, r.hall && `📍 ${esc(cap(r.hall))}`].filter(Boolean).join(" · ");
+    out.push(`<b>${esc(r.event)}</b>${meta ? `\n${meta}` : ""}`);
     for (const [role, people] of roles) out.push(`👤 ${esc(roleText(role))}: ${people.map(esc).join(", ")}`);
     out.push("");
   }
@@ -88,18 +95,22 @@ export function afishaText(rows, limit = 12) {
 
 export const HELP = [
   "<b>Что я умею</b>",
-  "📋 /shifts — ваши ближайшие смены",
-  "🎭 /schedule — афиша с составом",
-  "🔑 /login — код для входа на сайт",
-  "🔕 /stop — отключить уведомления",
+  "/shifts — ваши ближайшие смены",
+  "/schedule — афиша с составом",
+  "/login — код для входа в приложение",
+  "/stop — отключить уведомления",
 ].join("\n");
 
-export const msgWelcome = (name) => `✅ <b>Готово, ${esc(name)}!</b>\nТеперь я буду присылать уведомления о ваших сменах.\n\n${HELP}`;
-export const msgAskPhone = "👋 <b>Здравствуйте!</b>\nЧтобы получать уведомления о сменах, поделитесь номером телефона: нажмите кнопку ниже или напишите номер сообщением.";
-export const msgUnknownPhone = "🤔 <b>Этого номера нет в списке сотрудников.</b>\nОбратитесь к администратору, чтобы вас добавили.";
-export const msgStopped = "🔕 <b>Уведомления отключены.</b>\nЧтобы включить снова, напишите /start.";
-export const msgConnected = (name) => `👋 <b>${esc(name)}</b>, вы подключены.\n\n${HELP}`;
-export const msgLogin = (code, url) => `🔑 <b>Ваш код для входа</b>\n\n<code>${code}</code>\n\nВведите его на сайте${url ? `:\n${url}` : ""}\nКод действует 10 минут и подходит один раз.`;
+export const msgWelcome = (name) => `✈️ <b>Готово, ${esc(name)}!</b>\nТеперь я буду присылать уведомления о ваших сменах.\n\n${HELP}`;
+export const msgAskPhone = "💬 <b>Здравствуйте!</b>\nЧтобы получать уведомления о сменах, поделитесь номером телефона: нажмите кнопку ниже или напишите номер сообщением.";
+export const msgUnknownPhone = "💬 <b>Этого номера нет в списке сотрудников.</b>\nОбратитесь к администратору, чтобы вас добавили.";
+export const msgStopped = "💬 <b>Уведомления отключены.</b>\nЧтобы включить снова, напишите /start.";
+export const msgConnected = (name) => `💬 <b>${esc(name)}</b>, вы подключены.\n\n${HELP}`;
+export const msgBlocked = "💬 <b>Доступ закрыт.</b>\nОбратитесь к администратору.";
+export const msgLogin = (code) => `🔑 <b>Код для входа</b>\n\n<code>${code}</code>\n\nВведите его в приложении. Код действует 10 минут и подходит один раз.`;
+
+/** Кнопка под сообщением: «Открыть в приложении». Если адрес приложения не задан — без кнопки. */
+export const appButton = (url) => (url ? {button: {text: "Открыть в приложении", url}} : undefined);
 
 /** Режет длинный текст на сообщения ≤ 3900 знаков по пустым строкам. */
 export function chunkText(text, max = 3900) {

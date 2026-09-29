@@ -1,20 +1,23 @@
 // Сессии: подписанный токен (HMAC-SHA256), без хранения на сервере.
-import {createHmac, timingSafeEqual} from "node:crypto";
+import {platform} from "./platform.mjs";
 
-const sign = (data, secret) => createHmac("sha256", secret).update(data).digest("base64url");
+const sameString = (a, b) => {
+  if (a.length !== b.length) return false;
+  let diff = 0;
+  for (let i = 0; i < a.length; i++) diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  return diff === 0;
+};
 
 export function makeToken(payload, secret, ttlMs = 30 * 24 * 3600e3, now = Date.now()) {
-  const body = Buffer.from(JSON.stringify({...payload, exp: now + ttlMs})).toString("base64url");
-  return `${body}.${sign(body, secret)}`;
+  const body = platform.b64urlEncode(JSON.stringify({...payload, exp: now + ttlMs}));
+  return `${body}.${platform.hmacB64url(body, secret)}`;
 }
 
 export function readToken(token, secret, now = Date.now()) {
   const [body, sig] = String(token || "").split(".");
-  if (!body || !sig) return null;
-  const good = sign(body, secret);
-  if (sig.length !== good.length || !timingSafeEqual(Buffer.from(sig), Buffer.from(good))) return null;
+  if (!body || !sig || !sameString(sig, platform.hmacB64url(body, secret))) return null;
   try {
-    const p = JSON.parse(Buffer.from(body, "base64url").toString());
+    const p = JSON.parse(platform.b64urlDecode(body));
     return p.exp > now ? p : null;
   } catch {
     return null;
