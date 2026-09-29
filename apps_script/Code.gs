@@ -8,6 +8,12 @@
  * Токен GitHub (Settings → Developer settings → Fine-grained tokens, только репозиторий KTK_bot,
  * право Actions: Read and write) хранится в свойствах скрипта GH_TOKEN, а не в коде.
  */
+// Если скрипт создан отдельным проектом (не из меню таблицы), укажите ID таблицы в свойствах скрипта: SHEET_ID.
+function spreadsheet_() {
+  return SpreadsheetApp.getActive() ||
+    SpreadsheetApp.openById(PropertiesService.getScriptProperties().getProperty("SHEET_ID"));
+}
+
 const OWNER = "arastuninbpan-code";
 const REPO = "KTK_bot";
 const WORKFLOW = "bot.yml";
@@ -40,7 +46,7 @@ function everyMinute() {
 
 function setup() {
   ScriptApp.getProjectTriggers().forEach(ScriptApp.deleteTrigger);
-  ScriptApp.newTrigger("onSheetChange").forSpreadsheet(SpreadsheetApp.getActive()).onChange().create();
-  ScriptApp.newTrigger("onSheetChange").forSpreadsheet(SpreadsheetApp.getActive()).onEdit().create();
+  ScriptApp.newTrigger("onSheetChange").forSpreadsheet(spreadsheet_()).onChange().create();
+  ScriptApp.newTrigger("onSheetChange").forSpreadsheet(spreadsheet_()).onEdit().create();
   ScriptApp.newTrigger("everyMinute").timeBased().everyMinutes(1).create();
 }
