@@ -1,0 +1,30 @@
+name: bot
+
+on:
+  workflow_dispatch:        # будит Google Таблица (apps_script/Code.gs): при правке и раз в минуту
+  schedule:
+    - cron: "*/10 * * * *"  # страховка, если будильник в таблице не сработал
+
+# Запуски не пересекаются: пока идёт один, следующий ждёт (лишние ожидающие заменяются новым)
+concurrency:
+  group: bot
+  cancel-in-progress: false
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - run: python main.py --once
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          MAX_BOT_TOKEN: ${{ secrets.MAX_BOT_TOKEN }}
+          SHEET_ID: ${{ secrets.SHEET_ID }}
+          GOOGLE_CREDENTIALS_JSON: ${{ secrets.GOOGLE_CREDENTIALS_JSON }}
+          TIMEZONE: Europe/Moscow

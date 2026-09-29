@@ -1,0 +1,6 @@
+.env
+service-account.json
+*.db
+__pycache__/
+.pytest_cache/
+demo/
