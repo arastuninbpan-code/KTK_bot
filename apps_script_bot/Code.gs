@@ -6,6 +6,7 @@
  * Свойства скрипта (Настройки проекта → Свойства скрипта):
  *   SHEET_ID            — ID таблицы
  *   TELEGRAM_BOT_TOKEN  — токен бота
+ *   WEBAPP_URL          — адрес веб-приложения (заканчивается на /exec) из окна «Развертывание»
  *   WEBHOOK_SECRET      — создаётся сам при запуске setup()
  *
  * Установка: setup() → «Начать развертывание → Веб-приложение» → setWebhook(). Подробно — в README.
@@ -501,8 +502,11 @@ function setup() {
 
 /** Говорит Telegram присылать сообщения на адрес веб-приложения. Запускать после развертывания. */
 function setWebhook() {
-  const url = ScriptApp.getService().getUrl();
+  // Из редактора getUrl() отдаёт тестовый адрес /dev (он открыт только владельцу и даёт Telegram ошибку 401),
+  // поэтому публичный адрес /exec берём из свойства WEBAPP_URL (копируется из окна «Развертывание»).
+  const url = prop_("WEBAPP_URL") || ScriptApp.getService().getUrl();
   if (!url) throw new Error("Сначала разверните веб-приложение: Начать развертывание → Новое развертывание → Веб-приложение.");
+  if (!/\/exec$/.test(url)) throw new Error("Нужен адрес веб-приложения, оканчивающийся на /exec. Впишите его в свойство скрипта WEBAPP_URL.");
   const r = UrlFetchApp.fetch(`https://api.telegram.org/bot${prop_("TELEGRAM_BOT_TOKEN")}/setWebhook`, {
     method: "post", contentType: "application/json", muteHttpExceptions: true,
     payload: JSON.stringify({url: url + "?secret=" + encodeURIComponent(prop_("WEBHOOK_SECRET")), allowed_updates: ["message"]}),
