@@ -126,21 +126,29 @@ function confirmDialog(title, text, okLabel, onOk) {
 }
 
 // ---------- вход ----------
+const LOGIN_LEN = 6; // логины, которые выдаёт таблица, — 6 знаков
 function loginView() {
   let busy = false;
   const err = h("div", {class: "error", role: "alert"});
   const input = h("input", {class: "code-input", autocomplete: "username", autocapitalize: "characters", spellcheck: "false", maxlength: "32", placeholder: "ЛОГИН", "aria-label": "Ваш логин",
-    oninput: () => { err.textContent = ""; }, onkeydown: (e) => { if (e.key === "Enter") go(); }});
+    oninput: () => { err.className = "error"; err.textContent = ""; input.classList.remove("bad"); if (input.value.trim().length > LOGIN_LEN) reject("Логин — " + LOGIN_LEN + " знаков. Проверьте, что не вставили лишнее."); },
+    onkeydown: (e) => { if (e.key === "Enter") go(); }});
   const btn = h("button", {class: "btn", onclick: () => go()}, "Войти");
+  // красная подсветка и дрожание поля при неверном логине
+  function reject(text) {
+    err.className = "error"; err.textContent = text;
+    input.classList.remove("bad"); void input.offsetWidth; input.classList.add("bad");
+  }
   async function go() {
     if (busy) return;
-    if (!input.value.trim()) { err.textContent = "Введите ваш логин"; return; }
+    if (!input.value.trim()) return reject("Введите ваш логин");
+    if (input.value.trim().length > LOGIN_LEN) return reject("Логин — " + LOGIN_LEN + " знаков. Проверьте, что не вставили лишнее.");
     busy = true; btn.disabled = true; btn.textContent = "Входим…"; err.className = "hint"; err.textContent = "Идёт загрузка, подождите несколько секунд…"; input.disabled = true;
     try {
       const r = await api("POST", "/api/login", {login: input.value.trim()});
       state.token = r.token; localStorage.setItem("ktk_token", r.token);
       await load();
-    } catch (e) { err.className = "error"; err.textContent = e.message; input.disabled = false; input.focus(); } finally { busy = false; btn.disabled = false; btn.textContent = "Войти"; }
+    } catch (e) { input.disabled = false; reject(e.message); input.focus(); } finally { busy = false; btn.disabled = false; btn.textContent = "Войти"; }
   }
   return h("main", {class: "login"},
     h("div", {class: "hero-wrap"}, h("img", {class: "hero", src: "avatar.webp", alt: "Пилот с бумажным самолётиком"}), splash()),
@@ -302,10 +310,10 @@ function picker(role, selected, onDone) {
 }
 
 // ---------- старт ----------
-render();
 if (state.token) {
   // сначала показываем прошлое расписание, чтобы не ждать сервер, потом обновляем
-  try { const c = JSON.parse(localStorage.getItem("ktk_cache") || "null"); if (c && c.events) Object.assign(state, c, {ready: true}); } catch (_) {}
-  load();
+  try { const c = JSON.parse(localStorage.getItem("ktk_cache") || "null"); if (c && c.events && c.me) Object.assign(state, c, {ready: true}); } catch (_) {}
 }
+render();
+if (state.token) load();
 setInterval(() => { if (state.token && state.ready && !document.querySelector(".overlay") && !document.hidden) load(); }, 60000);

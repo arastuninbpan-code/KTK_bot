@@ -45,7 +45,7 @@ export function handleMessage({store, channel, ev, appUrl = "", now = Date.now()
   if (cmd === "/login") {
     store.ensureLogins();
     const fresh = store.users().find((x) => x.phone === user.phone);
-    return channel.send(chat, msgLogin(fresh.login), btn);
+    return channel.send(chat, msgLogin(fresh.login), {...btn, copy: {text: "📋 Скопировать логин", value: fresh.login}});
   }
   if (cmd === "/stop") {
     store.unbind(channel.name, chat);

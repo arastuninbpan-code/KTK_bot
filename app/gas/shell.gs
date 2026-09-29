@@ -83,7 +83,12 @@ function tgSend_(chatId, text, options) {
     if (i === pieces.length - 1) {
       if (options === "contact") body.reply_markup = {keyboard: [[{text: "📱 Поделиться номером", request_contact: true}]], resize_keyboard: true, one_time_keyboard: true};
       else if (options === "remove") body.reply_markup = {remove_keyboard: true};
-      else if (options && options.button) body.reply_markup = {inline_keyboard: [[{text: options.button.text, url: options.button.url}]]};
+      else if (options && (options.button || options.copy)) {
+        const rows = [];
+        if (options.copy) rows.push([{text: options.copy.text, copy_text: {text: options.copy.value}}]); // кнопка «скопировать» одним нажатием
+        if (options.button) rows.push([{text: options.button.text, url: options.button.url}]);
+        body.reply_markup = {inline_keyboard: rows};
+      }
     }
     const r = UrlFetchApp.fetch("https://api.telegram.org/bot" + prop_("TELEGRAM_BOT_TOKEN") + "/sendMessage",
       {method: "post", contentType: "application/json", payload: JSON.stringify(body), muteHttpExceptions: true});
