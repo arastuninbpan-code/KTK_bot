@@ -38,7 +38,7 @@ export default {
 
     // ВКонтакте (Callback API): адрес /vk/<PATH_SECRET>. Подтверждение адреса отдаём сразу, остальное передаём скрипту и отвечаем «ok».
     if (url.pathname === "/vk/" + env.PATH_SECRET) {
-      if (request.method !== "POST") return new Response("ok");
+      if (request.method !== "POST") return new Response("ktk-vk ok"); // адрес верный (проверка в браузере)
       const raw = await request.text();
       let update = {};
       try { update = JSON.parse(raw); } catch (e) { return new Response("ok"); }
