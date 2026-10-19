@@ -44,6 +44,7 @@ class Sheet {
   insertRowBefore(r) { this.cells.splice(r - 1, 0, []); }
   insertRowsAfter(r, n) { for (let i = 0; i < n; i++) this.cells.splice(r, 0, []); }
   deleteRow(r) { this.cells.splice(r - 1, 1); }
+  deleteRows(r, n) { this.cells.splice(r - 1, n); }
   clear() { this.cells = []; }
   setRowHeight(r, h) { this.styleLog.push(["rowHeight", r, h]); }
   setColumnWidth(c, w) { this.styleLog.push(["colWidth", c, w]); }

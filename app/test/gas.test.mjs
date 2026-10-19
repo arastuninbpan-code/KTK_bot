@@ -249,3 +249,21 @@ test("публикация: не настроено -> понятное сооб
   assert.match(res, /⚠️ ВКонтакте: VK 15: Access denied/);
   assert.ok(!res.includes("VKTOKEN"));
 });
+
+test("ВК: журнал диагностики пишется в лист «_лог» (причина молчания видна в таблице)", () => {
+  const g = GV();
+  vk(g, vkMsg(5, "/start"), "не тот"); // чужой secret в адресе
+  vk(g, {...vkMsg(5, "/start"), secret: "левый"}); // не тот секретный ключ ВК
+  vk(g, vkMsg(5, "/start", {peer_id: 2000000001})); // беседа
+  g.setFetchReply((url) => (url.endsWith("/messages.send") ? JSON.stringify({error: {error_code: 15, error_msg: "Access denied: no permission"}}) : null));
+  vk(g, vkMsg(9, "привет")); // отправка отвергнута ВК
+  g.setFetchReply(null);
+  vk(g, vkMsg(10, "привет")); // успех
+  const log = g.ss.getSheetByName("_лог").getDataRange().getDisplayValues().map((r) => r[1]);
+  assert.match(log[1], /secret в адресе воркера/);
+  assert.match(log[2], /секретный ключ Callback API не совпал/);
+  assert.match(log[3], /не личное сообщение/);
+  assert.match(log[4], /ОШИБКА — VK 15: Access denied/);
+  assert.match(log[5], /от 10 обработано/);
+  assert.ok(!log.join(" ").includes("VKTOKEN"));
+});

@@ -1278,20 +1278,34 @@ function telegramUpdate_(e) {
 }
 
 /** Сообщения ВКонтакте (Callback API через посредника). Подтверждение адреса отдаёт посредник; здесь на случай прямого обращения. */
+/** Короткий журнал для диагностики: лист «_лог» в таблице (время | сообщение). Секреты и токены сюда не пишем. */
+function diag_(text) {
+  try {
+    const book = new GasBook();
+    book.ensure("_лог", ["Время (МСК)", "Событие"]);
+    const sh = book.sheet("_лог");
+    if (sh.getLastRow() > 300) sh.deleteRows(2, 150);
+    book.append("_лог", [Utilities.formatDate(new Date(), "Europe/Moscow", "dd.MM HH:mm:ss"), String(text).slice(0, 300)]);
+  } catch (err) { console.error("не удалось записать журнал: " + (err && err.message)); }
+}
+
 function vkUpdate_(e) {
-  if (e.parameter.secret !== prop_("WEBHOOK_SECRET")) { console.log("VK: пропущено, secret в адресе воркера (GAS_URL) не совпадает с WEBHOOK_SECRET"); return ok_(); }
-  const update = JSON.parse(e.postData.contents);
-  console.log("VK: пришло событие " + update.type);
-  if (update.type === "confirmation") return ContentService.createTextOutput(prop_("VK_CONFIRM") || "");
-  if (prop_("VK_SECRET") && update.secret !== prop_("VK_SECRET")) { console.log("VK: пропущено, секретный ключ Callback API не совпал с VK_SECRET"); return ok_(); }
-  const ev = vkEvent(update);
-  if (!ev) { console.log("VK: пропущено, это не личное сообщение человека"); return ok_(); }
-  const cache = CacheService.getScriptCache();
-  const dedupe = "v" + (ev.eventId || ev.chatId + ":" + ev.text);
-  if (cache.get(dedupe)) { console.log("VK: повтор того же события, пропущено"); return ok_(); } // ВК повторяет событие, если ответ задержался
-  cache.put(dedupe, "1", 21600);
-  withLock_(() => handleMessage({store: store_(), channel: SENDERS.vk, ev, appUrl: prop_("APP_URL") || "", now: Date.now(), publishers: publishers_()}));
-  console.log("VK: сообщение от " + ev.chatId + " обработано, ответ отправлен");
+  try {
+    if (e.parameter.secret !== prop_("WEBHOOK_SECRET")) { diag_("VK: пропущено — secret в адресе воркера (GAS_URL) не совпал с WEBHOOK_SECRET"); return ok_(); }
+    const update = JSON.parse(e.postData.contents);
+    if (update.type === "confirmation") return ContentService.createTextOutput(prop_("VK_CONFIRM") || "");
+    if (prop_("VK_SECRET") && update.secret !== prop_("VK_SECRET")) { diag_("VK: пропущено — секретный ключ Callback API не совпал с VK_SECRET"); return ok_(); }
+    const ev = vkEvent(update);
+    if (!ev) { diag_("VK: пропущено — событие «" + update.type + "» не личное сообщение человека"); return ok_(); }
+    const cache = CacheService.getScriptCache();
+    const dedupe = "v" + (ev.eventId || ev.chatId + ":" + ev.text);
+    if (cache.get(dedupe)) { diag_("VK: повтор того же события, пропущено"); return ok_(); } // ВК повторяет событие, если ответ задержался
+    cache.put(dedupe, "1", 21600);
+    withLock_(() => handleMessage({store: store_(), channel: SENDERS.vk, ev, appUrl: prop_("APP_URL") || "", now: Date.now(), publishers: publishers_()}));
+    diag_("VK: сообщение от " + ev.chatId + " обработано, ответ отправлен");
+  } catch (err) {
+    diag_("VK: ОШИБКА — " + (err && err.message ? err.message : (err && err.constructor && err.constructor.name) || err));
+  }
   return ok_();
 }
 
