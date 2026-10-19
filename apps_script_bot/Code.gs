@@ -759,7 +759,8 @@ class Store {
       this.book.setCell(TABS.staff, at + 1, commentCol + 1, old ? old + "\n" + line : line);
       return at + 1;
     }
-    at = rows.length;
+    at = rows.findIndex((r, i) => i > 0 && !String(r[0] || "").trim() && !String(r[1] || "").trim()); // сначала свободная строка внутри списка
+    if (at < 0) at = rows.length;
     this.book.setCell(TABS.staff, at + 1, 1, "ЗАЯВКА");
     this.book.setCell(TABS.staff, at + 1, 2, phone);
     this.book.setCell(TABS.staff, at + 1, commentCol + 1, line);
@@ -1555,8 +1556,12 @@ function telegramUpdate_(e) {
     const t0 = Date.now();
     netMs_ = 0;
     const run = () => handleMessage({store: store_(), channel: SENDERS.telegram, ev, appUrl: prop_("APP_URL") || "", now: Date.now(), publishers: publishers_()});
-    if (READ_ONLY_RE_.test(ev.text || "")) run(); else withLock_(run); // чтение расписания блокировки не требует
-    diag_("TG " + speed_(ev, t0));
+    try {
+      if (READ_ONLY_RE_.test(ev.text || "")) run(); else withLock_(run); // чтение расписания блокировки не требует
+      diag_("TG " + speed_(ev, t0));
+    } catch (err) {
+      diag_("TG: ОШИБКА — " + (err && err.message ? err.message : (err && err.constructor && err.constructor.name) || err));
+    }
   }
   return ok_();
 }

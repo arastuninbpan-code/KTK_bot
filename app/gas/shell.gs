@@ -348,8 +348,12 @@ function telegramUpdate_(e) {
     const t0 = Date.now();
     netMs_ = 0;
     const run = () => handleMessage({store: store_(), channel: SENDERS.telegram, ev, appUrl: prop_("APP_URL") || "", now: Date.now(), publishers: publishers_()});
-    if (READ_ONLY_RE_.test(ev.text || "")) run(); else withLock_(run); // чтение расписания блокировки не требует
-    diag_("TG " + speed_(ev, t0));
+    try {
+      if (READ_ONLY_RE_.test(ev.text || "")) run(); else withLock_(run); // чтение расписания блокировки не требует
+      diag_("TG " + speed_(ev, t0));
+    } catch (err) {
+      diag_("TG: ОШИБКА — " + (err && err.message ? err.message : (err && err.constructor && err.constructor.name) || err));
+    }
   }
   return ok_();
 }

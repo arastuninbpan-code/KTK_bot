@@ -113,7 +113,8 @@ export class Store {
       this.book.setCell(TABS.staff, at + 1, commentCol + 1, old ? old + "\n" + line : line);
       return at + 1;
     }
-    at = rows.length;
+    at = rows.findIndex((r, i) => i > 0 && !String(r[0] || "").trim() && !String(r[1] || "").trim()); // сначала свободная строка внутри списка
+    if (at < 0) at = rows.length;
     this.book.setCell(TABS.staff, at + 1, 1, "ЗАЯВКА");
     this.book.setCell(TABS.staff, at + 1, 2, phone);
     this.book.setCell(TABS.staff, at + 1, commentCol + 1, line);
