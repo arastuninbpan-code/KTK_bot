@@ -551,6 +551,11 @@ function styleSchedule_(sheet) {
   styleHeader_(sheet, cols);
   const all2 = sheet.getRange(1, 1, sheet.getLastRow(), 1).getDisplayValues();
   for (let r = 2; r <= all2.length; r++) {
+    if (String(all2[r - 1][0]).trim() === PAST_DIVIDER_) {
+      sheet.getRange(r, 1, 1, cols).merge().setBackground("#B8C4D6").setFontColor(C.navy).setFontWeight("bold").setHorizontalAlignment("center").setVerticalAlignment("middle");
+      sheet.setRowHeight(r, 28);
+      continue;
+    }
     if (!MONTH_ROW_RE.test(String(all2[r - 1][0]).trim())) continue;
     const row = sheet.getRange(r, 1, 1, cols);
     row.merge().setBackground(C.navy).setFontColor(C.white).setFontWeight("bold").setHorizontalAlignment("center").setVerticalAlignment("middle").setFontSize(13);
@@ -573,7 +578,7 @@ function styleSchedule_(sheet) {
   // чередование строк белый / светло-голубой (кроме шапок месяцев) — правилом, чтобы новые строки красились сами
   const range = sheet.getRange(2, 1, Math.max(sheet.getMaxRows() - 1, 1), cols);
   const banding = SpreadsheetApp.newConditionalFormatRule()
-    .whenFormulaSatisfied('=AND(ISEVEN(ROW()),$A2<>"",NOT(REGEXMATCH($A2,"^[А-ЯЁ]+ [0-9]{4}$")))')
+    .whenFormulaSatisfied('=AND(ISEVEN(ROW()),$A2<>"",NOT(REGEXMATCH($A2,"^[А-ЯЁ]+ [0-9]{4}$")),LEFT($A2,1)<>"▼")')
     .setBackground(C.light).setRanges([range]).build();
   sheet.setConditionalFormatRules([banding]);
   groupMonths_(sheet, true);
@@ -588,20 +593,38 @@ const monthRowTitle_ = (row) => { const f = row.filter((c) => String(c).trim() !
  * Если это не так (событие вписали не на своё место, дату поменяли, шапка задублировалась), лист пересобирается:
  * события сортируются по дате (внутри одной даты порядок сохраняется), старые шапки убираются, ставятся новые.
  */
+const PAST_DIVIDER_ = "▼ ПРОШЕДШИЕ МЕСЯЦЫ";
+const PAST_GAP_ = 2; // сколько пустых строк между последним событием и разделителем (всегда одинаково; блок прошлого просто «едет» вниз вместе с новыми событиями)
+const isDividerRow_ = (row) => String(row[0] || "").trim() === PAST_DIVIDER_;
+const isBlankRow_ = (row) => row.every((c) => String(c).trim() === "");
+
 function monthsDisordered_(rows, today) {
   let current = "";
   let last = null;
+  let pastHead = -1; // номер строки первой шапки прошедшего месяца
+  let divider = -1;
   const seen = {};
   for (let r = 1; r < rows.length; r++) {
+    if (isDividerRow_(rows[r])) { if (divider >= 0) return true; divider = r; continue; }
     const t = monthRowTitle_(rows[r]);
-    if (t) { if (seen[t]) return true; seen[t] = true; current = t; continue; }
+    if (t) {
+      if (seen[t]) return true;
+      seen[t] = true; current = t;
+      const m = MONTHS_UP.indexOf(t.split(" ")[0]);
+      if (pastHead < 0 && rankOf(t.split(" ")[1] + "-" + String(m + 1).padStart(2, "0") + "-01", today)[0] === 1) pastHead = r;
+      continue;
+    }
     const d = dateOfRow_(rows[r][0], today);
     if (!d) continue;
     const rank = rankOf(d, today);
     if ((last && cmpRank(rank, last) < 0) || monthTitle_(d) !== current) return true;
     last = rank;
   }
-  return false;
+  // разделитель стоит прямо перед первым прошедшим месяцем, перед ним ровно PAST_GAP_ пустых строк; без прошлого разделителя нет
+  if (pastHead < 0) return divider >= 0;
+  if (divider < 0 || divider !== pastHead - 1) return true;
+  for (let k = 1; k <= PAST_GAP_; k++) if (!rows[divider - k] || !isBlankRow_(rows[divider - k])) return true;
+  return divider - PAST_GAP_ - 1 >= 1 && isBlankRow_(rows[divider - PAST_GAP_ - 1]);
 }
 
 function rebuildMonths_(sheet) {
@@ -613,7 +636,7 @@ function rebuildMonths_(sheet) {
   let key = "0000-00-00";
   const rankOfKey = (k) => (k === "0000-00-00" ? [-1, 0, ""] : rankOf(k, today));
   data.slice(1).forEach((row) => {
-    if (monthRowTitle_(row) !== null) return; // старые шапки убираем, новые поставим сами
+    if (monthRowTitle_(row) !== null || isDividerRow_(row)) return; // старые шапки и разделитель убираем, новые поставим сами
     if (row.every((c) => String(c).trim() === "")) return; // пустые строки внутри не нужны
     const d = dateOfRow_(row[0], today);
     if (d) key = d; // строка без понятной даты остаётся рядом с предыдущей
@@ -622,9 +645,17 @@ function rebuildMonths_(sheet) {
   body.sort((a, b) => cmpRank(rankOfKey(a.key), rankOfKey(b.key)) || a.n - b.n);
   const out = [];
   let title = "";
+  let dividerDone = false;
   body.forEach((b) => {
     const t = b.key === "0000-00-00" ? "" : monthTitle_(b.key);
-    if (t && t !== title) { out.push([t].concat(Array(cols - 1).fill(""))); title = t; }
+    if (t && t !== title) {
+      if (rankOfKey(b.key)[0] === 1 && !dividerDone && out.length) { // перед прошедшими месяцами — всегда одинаковый просвет и разделитель
+        for (let k = 0; k < PAST_GAP_; k++) out.push(Array(cols).fill(""));
+        out.push([PAST_DIVIDER_].concat(Array(cols - 1).fill("")));
+        dividerDone = true;
+      }
+      out.push([t].concat(Array(cols - 1).fill(""))); title = t;
+    }
     out.push(b.row);
   });
   const range = sheet.getRange(2, 1, Math.max(lastRow - 1, 1), cols);
@@ -677,8 +708,9 @@ function groupMonths_(sheet, fresh) {
   const months = [];
   for (let r = 2; r <= last; r++) {
     const t = String(col[r - 1][0]).trim();
-    if (MONTH_ROW_RE.test(t)) months.push({head: r, title: t, end: r});
-    else if (months.length) months[months.length - 1].end = r;
+    if (MONTH_ROW_RE.test(t)) months.push({head: r, title: t, end: r, closed: false});
+    else if (t === PAST_DIVIDER_) { if (months.length) months[months.length - 1].closed = true; }
+    else if (months.length && !months[months.length - 1].closed && !isBlankRow_([col[r - 1][0]])) months[months.length - 1].end = r; // пустые строки и разделитель в группу месяца не входят
   }
   if (!months.length) return;
   const thisMonth = MONTHS_UP[+today.slice(5, 7) - 1] + " " + today.slice(0, 4);
@@ -687,7 +719,7 @@ function groupMonths_(sheet, fresh) {
   months.forEach((m) => {
     const rows = m.end - m.head;
     if (rows < 1) return;
-    let collapsed = monthKey(m.title) < monthKey(thisMonth);
+    let collapsed = false; // прошедшие месяцы не прячем: они просто лежат ниже разделителя
     if (!fresh) { const g = sheet.getRowGroup(m.head + 1, 1); if (g) collapsed = g.isCollapsed(); }
     const range = sheet.getRange(m.head + 1, 1, rows, 1);
     let depth = sheet.getRowGroupDepth(m.head + 1);
@@ -698,7 +730,7 @@ function groupMonths_(sheet, fresh) {
   });
 }
 
-const STYLE_VERSION_ = "8"; // поднимайте, когда меняется оформление: таблица перестроится сама при ближайшем срабатывании таймера
+const STYLE_VERSION_ = "9"; // поднимайте, когда меняется оформление: таблица перестроится сама при ближайшем срабатывании таймера
 
 /** После обновления кода один раз оформляет таблицу сама (то же, что ручной запуск styleSheets). */
 function autoStyle_(p) {
