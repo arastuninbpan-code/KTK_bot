@@ -44,16 +44,25 @@ jobs:
           if [ -z "$CLASPRC_JSON" ]; then echo "::error::Не задан секрет CLASPRC_JSON (Settings → Secrets and variables → Actions)"; exit 1; fi
           umask 077
           printf '%s' "$CLASPRC_JSON" > "$HOME/.clasprc.json"
-      - name: Какие разрешения выданы ключу (только список разрешений, без самого ключа)
+      - name: Какие разрешения выданы ключу (печатается только список разрешений, не сам ключ)
         run: |
           node -e '
-            const j = JSON.parse(require("fs").readFileSync(process.env.HOME + "/.clasprc.json", "utf8"));
-            const found = new Set();
-            (function walk(o) { for (const [k, v] of Object.entries(o || {})) { if (k === "scope" && typeof v === "string") v.split(/\s+/).forEach((x) => found.add(x)); else if (v && typeof v === "object") walk(v); } })(j);
-            const need = ["script.projects", "script.deployments", "script.webapp.deploy"];
-            console.log("Выдано разрешений:", found.size);
-            [...found].sort().forEach((x) => console.log(" -", x.replace("https://www.googleapis.com/auth/", "")));
-            for (const n of need) if (![...found].some((x) => x.endsWith("/" + n))) console.log("::warning::НЕ ХВАТАЕТ разрешения " + n);
+            (async () => {
+              const j = JSON.parse(require("fs").readFileSync(process.env.HOME + "/.clasprc.json", "utf8"));
+              let cred = null;
+              (function walk(o) { for (const v of Object.values(o || {})) { if (v && typeof v === "object") { if (v.refresh_token) cred = cred || v; else walk(v); } } })(j);
+              if (!cred) { console.log("::error::В секрете нет refresh_token: вставлен не весь файл .clasprc.json"); return; }
+              const r = await fetch("https://oauth2.googleapis.com/token", {method: "POST", headers: {"Content-Type": "application/x-www-form-urlencoded"},
+                body: new URLSearchParams({client_id: cred.client_id, client_secret: cred.client_secret, refresh_token: cred.refresh_token, grant_type: "refresh_token"})});
+              const t = await r.json();
+              if (!t.access_token) { console.log("::error::Google не принял ключ: " + (t.error_description || t.error)); return; }
+              const info = await (await fetch("https://oauth2.googleapis.com/tokeninfo?access_token=" + encodeURIComponent(t.access_token))).json();
+              const have = String(info.scope || "").split(/\s+/).filter(Boolean);
+              console.log("Аккаунт:", info.email || "(не показан)");
+              console.log("Выдано разрешений:", have.length);
+              have.sort().forEach((x) => console.log(" -", x.replace("https://www.googleapis.com/auth/", "")));
+              for (const n of ["script.projects", "script.deployments", "script.webapp.deploy"]) if (!have.some((x) => x.endsWith("/" + n))) console.log("::warning::НЕ ХВАТАЕТ разрешения " + n);
+            })().catch((e) => console.log("::error::" + e.message));
           '
       - name: Отправить код и обновить развёртывание
         run: |
