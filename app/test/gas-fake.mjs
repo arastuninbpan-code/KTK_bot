@@ -78,7 +78,7 @@ export function loadGas({tabs, props = {}, now = Date.now()}) {
   const ctx = {
     console, Date: class extends Date { constructor(...a) { a.length ? super(...a) : super(clock); } static now() { return clock; } },
     SpreadsheetApp: {openById: () => ss, newConditionalFormatRule: () => builder("cf"), newDataValidation: () => builder("dv"), BorderStyle: {SOLID: "SOLID"}},
-    PropertiesService: {getScriptProperties: () => ({getProperty: (k) => properties[k] ?? null, setProperty: (k, v) => { properties[k] = String(v); }, deleteProperty: (k) => { delete properties[k]; }})},
+    PropertiesService: {getScriptProperties: () => ({getProperty: (k) => properties[k] ?? null, setProperty: (k, v) => { properties[k] = String(v); }, deleteProperty: (k) => { delete properties[k]; }, getProperties: () => ({...properties})})},
     CacheService: {getScriptCache: () => ({get: (k) => cache.get(k) ?? null, put: (k, v) => { cache.set(k, v); }, remove: (k) => { cache.delete(k); }, removeAll: (ks) => { ks.forEach((k) => cache.delete(k)); }, getAll: (ks) => Object.fromEntries(ks.filter((k) => cache.has(k)).map((k) => [k, cache.get(k)])), putAll: (o) => { for (const [k, v] of Object.entries(o)) cache.set(k, v); }})},
     LockService: {getScriptLock: () => ({waitLock() {}, releaseLock() {}})},
     ContentService: {MimeType: {JSON: "json"}, createTextOutput: (t) => ({t, setMimeType() { return this; }, getContent() { return this.t; }})},
@@ -98,5 +98,5 @@ export function loadGas({tabs, props = {}, now = Date.now()}) {
   ctx.Utilities.newBlob = (v) => { const buf = typeof v === "string" ? Buffer.from(v) : unsigned(v); return {getBytes: () => signed(buf), getDataAsString: () => buf.toString()}; };
   vm.createContext(ctx);
   vm.runInContext(readFileSync(join(fileURLToPath(new URL(".", import.meta.url)), "..", "..", "apps_script_bot", "Code.gs"), "utf8"), ctx);
-  return {ctx, ss, properties, fetches, triggers, advance: (ms) => { clock += ms; }, setFetchStatus: (s) => { ctx.__fetchStatus = s; }, setFetchReply: (fn) => { ctx.__fetchReply = fn; }, run: (code) => vm.runInContext(code, ctx)};
+  return {ctx, ss, properties, fetches, triggers, advance: (ms) => { clock += ms; }, setFetchStatus: (s) => { ctx.__fetchStatus = s; }, setFetchReply: (fn) => { ctx.__fetchReply = fn; }, run: (code) => { vm.runInContext("if (typeof propsMemo_ !== 'undefined') propsMemo_ = null; if (typeof netMs_ !== 'undefined') netMs_ = 0;", ctx); return vm.runInContext(code, ctx); } /* как в Google: каждый запуск начинается с чистых переменных */};
 }

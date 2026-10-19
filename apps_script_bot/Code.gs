@@ -1054,8 +1054,13 @@ Object.assign(platform, {
 });
 
 // ---------- свойства ----------
+// Настройки читаем одним обращением за запуск (каждое отдельное чтение — около 50 мс). Меняющиеся значения (метки правок,
+// версия данных) читаем напрямую, мимо этой копии.
+let propsMemo_ = null;
 function prop_(k) {
-  return PropertiesService.getScriptProperties().getProperty(k);
+  if (!propsMemo_) propsMemo_ = PropertiesService.getScriptProperties().getProperties();
+  const v = propsMemo_[k];
+  return v === undefined ? null : v;
 }
 
 function secret_() {
@@ -1242,7 +1247,7 @@ function withLock_(fn) {
 }
 
 // «Версия данных»: приложение раз в несколько секунд спрашивает, не изменилось ли что-то (дёшево: таблицу при этом не читаем)
-const getRev_ = () => prop_("DATA_REV") || "0";
+const getRev_ = () => PropertiesService.getScriptProperties().getProperty("DATA_REV") || "0";
 const bumpRev_ = () => PropertiesService.getScriptProperties().setProperty("DATA_REV", String(Date.now()));
 const SYNC_DELAY_MS = 2000; // сколько ждём тишины после правки таблицы, чтобы не рассылать недописанное
 
@@ -1324,13 +1329,16 @@ function telegramUpdate_(e) {
   if (ev) {
     const t0 = Date.now();
     netMs_ = 0;
-    withLock_(() => handleMessage({store: store_(), channel: SENDERS.telegram, ev, appUrl: prop_("APP_URL") || "", now: Date.now(), publishers: publishers_()}));
+    const run = () => handleMessage({store: store_(), channel: SENDERS.telegram, ev, appUrl: prop_("APP_URL") || "", now: Date.now(), publishers: publishers_()});
+    if (READ_ONLY_RE_.test(ev.text || "")) run(); else withLock_(run); // чтение расписания блокировки не требует
     diag_("TG " + speed_(ev, t0));
   }
   return ok_();
 }
 
 /** Сообщения ВКонтакте (Callback API через посредника). Подтверждение адреса отдаёт посредник; здесь на случай прямого обращения. */
+const READ_ONLY_RE_ = /^\/(shifts|schedule)(@\w+)?\s*$/i; // команды, которые только читают таблицу
+
 /** Строка про скорость: сколько секунд сообщение шло до скрипта и сколько скрипт его обрабатывал (без текста сообщения: там может быть логин). */
 function speed_(ev, t0) {
   const lag = ev.date ? Math.max(0, Math.round(t0 / 1000 - ev.date)) + " с" : "?";
@@ -1363,7 +1371,8 @@ function vkUpdate_(e) {
     cache.put(dedupe, "1", 21600);
     const t0 = Date.now();
     netMs_ = 0;
-    withLock_(() => handleMessage({store: store_(), channel: SENDERS.vk, ev, appUrl: prop_("APP_URL") || "", now: Date.now(), publishers: publishers_()}));
+    const run = () => handleMessage({store: store_(), channel: SENDERS.vk, ev, appUrl: prop_("APP_URL") || "", now: Date.now(), publishers: publishers_()});
+    if (READ_ONLY_RE_.test(ev.text || "")) run(); else withLock_(run); // чтение расписания блокировки не требует
     diag_("VK: сообщение от " + ev.chatId + " обработано, ответ отправлен. " + speed_(ev, t0));
   } catch (err) {
     diag_("VK: ОШИБКА — " + (err && err.message ? err.message : (err && err.constructor && err.constructor.name) || err));
@@ -1374,6 +1383,7 @@ function vkUpdate_(e) {
 // ---------- установка ----------
 function setup() {
   const p = PropertiesService.getScriptProperties();
+  propsMemo_ = null;
   if (!p.getProperty("WEBHOOK_SECRET")) p.setProperty("WEBHOOK_SECRET", Utilities.getUuid().replace(/-/g, ""));
   secret_();
   ScriptApp.getProjectTriggers().forEach((t) => ScriptApp.deleteTrigger(t)); // не forEach(deleteTrigger): тот передаёт лишние параметры
