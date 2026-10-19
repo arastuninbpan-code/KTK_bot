@@ -93,6 +93,7 @@ class GasBook {
   setCell(tab, row, col, value) {
     const at = physicalCol(this.plan(tab), col - 1);
     if (at < 0) return; // такой колонки в таблице нет
+    this.grow_(this.sheet(tab), row);
     this.sheet(tab).getRange(row, at + 1).setNumberFormat("@").setValue(String(value));
     this.touch(tab);
   }
@@ -115,8 +116,11 @@ class GasBook {
     this.plans[tab] = plan;
     return (this.memo[tab] = virtualize(rows, plan));
   }
+  /** Запись ниже последней строки листа: добавляем строки, иначе Google отказывает. */
+  grow_(s, row) { if (row > s.getMaxRows()) s.insertRowsAfter(s.getMaxRows(), row - s.getMaxRows()); }
   set(tab, row, values) {
     const s = this.sheet(tab);
+    this.grow_(s, row);
     const plan = this.plan(tab);
     let padded;
     if (plan && !plan.identity) { // значения идут в канонической последовательности, раскладываем по настоящим колонкам
@@ -472,6 +476,7 @@ function styleSheets() {
   styleVenues_(ss.getSheetByName(TABS.venues));
   const chats = ss.getSheetByName(TABS.chats);
   if (chats) styleHeader_(chats, 4);
+  tidyStaff_(); // убирает «хвост» из пустых строк-заготовок и поднимает заявки, улетевшие вниз
   hideHelperSheets_(ss);
   dropAllCaches_();
   console.log("Таблица оформлена.");
@@ -670,7 +675,7 @@ function groupMonths_(sheet, fresh) {
   });
 }
 
-const STYLE_VERSION_ = "5"; // поднимайте, когда меняется оформление: таблица перестроится сама при ближайшем срабатывании таймера
+const STYLE_VERSION_ = "6"; // поднимайте, когда меняется оформление: таблица перестроится сама при ближайшем срабатывании таймера
 
 /** После обновления кода один раз оформляет таблицу сама (то же, что ручной запуск styleSheets). */
 function autoStyle_(p) {
@@ -683,11 +688,40 @@ function autoStyle_(p) {
  * «Сотрудники»: новая колонка (вид деятельности) сразу получает галочки; у нового человека по умолчанию роль «Читатель» и доступ включён
  * (если не стоит «ЗАЯВКА» без одобрения: заявку одобряют, вписав ФИО — доступ включится сам).
  */
+/**
+ * Пустые строки «Сотрудников» должны быть пустыми: иначе лист кажется заполненным до самого низа и новые люди и заявки уходят за тысячную строку.
+ * Убираем значения-заготовки («Читатель», FALSE) из строк без ФИО и телефона, а строки, залетевшие далеко вниз, поднимаем на первое свободное место.
+ */
+function cleanStaffRows_(sheet) {
+  const last = sheet.getLastRow();
+  if (last < 2) return false;
+  const cols = Math.max(sheet.getLastColumn(), 6);
+  const head = sheet.getRange(1, 1, 1, cols).getDisplayValues()[0];
+  const plan = columnPlan("staff", head);
+  const nameIdx = plan ? plan.perm[0] : 0;
+  const phoneIdx = plan ? plan.perm[1] : 1;
+  const vals = sheet.getRange(2, 1, last - 1, cols).getValues();
+  const real = (r) => String(r[nameIdx]).trim() !== "" || String(r[phoneIdx]).trim() !== "";
+  const out = vals.map((r) => (real(r) ? r.slice() : r.map(() => "")));
+  const STRAY_FROM = 100; // строки глубже этого номера считаем «улетевшими» (обычно их там быть не может)
+  for (let i = STRAY_FROM; i < out.length; i++) {
+    if (!real(out[i])) continue;
+    const free = out.findIndex((r, k) => k < i && !real(r));
+    if (free < 0) break;
+    out[free] = out[i];
+    out[i] = out[i].map(() => "");
+  }
+  if (JSON.stringify(out) === JSON.stringify(vals)) return false;
+  sheet.getRange(2, 1, out.length, cols).setValues(out);
+  return true;
+}
+
 function tidyStaff_() {
   const ss = SpreadsheetApp.openById(prop_("SHEET_ID"));
   const sheet = ss.getSheetByName(TABS.staff);
   if (!sheet || sheet.getLastRow() < 1) return;
   const p = PropertiesService.getScriptProperties();
+  if (cleanStaffRows_(sheet)) { dropAllCaches_(); bumpRev_(); }
   const data = sheet.getRange(1, 1, sheet.getLastRow(), Math.max(sheet.getLastColumn(), 6)).getDisplayValues();
   const head = data[0].map((x) => String(x).trim());
   const plan = columnPlan("staff", head);
@@ -814,9 +848,13 @@ function styleStaff_(sheet) {
   const last = Math.max(sheet.getMaxRows(), 2);
   const rng = sheet.getRange(2, 3, last - 1, 1);
   // старые значения приводим к новым названиям
-  const cur = sheet.getRange(2, 3, Math.max(sheet.getLastRow() - 1, 1), 1).getValues();
-  const next = cur.map(([v]) => [{"": "Читатель"}[String(v).trim()] || (/директор/i.test(v) ? "Админ" : v)]);
-  if (sheet.getLastRow() > 1) sheet.getRange(2, 3, next.length, 1).setNumberFormat("@").setValues(next);
+  if (sheet.getLastRow() > 1) {
+    const n = sheet.getLastRow() - 1;
+    const names = sheet.getRange(2, 1, n, 1).getValues();
+    const cur = sheet.getRange(2, 3, n, 1).getValues();
+    const next = cur.map(([v], i) => [String(names[i][0]).trim() === "" ? v : ({"": "Читатель"}[String(v).trim()] || (/директор/i.test(v) ? "Админ" : v))]); // пустые строки не трогаем
+    sheet.getRange(2, 3, n, 1).setNumberFormat("@").setValues(next);
+  }
   rng.setDataValidation(SpreadsheetApp.newDataValidation().requireValueInList(ROLE_LIST, true).setAllowInvalid(false).build());
   const rule = (text, bg, fg) => SpreadsheetApp.newConditionalFormatRule().whenTextEqualTo(text).setBackground(bg).setFontColor(fg).setBold(true).setRanges([rng]).build();
   sheet.setConditionalFormatRules([rule("Админ", C.navy, C.white), rule("Редактор", C.blue, C.white), rule("Читатель", C.light, C.navy), rule("Заблокирован", C.coral, C.white)]);
@@ -832,7 +870,7 @@ function styleStaff_(sheet) {
     sheet.insertColumnsBefore(5, 2);
     sheet.getRange(1, 5, 1, 2).setNumberFormat("@").setValues([["Доступ", "Комментарий"]]);
     const people = sheet.getLastRow() > 1 ? sheet.getRange(2, 1, sheet.getLastRow() - 1, 1).getDisplayValues() : [];
-    const ticks = people.map(([n]) => [String(n).trim() !== "" && !/^заявка/i.test(String(n).trim())]);
+    const ticks = people.map(([n]) => [String(n).trim() === "" ? "" : !/^заявка/i.test(String(n).trim())]); // пустые строки остаются пустыми
     if (ticks.length) sheet.getRange(2, 5, ticks.length, 1).setValues(ticks);
   } else if (head.findIndex((x, i) => i >= 4 && /^комментарий$/i.test(x)) < 0) {
     const at = head.length + 1;

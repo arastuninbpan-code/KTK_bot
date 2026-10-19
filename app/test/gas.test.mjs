@@ -8,7 +8,7 @@ const SCHEDULE = [HEAD,
   ["04.10\n11.00 и 13.00", "Спектакль «Бука»\n(малая сцена)", "Иванова М.В.", "Морозова Н.М.", "", "", ""],
   ["10.10", "Сказки из старого чемодана", "Петрова Л.Н.", "", "", "", ""]];
 const G = () => loadGas({now: NOW, tabs: {"Расписание": SCHEDULE, "Сотрудники": STAFF},
-  props: {SHEET_ID: "x", STYLE_VER: "5", TELEGRAM_BOT_TOKEN: "TOKEN", WEBHOOK_SECRET: "hook", APP_URL: "https://app.test"}});
+  props: {SHEET_ID: "x", STYLE_VER: "6", TELEGRAM_BOT_TOKEN: "TOKEN", WEBHOOK_SECRET: "hook", APP_URL: "https://app.test"}});
 
 const tg = (g, update) => g.run(`doPost(${JSON.stringify({parameter: {secret: "hook"}, postData: {contents: JSON.stringify(update)}})}).getContent()`);
 const msg = (id, text, contact) => ({update_id: Math.floor(Math.random() * 1e9), message: {chat: {id, type: "private"}, from: {id}, text, contact}});
@@ -161,7 +161,7 @@ test("группы: галочки в таблице -> состав групп;
 // ---------- ВКонтакте ----------
 const VKPROPS = {VK_TOKEN: "VKTOKEN", VK_GROUP_ID: "club123", VK_SECRET: "vksecret", VK_CONFIRM: "abc123", TG_CHANNEL: "@teatr"};
 const GV = (extra = {}) => loadGas({now: NOW, tabs: {"Расписание": SCHEDULE, "Сотрудники": STAFF},
-  props: {SHEET_ID: "x", STYLE_VER: "5", TELEGRAM_BOT_TOKEN: "TOKEN", WEBHOOK_SECRET: "hook", APP_URL: "https://app.test", ...VKPROPS, ...extra}});
+  props: {SHEET_ID: "x", STYLE_VER: "6", TELEGRAM_BOT_TOKEN: "TOKEN", WEBHOOK_SECRET: "hook", APP_URL: "https://app.test", ...VKPROPS, ...extra}});
 const vk = (g, update, secret = "hook") => g.run(`doPost(${JSON.stringify({parameter: {secret, vk: "1"}, postData: {contents: JSON.stringify(update)}})}).getContent()`);
 const vkMsg = (id, text, extra = {}) => ({type: "message_new", event_id: "e" + Math.random(), secret: "vksecret", object: {message: {peer_id: id, from_id: id, text, ...extra}}});
 const vkSent = (g, id) => g.fetches.filter((f) => f.url.endsWith("/messages.send") && String(f.body.user_id) === String(id));
@@ -358,7 +358,7 @@ test("после обновления таблица оформляется са
   const g = G();
   delete g.properties.STYLE_VER;
   g.run("everyMinute()"); // как после выкладки новой версии
-  assert.equal(g.properties.STYLE_VER, "5");
+  assert.equal(g.properties.STYLE_VER, "6");
   const staff = g.ss.getSheetByName("Сотрудники");
   assert.deepEqual(staff.getDataRange().getDisplayValues()[0].slice(4, 6), ["Доступ", "Комментарий"]);
   assert.deepEqual(g.ss.sheets.filter((x) => !x.hidden).map((x) => x.name).sort(), ["Площадки", "Расписание", "Сотрудники"]);
@@ -467,4 +467,22 @@ test("новая колонка-группа в «Сотрудниках» оф�
   const log = staff.styleLog.slice(before);
   assert.ok(log.some((l) => l[0] === "validation" && l[1].calls.some((c) => c[0] === "requireCheckbox")), "галочки");
   assert.ok(log.some((l) => l[0] === "setBackground" && l[2] === "#0A96DC"), "цвет шапки");
+});
+
+test("«Сотрудники» как в жизни: тысяча строк-заготовок и заявка, улетевшая вниз, — чистятся, заявка поднимается наверх", () => {
+  const g = G();
+  g.run("styleSheets()");
+  const staff = g.ss.getSheetByName("Сотрудники");
+  for (let r = 7; r <= 1000; r++) { staff.put(r, 3, "Читатель"); staff.put(r, 5, "FALSE"); staff.put(r, 7, "FALSE"); }
+  staff.put(1001, 1, "ЗАЯВКА"); staff.put(1001, 2, "9209120551"); staff.put(1001, 6, "[19.10] ВК: запросил доступ");
+  g.run("dropAllCaches_()");
+  g.run("tidyStaff_()");
+  const rows = staff.getDataRange().getDisplayValues();
+  assert.ok(rows.length < 20, "лист больше не «заполнен» до дна: " + rows.length);
+  const req = rows.find((r) => r[0] === "ЗАЯВКА");
+  assert.ok(req && req[1] === "9209120551" && /запросил доступ/.test(req[5]));
+  // новая заявка занимает ближайшее свободное место, а не дно
+  g.run("store_().addAccessRequest('9112223344', 'ВК: запросил доступ')");
+  const after = staff.getDataRange().getDisplayValues();
+  assert.ok(after.length < 20 && after.some((r) => r[1] === "9112223344"));
 });
