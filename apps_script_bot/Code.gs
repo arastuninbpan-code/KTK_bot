@@ -1480,7 +1480,7 @@ function everyMinute() {
   const last = Number(p.getProperty("last_cycle") || 0);
   const dueDirty = dirty && now - dirty >= 15000;
   autoStyle_(p);
-  if (p.getProperty("regroup")) { p.deleteProperty("regroup"); try { tidySchedule_(); tidyStaff_(); syncRestoreButtons_(); } catch (err) { console.error("Таблица: " + String(err && err.message ? err.message : err)); } }
+  if (p.getProperty("regroup")) { p.deleteProperty("regroup"); try { tidySchedule_(); tidyStaff_(); syncRestoreButtons_(); } catch (err) { diag_("Таблица: ОШИБКА — " + String(err && err.message ? err.message : err)); } }
   if (!dueDirty && now - last < 4 * 60e3 + 30e3) return;
   withLock_(() => {
     if (dueDirty) p.deleteProperty("dirty");
@@ -1506,7 +1506,10 @@ function onSheetChange(e) {
   withLock_(() => {
     p.deleteProperty("dirty");
     p.setProperty("last_cycle", String(Date.now()));
-    try { syncRestoreButtons_(); } catch (err) { console.error("Кнопка возврата вида: " + String(err && err.message ? err.message : err)); }
+    try { // правка в «Сотрудниках» (новая колонка-группа, новый человек): оформляем сразу, не дожидаясь таймера
+      if (e && e.range && e.range.getSheet().getName() === TABS.staff) { tidyStaff_(); p.deleteProperty("regroup"); }
+      syncRestoreButtons_();
+    } catch (err) { diag_("Таблица: ОШИБКА — " + String(err && err.message ? err.message : err)); }
     runCycle_();
   });
 }

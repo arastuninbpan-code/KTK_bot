@@ -456,3 +456,15 @@ test("владелец: строку удалили, роль понизили, 
   const back = staff.getDataRange().getDisplayValues().find((r) => r[1] === "9000000001");
   assert.ok(back && back[0] === "Иванова М.В." && back[2] === "Админ" && back[3] === login);
 });
+
+test("новая колонка-группа в «Сотрудниках» оформляется сразу после правки, без ожидания таймера", () => {
+  const g = G();
+  g.run("styleSheets()");
+  const staff = g.ss.getSheetByName("Сотрудники");
+  const before = staff.styleLog.length;
+  staff.put(1, 10, "обычные");
+  g.run(`onSheetChange({range: {getSheet: () => SpreadsheetApp.openById("x").getSheetByName("Сотрудники"), getRow: () => 1, getValue: () => "обычные"}, value: "обычные"})`);
+  const log = staff.styleLog.slice(before);
+  assert.ok(log.some((l) => l[0] === "validation" && l[1].calls.some((c) => c[0] === "requireCheckbox")), "галочки");
+  assert.ok(log.some((l) => l[0] === "setBackground" && l[2] === "#0A96DC"), "цвет шапки");
+});
