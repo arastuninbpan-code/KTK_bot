@@ -1354,7 +1354,8 @@ function everyMinute() {
   const dirty = Number(p.getProperty("dirty") || 0);
   const last = Number(p.getProperty("last_cycle") || 0);
   const dueDirty = dirty && now - dirty >= 15000;
-  if (p.getProperty("regroup")) { p.deleteProperty("regroup"); try { tidySchedule_(); } catch (err) { console.error("Месяцы: " + String(err && err.message ? err.message : err)); } }
+  autoStyle_(p);
+  if (p.getProperty("regroup")) { p.deleteProperty("regroup"); try { tidySchedule_(); tidyStaff_(); } catch (err) { console.error("Таблица: " + String(err && err.message ? err.message : err)); } }
   if (!dueDirty && now - last < 4 * 60e3 + 30e3) return;
   withLock_(() => {
     if (dueDirty) p.deleteProperty("dirty");
@@ -1677,6 +1678,40 @@ function groupMonths_(sheet, fresh) {
     const g = sheet.getRowGroup(m.head + 1, 1);
     if (g) { if (collapsed) g.collapse(); else g.expand(); }
   });
+}
+
+const STYLE_VERSION_ = "3"; // поднимайте, когда меняется оформление: таблица перестроится сама при ближайшем срабатывании таймера
+
+/** После обновления кода один раз оформляет таблицу сама (то же, что ручной запуск styleSheets). */
+function autoStyle_(p) {
+  if (p.getProperty("STYLE_VER") === STYLE_VERSION_) return;
+  p.setProperty("STYLE_VER", STYLE_VERSION_); // помечаем сразу: если что-то сломается, не повторяем каждую минуту
+  try { styleSheets(); } catch (err) { console.error("Автооформление не удалось (запустите styleSheets вручную): " + String(err && err.message ? err.message : err)); }
+}
+
+/**
+ * «Сотрудники»: новая колонка (вид деятельности) сразу получает галочки; у нового человека по умолчанию роль «Читатель» и доступ включён
+ * (если не стоит «ЗАЯВКА» без одобрения: заявку одобряют, вписав ФИО — доступ включится сам).
+ */
+function tidyStaff_() {
+  const ss = SpreadsheetApp.openById(prop_("SHEET_ID"));
+  const sheet = ss.getSheetByName(TABS.staff);
+  if (!sheet || sheet.getLastRow() < 1) return;
+  const p = PropertiesService.getScriptProperties();
+  const data = sheet.getRange(1, 1, sheet.getLastRow(), Math.max(sheet.getLastColumn(), 6)).getDisplayValues();
+  const head = data[0].map((x) => String(x).trim());
+  const sig = head.join("|");
+  const accessIdx = head.findIndex((x, i) => i >= 4 && /^доступ$/i.test(x));
+  if (accessIdx < 0 || p.getProperty("STAFF_HEAD") !== sig) { styleStaff_(sheet); p.setProperty("STAFF_HEAD", sig); }
+  if (accessIdx < 0) return;
+  let changed = false;
+  for (let r = 2; r <= data.length; r++) {
+    const name = String(data[r - 1][0]).trim();
+    if (!name) continue;
+    if (String(data[r - 1][2]).trim() === "") { sheet.getRange(r, 3).setNumberFormat("@").setValue("Читатель"); changed = true; }
+    if (!/^заявка/i.test(name) && String(data[r - 1][accessIdx]).trim() === "") { sheet.getRange(r, accessIdx + 1).setValue(true); changed = true; }
+  }
+  if (changed) { dropAllCaches_(); bumpRev_(); }
 }
 
 /** Следит за порядком в «Расписании»: шапки месяцев и сворачивание. Вызывается таймером после изменений. */
