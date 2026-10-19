@@ -84,6 +84,7 @@ class GasBook {
   ensure(tab, header) {
     if (this.has(tab)) return;
     const s = this.ss.insertSheet(tab);
+    if ([TABS.staff, TABS.schedule, TABS.venues].indexOf(tab) < 0) { try { s.hideSheet(); } catch (e) { /* служебный лист просто останется видимым */ } }
     if (header) s.getRange(1, 1, 1, header.length).setNumberFormat("@").setValues([header.map(String)]);
     this.touch(tab);
   }

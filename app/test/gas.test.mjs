@@ -361,14 +361,15 @@ test("после обновления таблица оформляется са
   assert.equal(g.properties.STYLE_VER, "3");
   const staff = g.ss.getSheetByName("Сотрудники");
   assert.deepEqual(staff.getDataRange().getDisplayValues()[0].slice(4, 6), ["Доступ", "Комментарий"]);
-  assert.ok(g.ss.sheets.filter((x) => !x.hidden).length === 3);
+  assert.deepEqual(g.ss.sheets.filter((x) => !x.hidden).map((x) => x.name).sort(), ["Площадки", "Расписание", "Сотрудники"]);
   // директор вписал новый вид деятельности в шапку и нового человека
   const before = staff.styleLog.length;
-  staff.put(1, 10, "Свет"); staff.put(6, 1, "Новый Н.Н."); staff.put(6, 2, "9000000099");
+  const nr = staff.getLastRow() + 1;
+  staff.put(1, 10, "Свет"); staff.put(nr, 1, "Новый Н.Н."); staff.put(nr, 2, "9000000099");
   g.run("onSheetChange()");
   g.run("everyMinute()");
   assert.ok(staff.styleLog.slice(before).some((l) => l[0] === "validation" && l[1].calls.some((c) => c[0] === "requireCheckbox")), "галочки для новой колонки");
   const rows = staff.getDataRange().getDisplayValues();
-  assert.equal(rows[5][2], "Читатель");
-  assert.equal(rows[5][4], "true");
+  assert.equal(rows[nr - 1][2], "Читатель");
+  assert.equal(rows[nr - 1][4], "true");
 });
