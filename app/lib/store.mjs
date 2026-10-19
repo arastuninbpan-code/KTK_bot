@@ -24,7 +24,8 @@ const LOGIN_ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZ23456789";
 export const canEdit = (role) => role === "admin" || role === "editor";
 
 export class Store {
-  constructor(book, {secret = "dev", now = () => Date.now()} = {}) {
+  constructor(book, {secret = "dev", now = () => Date.now(), owner = null} = {}) {
+    this.owner = owner && owner.phone ? owner : null; // владелец системы: {phone, name, login}; его нельзя удалить, заблокировать или понизить
     this.book = book;
     this.secret = secret;
     this.now = now;
@@ -58,7 +59,32 @@ export class Store {
         out.push({name: n, phone, role: hasAccess ? parseRole(role) : "blocked", login: String(login).trim(), groups, pending: /^заявка/i.test(n)});
       }
     }
+    const o = this.owner;
+    if (o) {
+      const mine = out.filter((u) => u.phone === o.phone);
+      if (!mine.length) out.push({name: o.name || "Владелец", phone: o.phone, role: "admin", login: o.login || "", groups: [], pending: false});
+      for (const u of mine) { u.role = "admin"; u.pending = false; } // даже если строку испортили в таблице
+    }
     return out;
+  }
+
+  /** Строка владельца в «Сотрудниках»: если её удалили, роль сменили или сняли «Доступ» — возвращаем (имя, номер и логин хранятся отдельно). */
+  ensureOwner() {
+    const o = this.owner;
+    if (!o) return;
+    const rows = this.book.get(TABS.staff);
+    const {access} = this.staffCols_(rows);
+    const at = rows.findIndex((r, i) => i > 0 && phonesIn(r[1] || "").includes(o.phone));
+    if (at < 0) {
+      const row = [o.name || "Владелец", o.phone, "Админ", o.login || ""];
+      if (access >= 0) { while (row.length < access) row.push(""); row[access] = "TRUE"; }
+      this.book.append(TABS.staff, row);
+      return;
+    }
+    const r = rows[at];
+    if (parseRole(r[2]) !== "admin") this.book.setCell(TABS.staff, at + 1, 3, "Админ");
+    if (access >= 0 && !CHECKED_RE.test(String(r[access] || "").trim())) this.book.setCell(TABS.staff, at + 1, access + 1, "TRUE");
+    if (!String(r[0] || "").trim() || /^заявка/i.test(String(r[0]))) this.book.setCell(TABS.staff, at + 1, 1, o.name || "Владелец");
   }
 
   /** Группы: [{name, members: [ФИО]}] в порядке колонок. Состав — по галочкам в таблице; заблокированные не входят. */

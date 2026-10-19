@@ -92,6 +92,7 @@ const text0 = (words) => String(words[0] || "").trim();
 
 /** Сверяет расписание с прошлой версией, рассылает уведомления и напоминания. senders: {telegram: {send}, ...} */
 export function runCycle({store, senders, now = Date.now(), appUrl = "", log = console}) {
+  store.ensureOwner();
   store.ensureLogins();
   // администратор открыл доступ тем, кто оставил заявку: подключаем их чат и пишем «доступ открыт»
   for (const rq of store.requests()) {

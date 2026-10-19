@@ -432,3 +432,27 @@ test("колонки переставили: система находит их 
   assert.equal(back[1][1].replace(/\D/g, "").slice(-10), "9000000001");
   assert.equal(back[1][2], "Админ");
 });
+
+test("владелец: строку удалили, роль понизили, доступ сняли — всё возвращается; войти он может всегда", () => {
+  const g = G();
+  g.properties.OWNER_PHONE = "9000000001";
+  g.properties.OWNER_NAME = "Иванова М.В.";
+  g.run("styleSheets()");
+  g.run("store_().ensureLogins()");
+  g.run("runCycle_()");
+  const login = g.run("store_().users().find((u) => u.phone === '9000000001').login");
+  assert.ok(login, "логин запомнен");
+  assert.equal(g.properties.OWNER_LOGIN, login);
+  const staff = g.ss.getSheetByName("Сотрудники");
+  // 1) роль понизили и сняли «Доступ» — читается как админ и в таблице исправляется
+  staff.put(2, 3, "Заблокирован"); staff.put(2, 5, "FALSE"); g.run("dropAllCaches_()"); // как после правки руками
+  assert.equal(g.run("store_().users().find((u) => u.phone === '9000000001').role"), "admin");
+  g.run("runCycle_()");
+  assert.deepEqual([staff.cells[1][2], staff.cells[1][4]], ["Админ", "TRUE"]);
+  // 2) строку удалили целиком — возвращается с тем же логином, вход работает
+  staff.deleteRow(2); g.run("dropAllCaches_()");
+  assert.equal(api(g, {method: "POST", path: "/api/login", body: {login}})._status, 200);
+  g.run("runCycle_()");
+  const back = staff.getDataRange().getDisplayValues().find((r) => r[1] === "9000000001");
+  assert.ok(back && back[0] === "Иванова М.В." && back[2] === "Админ" && back[3] === login);
+});
