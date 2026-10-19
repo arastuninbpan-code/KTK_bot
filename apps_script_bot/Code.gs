@@ -624,11 +624,11 @@ class Store {
 
   // --- сотрудники: ФИО | Телефон | Роль (Админ / Редактор / Читатель / Заблокирован) | Логин | группы (колонки с галочками) ---
   /** Колонки групп: всё правее «Логина», у чего в шапке есть название. */
-  #groupCols(rows) { return (rows[0] || []).map((h, col) => ({name: String(h || "").trim(), col})).filter((g) => g.col >= 4 && g.name); }
+  groupCols_(rows) { return (rows[0] || []).map((h, col) => ({name: String(h || "").trim(), col})).filter((g) => g.col >= 4 && g.name); }
 
   users() {
     const rows = this.book.get(TABS.staff);
-    const defs = this.#groupCols(rows);
+    const defs = this.groupCols_(rows);
     const out = [];
     for (const row of rows.slice(1)) {
       const [name = "", phones = "", role = "", login = ""] = row;
@@ -642,7 +642,7 @@ class Store {
 
   /** Группы: [{name, members: [ФИО]}] в порядке колонок. Состав — по галочкам в таблице; заблокированные не входят. */
   groups() {
-    const defs = this.#groupCols(this.book.get(TABS.staff));
+    const defs = this.groupCols_(this.book.get(TABS.staff));
     const active = this.activeUsers();
     return defs.map((g) => ({name: g.name, members: [...new Set(active.filter((u) => u.groups.includes(g.name)).map((u) => u.name))]}));
   }

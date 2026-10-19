@@ -30,7 +30,11 @@ export function bundle() {
     chunks.push(`// ===== lib/${name}.mjs =====\n${body.trim()}\n`);
   }
   chunks.push(readFileSync(join(here, "gas", "shell.gs"), "utf8"));
-  return chunks.join("\n");
+  const text = chunks.join("\n");
+  // Apps Script не понимает «приватные» члены классов (#имя): Node их принимает, а Google падает с ParseError
+  const priv = text.match(/this\.#\w+|^\s+#\w+\s*[(=;]/m);
+  if (priv) throw new Error(`В коде для Apps Script нельзя использовать приватные члены классов (#): «${priv[0].trim()}»`);
+  return text;
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
