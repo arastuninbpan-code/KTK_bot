@@ -99,3 +99,22 @@ test("/start ЛОГИН (кнопка «Подключить Telegram» в пр�
   say(62, "/start SID333"); // у Сидоровой снята галочка
   assert.match(last(62).text, /Доступ закрыт/);
 });
+
+test("«Доступ открыт» приходит каждый раз, когда доступ дают заново; при первом запуске и в обычных циклах — тишина", () => {
+  const {book, store, ch, say} = make();
+  say(7, "", {phone: "9000000002"}); // Петрова подключена
+  const granted = () => ch.sent.filter((s) => s.chatId === "7" && /Доступ открыт/.test(s.text)).length;
+  runCycle({store, senders: {telegram: ch}, now: NOW}); // первый проход: запоминаем, не рассылаем
+  runCycle({store, senders: {telegram: ch}, now: NOW});
+  assert.equal(granted(), 0);
+  const row = book.get(TABS.staff).findIndex((r) => r[0] === "Петрова Л.Н.") + 1;
+  const col = store.staffCols_(book.get(TABS.staff)).access + 1;
+  for (let n = 1; n <= 3; n++) {
+    book.setCell(TABS.staff, row, col, "FALSE"); // сняли доступ
+    runCycle({store, senders: {telegram: ch}, now: NOW});
+    book.setCell(TABS.staff, row, col, "TRUE"); // открыли снова
+    runCycle({store, senders: {telegram: ch}, now: NOW});
+    runCycle({store, senders: {telegram: ch}, now: NOW}); // лишний проход не дублирует
+    assert.equal(granted(), n, `открытие №${n}`);
+  }
+});

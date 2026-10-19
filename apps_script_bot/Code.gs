@@ -1182,9 +1182,11 @@ function runCycle({store, senders, now = Date.now(), appUrl = "", log = console}
   store.ensureOwner();
   store.ensureLogins();
   // администратор открыл доступ тем, кто оставил заявку: подключаем их чат и пишем «доступ открыт»
+  const welcomed = new Set(); // кому «доступ открыт» уже отправили в этом проходе
   for (const rq of store.requests()) {
     const u = store.activeUsers().find((x) => x.phone === rq.phone);
     if (!u) continue;
+    welcomed.add(u.phone);
     store.bind(rq.channel, rq.chatId, u.phone, u.name);
     store.removeRequest(rq.channel, rq.chatId);
     try { senders[rq.channel]?.send(rq.chatId, msgAccessGranted(u.name), "remove"); } catch (err) { if (!(err instanceof Gone)) log.error(String(err.message || err)); }
@@ -1193,6 +1195,21 @@ function runCycle({store, senders, now = Date.now(), appUrl = "", log = console}
   const table = store.book.get(TABS.schedule);
   const snap = store.snapshot();
   const plan = planCycle(table, users, snap, now);
+  // каждый раз, когда человеку открывают доступ (в том числе повторно: закрыли и снова открыли), ему приходит уведомление
+  const accessNow = [...new Set(users.map((u) => u.phone))].sort();
+  const accessBefore = (snap.meta || {}).access;
+  plan.snap.meta = {...plan.snap.meta, access: accessNow};
+  if (Array.isArray(accessBefore)) {
+    const chatsNow = store.chats();
+    for (const u of users) {
+      if (accessBefore.includes(u.phone) || welcomed.has(u.phone)) continue;
+      welcomed.add(u.phone);
+      for (const c of chatsNow.filter((x) => x.phone === u.phone)) {
+        try { senders[c.channel]?.send(c.chatId, msgAccessGranted(u.name), appButton(appUrl)); }
+        catch (err) { if (err instanceof Gone) store.unbind(c.channel, c.chatId); else log.error(String(err.message || err)); }
+      }
+    }
+  }
   if (JSON.stringify(plan.snap) !== JSON.stringify({chats: [], ...snap})) store.saveSnapshot(plan.snap);
 
   const messages = plan.changes.map((c) => ({phone: c.phone, text: msgChange(c.kind, c.row, c.old)}));
