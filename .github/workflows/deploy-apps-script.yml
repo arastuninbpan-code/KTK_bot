@@ -44,6 +44,17 @@ jobs:
           if [ -z "$CLASPRC_JSON" ]; then echo "::error::Не задан секрет CLASPRC_JSON (Settings → Secrets and variables → Actions)"; exit 1; fi
           umask 077
           printf '%s' "$CLASPRC_JSON" > "$HOME/.clasprc.json"
+      - name: Какие разрешения выданы ключу (только список разрешений, без самого ключа)
+        run: |
+          node -e '
+            const j = JSON.parse(require("fs").readFileSync(process.env.HOME + "/.clasprc.json", "utf8"));
+            const found = new Set();
+            (function walk(o) { for (const [k, v] of Object.entries(o || {})) { if (k === "scope" && typeof v === "string") v.split(/\s+/).forEach((x) => found.add(x)); else if (v && typeof v === "object") walk(v); } })(j);
+            const need = ["script.projects", "script.deployments", "script.webapp.deploy"];
+            console.log("Выдано разрешений:", found.size);
+            [...found].sort().forEach((x) => console.log(" -", x.replace("https://www.googleapis.com/auth/", "")));
+            for (const n of need) if (![...found].some((x) => x.endsWith("/" + n))) console.log("::warning::НЕ ХВАТАЕТ разрешения " + n);
+          '
       - name: Отправить код и обновить развёртывание
         run: |
           npm install -g @google/clasp@3.4.1
