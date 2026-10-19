@@ -9,7 +9,7 @@ import {canEdit, normLogin, TABS} from "./store.mjs";
  * ev: {chatId, text, phone}
  * publishers: {targets(): [названия мест], post(text): [строки-итоги]} — публикация афиши в группу ВК / канал Telegram (необязательно)
  */
-export function handleMessage({store, channel, ev, appUrl = "", now = Date.now(), publishers = null, log = () => {}}) {
+export function handleMessage({store, channel, ev, appUrl = "", now = Date.now(), publishers = null, log = () => {}, lookupName = () => ""}) {
   const chat = ev.chatId;
   const text = String(ev.text || "").trim();
   let phone = ev.phone ? normPhone(ev.phone) : null;
@@ -29,7 +29,12 @@ export function handleMessage({store, channel, ev, appUrl = "", now = Date.now()
   const askAccess = (typed) => {
     const mine = myRequest();
     if (mine) log("Заявка: комментарий дописан в строку " + store.addAccessRequest(mine.phone, `${label}: пишет другой номер ${typed}`));
-    else { log("Заявка: записана в строку " + store.addAccessRequest(typed, `${label}: запросил доступ`)); store.addRequest(channel.name, chat, typed); }
+    else {
+      let name = ev.name || "";
+      if (!name) { try { name = lookupName(); } catch (e) { name = ""; } } // имя из профиля ВК: отдельный запрос, делаем только для заявки
+      log("Заявка: записана в строку " + store.addAccessRequest(typed, `${label}: запросил доступ`, name));
+      store.addRequest(channel.name, chat, typed);
+    }
     return channel.send(chat, msgRequestSent);
   };
 

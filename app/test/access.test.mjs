@@ -39,10 +39,11 @@ test("без колонки «Доступ» (старая таблица) до�
 
 test("незнакомый номер: доступа нет, но в «Сотрудниках» появляется строка-заявка с комментарием; дальше слова человека дописываются", () => {
   const {book, store, say, last} = make();
-  say(50, "89001112233", {label: "Telegram Иван Новиков @inovikov"});
+  say(50, "89001112233", {label: "Telegram Иван Новиков @inovikov", name: "Иван Новиков"});
   assert.match(last(50).text, /Заявка передана администратору/);
   let row = book.get(TABS.staff).at(-1);
-  assert.equal(row[0], "ЗАЯВКА");
+  assert.equal(row[0], "Иван Новиков", "в ФИО сразу имя человека из мессенджера");
+  assert.equal(row[2], "Заявка");
   assert.equal(row[1], "9001112233");
   assert.match(row[5], /^\[01\.10 10:00\] Telegram Иван Новиков @inovikov: запросил доступ$/);
   assert.equal(store.chats().length, 0, "чат не подключён");

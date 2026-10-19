@@ -131,7 +131,7 @@ test("styleSheets: перенос в новый формат (копия сох�
   assert.equal(g.ss.getSheetByName("Расписание").rules[0].calls[0][0], "whenFormulaSatisfied");
   assert.ok(log.some((l) => l[0] === "validation" && l[1].calls.some((c) => c[0] === "requireValueInRange"))); // площадка — выпадающий список
   const staff = g.ss.getSheetByName("Сотрудники");
-  assert.equal(staff.rules.length, 6); // 4 роли + заявка + доступ снят
+  assert.equal(staff.rules.length, 7); // 5 ролей (с «Заявкой») + подсветка заявки + доступ снят
   assert.ok(staff.styleLog.some((l) => l[0] === "validation" && l[1].calls.some((c) => c[0] === "requireCheckbox"))); // галочки групп
   assert.deepEqual(staff.getDataRange().getDisplayValues()[0].slice(4), ["Доступ", "Комментарий", "Актёры", "Техника", "Зал"]);
   assert.ok(staff.getDataRange().getDisplayValues().slice(1).every((r) => r[0] === "" || r[4] === "true"), "у внесённых людей доступ включён");
@@ -421,7 +421,7 @@ test("колонки переставили: система находит их 
   // запись идёт в правильную колонку, а не в соседнюю
   g.run("store_().addAccessRequest('9001112233', 'Хочу в команду')");
   const rows = staff.getDataRange().getDisplayValues();
-  const req = rows.find((r) => r[0] === "ЗАЯВКА");
+  const req = rows.find((r) => r.includes("Заявка"));
   assert.ok(req.includes("9001112233") && req.some((x) => /Хочу в команду/.test(x)));
   assert.equal(req[head.indexOf("Телефон")], "9001112233");
   // нажали «Да, вернуть»
@@ -485,4 +485,20 @@ test("«Сотрудники» как в жизни: тысяча строк-з�
   g.run("store_().addAccessRequest('9112223344', 'ВК: запросил доступ')");
   const after = staff.getDataRange().getDisplayValues();
   assert.ok(after.length < 20 && after.some((r) => r[1] === "9112223344"));
+});
+
+test("заявка из ВК: в «ФИО» имя из профиля, роль «Заявка»; поставили «Доступ» — это уже обычный сотрудник", () => {
+  const g = GV({STYLE_VER: "6"});
+  g.run("styleSheets()");
+  g.setFetchReply((url) => (/users\.get/.test(url) ? JSON.stringify({response: [{first_name: "Анна", last_name: "Смирнова"}]}) : ""));
+  vk(g, vkMsg(77, "89112223344"));
+  const staff = g.ss.getSheetByName("Сотрудники");
+  const row = staff.getDataRange().getDisplayValues().find((r) => r[1] === "9112223344");
+  assert.equal(row[0], "Анна Смирнова");
+  assert.equal(row[2], "Заявка");
+  const at = staff.getDataRange().getDisplayValues().findIndex((r) => r[1] === "9112223344") + 1;
+  staff.put(at, 5, "TRUE"); g.run("dropAllCaches_()");
+  assert.equal(g.run("store_().users().find((u) => u.phone === '9112223344').role"), "reader");
+  g.run("tidyStaff_()");
+  assert.equal(staff.cells[at - 1][2], "Читатель");
 });

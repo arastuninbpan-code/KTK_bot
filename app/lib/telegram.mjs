@@ -10,5 +10,5 @@ export function telegramEvent(update) {
   const own = m.contact && m.from && m.contact.user_id === m.from.id;
   const f = m.from || {};
   const label = "Telegram " + ([f.first_name, f.last_name].filter(Boolean).join(" ") || "без имени") + (f.username ? " @" + f.username : " (tg://user?id=" + (f.id || m.chat.id) + ")");
-  return {chatId: m.chat.id, text: m.text || "", phone: own ? m.contact.phone_number : null, date: m.date || 0, label};
+  return {chatId: m.chat.id, text: m.text || "", phone: own ? m.contact.phone_number : null, date: m.date || 0, label, name: [f.first_name, f.last_name].filter(Boolean).join(" ")};
 }

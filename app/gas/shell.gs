@@ -224,6 +224,13 @@ function vkCall_(method, params) {
   return data.response;
 }
 
+/** Имя и фамилия человека из профиля ВК (для заявки на доступ). */
+function vkName_(userId) {
+  const r = vkCall_("users.get", {user_ids: userId});
+  const u = (r && r[0]) || {};
+  return [u.first_name, u.last_name].filter(Boolean).join(" ");
+}
+
 function vkSend_(peerId, text, options) {
   const pieces = chunkText(htmlToPlain(text));
   pieces.forEach((piece, i) => {
@@ -400,7 +407,7 @@ function vkUpdate_(e) {
     cache.put(dedupe, "1", 21600);
     const t0 = Date.now();
     netMs_ = 0;
-    const run = () => handleMessage({store: store_(), channel: SENDERS.vk, ev, appUrl: prop_("APP_URL") || "", now: Date.now(), publishers: publishers_(), log: diag_});
+    const run = () => handleMessage({store: store_(), channel: SENDERS.vk, ev, appUrl: prop_("APP_URL") || "", now: Date.now(), publishers: publishers_(), log: diag_, lookupName: () => vkName_(ev.chatId)});
     if (READ_ONLY_RE_.test(ev.text || "")) run(); else withLock_(run); // чтение расписания блокировки не требует
     diag_("VK: сообщение от " + ev.chatId + " обработано, ответ отправлен. " + speed_(ev, t0));
   } catch (err) {
@@ -462,7 +469,7 @@ function deleteWebhook() {
 const C = {navy: "#1B3560", blue: "#0A96DC", light: "#D4F1FC", cream: "#FBF6DC", coral: "#F04E4A", orange: "#F2961E", white: "#FFFFFF"};
 const MONTHS_UP = ["ЯНВАРЬ", "ФЕВРАЛЬ", "МАРТ", "АПРЕЛЬ", "МАЙ", "ИЮНЬ", "ИЮЛЬ", "АВГУСТ", "СЕНТЯБРЬ", "ОКТЯБРЬ", "НОЯБРЬ", "ДЕКАБРЬ"];
 const MONTH_ROW_RE = /^[А-ЯЁ]+ \d{4}$/;
-const ROLE_LIST = ["Админ", "Редактор", "Читатель", "Заблокирован"];
+const ROLE_LIST = ["Админ", "Редактор", "Читатель", "Заблокирован", "Заявка"];
 
 function styleSheets() {
   dropAllCaches_();
@@ -743,8 +750,11 @@ function tidyStaff_() {
   for (let r = 2; r <= data.length; r++) {
     const name = String(data[r - 1][nameIdx]).trim();
     if (!name) continue;
-    if (String(data[r - 1][roleIdx]).trim() === "") { sheet.getRange(r, roleIdx + 1).setNumberFormat("@").setValue("Читатель"); changed = true; }
-    if (!/^заявка/i.test(name) && String(data[r - 1][accessIdx]).trim() === "") { sheet.getRange(r, accessIdx + 1).setValue(true); changed = true; }
+    if (String(data[r - 1][roleIdx]).trim() === "" && !/^заявка/i.test(name)) { sheet.getRange(r, roleIdx + 1).setNumberFormat("@").setValue("Читатель"); changed = true; }
+    if (/^заявка/i.test(String(data[r - 1][roleIdx]).trim()) && /^(true|да|1)$/i.test(String(data[r - 1][accessIdx]).trim())) { // поставили «Доступ» у заявки: теперь это обычный сотрудник
+      sheet.getRange(r, roleIdx + 1).setNumberFormat("@").setValue("Читатель"); changed = true;
+    }
+    if (!isPendingRow(name, data[r - 1][roleIdx]) && String(data[r - 1][accessIdx]).trim() === "") { sheet.getRange(r, accessIdx + 1).setValue(true); changed = true; }
   }
   if (changed) { dropAllCaches_(); bumpRev_(); }
 }
@@ -857,7 +867,7 @@ function styleStaff_(sheet) {
   }
   rng.setDataValidation(SpreadsheetApp.newDataValidation().requireValueInList(ROLE_LIST, true).setAllowInvalid(false).build());
   const rule = (text, bg, fg) => SpreadsheetApp.newConditionalFormatRule().whenTextEqualTo(text).setBackground(bg).setFontColor(fg).setBold(true).setRanges([rng]).build();
-  sheet.setConditionalFormatRules([rule("Админ", C.navy, C.white), rule("Редактор", C.blue, C.white), rule("Читатель", C.light, C.navy), rule("Заблокирован", C.coral, C.white)]);
+  sheet.setConditionalFormatRules([rule("Админ", C.navy, C.white), rule("Редактор", C.blue, C.white), rule("Читатель", C.light, C.navy), rule("Заблокирован", C.coral, C.white), rule("Заявка", "#FFF2B3", C.navy)]);
   sheet.setColumnWidth(1, 240);
   sheet.setColumnWidth(2, 170);
   sheet.setColumnWidth(3, 150);
@@ -909,7 +919,7 @@ function styleStaff_(sheet) {
   const A = (n) => String.fromCharCode(64 + n);
   const whole = sheet.getRange(2, 1, rows, Math.max(head.length, 6));
   const rules = sheet.getConditionalFormatRules();
-  const request = SpreadsheetApp.newConditionalFormatRule().whenFormulaSatisfied('=REGEXMATCH($A2,"^(?i)заявка")').setBackground("#FFF2B3").setRanges([whole]).build();
+  const request = SpreadsheetApp.newConditionalFormatRule().whenFormulaSatisfied('=OR(REGEXMATCH($A2,"^(?i)заявка"),REGEXMATCH($C2,"^(?i)заявка"))').setBackground("#FFF2B3").setRanges([whole]).build();
   const off = SpreadsheetApp.newConditionalFormatRule().whenFormulaSatisfied("=AND($A2<>\"\",$" + A(accessCol) + "2=FALSE)").setBackground("#FBE0DF").setFontColor("#8A8A8A").setRanges([whole]).build();
   sheet.setConditionalFormatRules(rules.concat([request, off]));
 }

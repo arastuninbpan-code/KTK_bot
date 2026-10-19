@@ -11,6 +11,9 @@ export const ROLE_LABELS = {admin: "Админ", editor: "Редактор", rea
 const CHUNK = 40000; // лимит ячейки Google — 50 000 знаков
 
 /** Текст из колонки «Роль» -> код роли. Пусто — читатель; «директор» (старое название) — админ. */
+/** Строка — заявка на доступ: в колонке «Роль» стоит «Заявка» (или, как раньше, вместо ФИО написано «ЗАЯВКА»). */
+export const isPendingRow = (name, role) => /^заявка/i.test(String(role || "").trim()) || /^заявка/i.test(String(name || "").trim());
+
 export function parseRole(text) {
   const t = String(text || "").toLowerCase();
   if (/заблок/.test(t)) return "blocked";
@@ -53,10 +56,12 @@ export class Store {
       const [name = "", phones = "", role = "", login = ""] = row;
       const n = String(name).trim();
       if (!n) continue;
-      const hasAccess = access < 0 || CHECKED_RE.test(String(row[access] || "").trim()); // галочка «Доступ» снята — как «Заблокирован»
+      const ticked = access >= 0 && CHECKED_RE.test(String(row[access] || "").trim());
+      const pending = isPendingRow(n, role) && !ticked; // заявка одобрена, когда поставили галочку «Доступ» или сменили роль
+      const hasAccess = !pending && (access < 0 || ticked); // галочка «Доступ» снята — как «Заблокирован»
       const groups = defs.filter((g) => CHECKED_RE.test(String(row[g.col] || "").trim())).map((g) => g.name);
       for (const phone of phonesIn(phones)) {
-        out.push({name: n, phone, role: hasAccess ? parseRole(role) : "blocked", login: String(login).trim(), groups, pending: /^заявка/i.test(n)});
+        out.push({name: n, phone, role: hasAccess ? parseRole(role) : "blocked", login: String(login).trim(), groups, pending});
       }
     }
     const o = this.owner;
@@ -97,8 +102,11 @@ export class Store {
   // --- заявки на доступ: незнакомый номер -> строка «ЗАЯВКА» в «Сотрудниках» (без галочки «Доступ») + запись в служебном листе ---
   stamp() { const d = new Date(this.now() + 3 * 3600e3).toISOString(); return `${d.slice(8, 10)}.${d.slice(5, 7)} ${d.slice(11, 16)}`; }
 
-  /** Добавляет или дополняет заявку на доступ; администратор видит строку и комментарий прямо в таблице. */
-  addAccessRequest(phone, note) {
+  /**
+   * Добавляет или дополняет заявку на доступ; администратор видит строку и комментарий прямо в таблице.
+   * name — имя человека из мессенджера: оно сразу попадает в «ФИО» (в «Роли» стоит «Заявка» до одобрения).
+   */
+  addAccessRequest(phone, note, name = "") {
     const rows = this.book.get(TABS.staff);
     const cols = this.staffCols_(rows);
     let commentCol = cols.comment;
@@ -111,12 +119,14 @@ export class Store {
     if (at >= 0) { // этот номер уже есть (старая заявка): дописываем
       const old = String(rows[at][commentCol] || "").trim();
       this.book.setCell(TABS.staff, at + 1, commentCol + 1, old ? old + "\n" + line : line);
+      if (name && !String(rows[at][0] || "").trim()) this.book.setCell(TABS.staff, at + 1, 1, name);
       return at + 1;
     }
     at = rows.findIndex((r, i) => i > 0 && !String(r[0] || "").trim() && !String(r[1] || "").trim()); // сначала свободная строка внутри списка
     if (at < 0) at = rows.length;
-    this.book.setCell(TABS.staff, at + 1, 1, "ЗАЯВКА");
+    this.book.setCell(TABS.staff, at + 1, 1, String(name || "").trim() || "Без имени");
     this.book.setCell(TABS.staff, at + 1, 2, phone);
+    this.book.setCell(TABS.staff, at + 1, 3, "Заявка");
     this.book.setCell(TABS.staff, at + 1, commentCol + 1, line);
     return at + 1;
   }
