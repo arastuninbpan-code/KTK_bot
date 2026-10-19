@@ -126,6 +126,8 @@ class GasBook {
     if (plan && !plan.identity) { // значения идут в канонической последовательности, раскладываем по настоящим колонкам
       padded = Array(Math.max(s.getLastColumn(), plan.perm.length)).fill("");
       values.forEach((v, j) => { const at = physicalCol(plan, j); if (at >= 0) padded[at] = String(v); });
+    } else if (tab === TABS.venues) {
+      padded = values.map(String); // не трогаем таблицу занятости справа
     } else {
       const width = Math.max(values.length, s.getLastColumn());
       padded = values.map(String);
@@ -135,7 +137,15 @@ class GasBook {
     s.getRange(row, 1, 1, width).setNumberFormat("@").setValues([padded]); // текстом: «04.10» не превращается в дату
     this.touch(tab);
   }
-  append(tab, values) { this.set(tab, this.sheet(tab).getLastRow() + 1, values); }
+  append(tab, values) {
+    const s = this.sheet(tab);
+    let last = s.getLastRow();
+    if (tab === TABS.venues && last > 0) { // справа от списка площадок лежит таблица занятости: «последняя строка» считается по названиям площадок
+      const names = s.getRange(1, 1, last, 1).getDisplayValues();
+      while (last > 1 && String(names[last - 1][0]).trim() === "") last--;
+    }
+    this.set(tab, last + 1, values);
+  }
   insert(tab, beforeRow) {
     const s = this.sheet(tab);
     if (beforeRow > s.getMaxRows()) s.insertRowsAfter(s.getMaxRows(), 1);
@@ -283,7 +293,9 @@ function everyMinute() {
   const last = Number(p.getProperty("last_cycle") || 0);
   const dueDirty = dirty && now - dirty >= 15000;
   autoStyle_(p);
-  if (p.getProperty("regroup")) { p.deleteProperty("regroup"); try { tidySchedule_(); tidyStaff_(); syncRestoreButtons_(); } catch (err) { diag_("Таблица: ОШИБКА — " + String(err && err.message ? err.message : err)); } }
+  const todayStr = todayIso(Date.now());
+  if (p.getProperty("months_day") !== todayStr) { p.setProperty("months_day", todayStr); p.setProperty("regroup", "1"); } // новый день: месяц мог стать прошедшим, перекладываем вниз
+  if (p.getProperty("regroup")) { p.deleteProperty("regroup"); try { tidySchedule_(); tidyStaff_(); syncRestoreButtons_(); renderOccupancy_(); } catch (err) { diag_("Таблица: ОШИБКА — " + String(err && err.message ? err.message : err)); } }
   if (!dueDirty && now - last < 4 * 60e3 + 30e3) return;
   withLock_(() => {
     if (dueDirty) p.deleteProperty("dirty");
@@ -312,6 +324,7 @@ function onSheetChange(e) {
     try { // правка в «Сотрудниках» (новая колонка-группа, новый человек): оформляем сразу, не дожидаясь таймера
       if (e && e.range && e.range.getSheet().getName() === TABS.staff) { tidyStaff_(); p.deleteProperty("regroup"); }
       syncRestoreButtons_();
+      if (e && e.range) { const nm = e.range.getSheet().getName(); if (nm === TABS.schedule || nm === TABS.venues) renderOccupancy_(); } // занятость площадок обновляем сразу
     } catch (err) { diag_("Таблица: ОШИБКА — " + String(err && err.message ? err.message : err)); }
     runCycle_();
   });
@@ -467,7 +480,6 @@ function deleteWebhook() {
 
 // ---------- оформление таблицы (запустить один раз: styleSheets) ----------
 const C = {navy: "#1B3560", blue: "#0A96DC", light: "#D4F1FC", cream: "#FBF6DC", coral: "#F04E4A", orange: "#F2961E", white: "#FFFFFF"};
-const MONTHS_UP = ["ЯНВАРЬ", "ФЕВРАЛЬ", "МАРТ", "АПРЕЛЬ", "МАЙ", "ИЮНЬ", "ИЮЛЬ", "АВГУСТ", "СЕНТЯБРЬ", "ОКТЯБРЬ", "НОЯБРЬ", "ДЕКАБРЬ"];
 const MONTH_ROW_RE = /^[А-ЯЁ]+ \d{4}$/;
 const ROLE_LIST = ["Админ", "Редактор", "Читатель", "Заблокирован", "Заявка"];
 
@@ -483,6 +495,7 @@ function styleSheets() {
   styleVenues_(ss.getSheetByName(TABS.venues));
   const chats = ss.getSheetByName(TABS.chats);
   if (chats) styleHeader_(chats, 4);
+  renderOccupancy_();
   tidyStaff_(); // убирает «хвост» из пустых строк-заготовок и поднимает заявки, улетевшие вниз
   hideHelperSheets_(ss);
   dropAllCaches_();
@@ -527,7 +540,7 @@ function styleHeader_(sheet, cols) {
 /** Шапки месяцев («СЕНТЯБРЬ 2026»), заголовки колонок, чередование строк. */
 function styleSchedule_(sheet) {
   const today = todayIso(Date.now());
-  fixMonths_(sheet);
+  fixMonths_(sheet, true);
 
   // 2) оформление
   const lastRow = Math.max(2, sheet.getLastRow());
@@ -566,7 +579,7 @@ function styleSchedule_(sheet) {
   groupMonths_(sheet, true);
 }
 
-const monthTitle_ = (date) => MONTHS_UP[+date.slice(5, 7) - 1] + " " + date.slice(0, 4);
+const monthTitle_ = monthTitleOf;
 const dateOfRow_ = (cell, today) => { const m = String(cell).match(/^\s*(\d{1,2}\.\d{2}(?:\.\d{2,4})?)/); return m ? parseDate(m[1], today) : null; };
 const monthRowTitle_ = (row) => { const f = row.filter((c) => String(c).trim() !== ""); return f.length === 1 && MONTH_ROW_RE.test(String(f[0]).trim()) ? String(f[0]).trim() : null; };
 
@@ -577,15 +590,16 @@ const monthRowTitle_ = (row) => { const f = row.filter((c) => String(c).trim() !
  */
 function monthsDisordered_(rows, today) {
   let current = "";
-  let lastDate = "";
+  let last = null;
   const seen = {};
   for (let r = 1; r < rows.length; r++) {
     const t = monthRowTitle_(rows[r]);
     if (t) { if (seen[t]) return true; seen[t] = true; current = t; continue; }
     const d = dateOfRow_(rows[r][0], today);
     if (!d) continue;
-    if (d < lastDate || monthTitle_(d) !== current) return true;
-    lastDate = d;
+    const rank = rankOf(d, today);
+    if ((last && cmpRank(rank, last) < 0) || monthTitle_(d) !== current) return true;
+    last = rank;
   }
   return false;
 }
@@ -597,6 +611,7 @@ function rebuildMonths_(sheet) {
   const data = sheet.getRange(1, 1, lastRow, cols).getValues();
   const body = [];
   let key = "0000-00-00";
+  const rankOfKey = (k) => (k === "0000-00-00" ? [-1, 0, ""] : rankOf(k, today));
   data.slice(1).forEach((row) => {
     if (monthRowTitle_(row) !== null) return; // старые шапки убираем, новые поставим сами
     if (row.every((c) => String(c).trim() === "")) return; // пустые строки внутри не нужны
@@ -604,7 +619,7 @@ function rebuildMonths_(sheet) {
     if (d) key = d; // строка без понятной даты остаётся рядом с предыдущей
     body.push({row, key, n: body.length});
   });
-  body.sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : a.n - b.n));
+  body.sort((a, b) => cmpRank(rankOfKey(a.key), rankOfKey(b.key)) || a.n - b.n);
   const out = [];
   let title = "";
   body.forEach((b) => {
@@ -621,9 +636,10 @@ function rebuildMonths_(sheet) {
 }
 
 /** Приводит месяцы в порядок: пересборка, если они перепутаны, иначе только недостающие шапки. */
-function fixMonths_(sheet) {
+function fixMonths_(sheet, force) {
   if (sheet.getLastRow() < 2) return 0;
   const rows = sheet.getRange(1, 1, sheet.getLastRow(), Math.max(2, sheet.getLastColumn())).getDisplayValues();
+  if (layoutOf(rows).v !== 2) return force ? ensureMonthHeaders_(sheet) : 0; // старый формат ещё не перенесён: порядок не трогаем
   const plan = columnPlan("schedule", rows[0]);
   if (plan && plan.perm[0] !== 0) return 0; // колонку «Дата» переставили: порядок наводить не будем, пока не вернут вид
   if (monthsDisordered_(rows, todayIso(Date.now()))) { rebuildMonths_(sheet); return 1; }
@@ -682,7 +698,7 @@ function groupMonths_(sheet, fresh) {
   });
 }
 
-const STYLE_VERSION_ = "6"; // поднимайте, когда меняется оформление: таблица перестроится сама при ближайшем срабатывании таймера
+const STYLE_VERSION_ = "8"; // поднимайте, когда меняется оформление: таблица перестроится сама при ближайшем срабатывании таймера
 
 /** После обновления кода один раз оформляет таблицу сама (то же, что ручной запуск styleSheets). */
 function autoStyle_(p) {
@@ -922,6 +938,50 @@ function styleStaff_(sheet) {
   const request = SpreadsheetApp.newConditionalFormatRule().whenFormulaSatisfied('=OR(REGEXMATCH($A2,"^(?i)заявка"),REGEXMATCH($C2,"^(?i)заявка"))').setBackground("#FFF2B3").setRanges([whole]).build();
   const off = SpreadsheetApp.newConditionalFormatRule().whenFormulaSatisfied("=AND($A2<>\"\",$" + A(accessCol) + "2=FALSE)").setBackground("#FBE0DF").setFontColor("#8A8A8A").setRanges([whole]).build();
   sheet.setConditionalFormatRules(rules.concat([request, off]));
+}
+
+const OCC_COL_ = 4; // таблица занятости лежит в листе «Площадки» правее названий: колонки D–H
+const OCC_HEAD_ = ["Дата", "Время", "Площадка", "Событие", "Пересечение"];
+
+/**
+ * Занятость площадок по месяцам и по времени: справа от списка площадок. Текущий и будущие месяцы сверху, прошедшие внизу (серым).
+ * Строки с пересечением по времени подсвечены. Обновляется само при любой правке расписания.
+ */
+function renderOccupancy_() {
+  const ss = SpreadsheetApp.openById(prop_("SHEET_ID"));
+  const sheet = ss.getSheetByName(TABS.venues);
+  if (!sheet) return;
+  const today = todayIso(Date.now());
+  const book = new GasBook();
+  const table = book.get(TABS.schedule);
+  const rows = occupancyRows(parseEvents(table, today), today);
+  const width = OCC_HEAD_.length;
+  const total = Math.max(sheet.getMaxRows(), rows.length + 2);
+  if (sheet.getMaxRows() < rows.length + 1) sheet.insertRowsAfter(sheet.getMaxRows(), rows.length + 1 - sheet.getMaxRows());
+  const area = sheet.getRange(1, OCC_COL_, Math.max(sheet.getMaxRows(), 2), width);
+  area.breakApart();
+  area.clear();
+  sheet.getRange(1, OCC_COL_, 1, width).setNumberFormat("@").setValues([OCC_HEAD_]);
+  styleHeaderRange_(sheet.getRange(1, OCC_COL_, 1, width));
+  [90, 120, 170, 260, 220].forEach((w, i) => sheet.setColumnWidth(OCC_COL_ + i, w));
+  if (!rows.length) {
+    sheet.getRange(2, OCC_COL_, 1, width).setNumberFormat("@").setValues([["Событий с площадкой пока нет", "", "", "", ""]]);
+    return;
+  }
+  const values = rows.map((r) => (r.kind === "month" ? [r.title, "", "", "", ""] : [r.date, r.time, r.venue, r.title, r.clash ? "⚠ " + r.clash : ""]));
+  sheet.getRange(2, OCC_COL_, values.length, width).setNumberFormat("@").setValues(values).setWrap(true).setVerticalAlignment("middle").setFontColor(C.navy);
+  rows.forEach((r, i) => {
+    const line = sheet.getRange(2 + i, OCC_COL_, 1, width);
+    if (r.kind === "month") {
+      line.merge().setBackground(r.past ? "#6B7F9E" : C.navy).setFontColor(C.white).setFontWeight("bold").setHorizontalAlignment("center").setFontSize(12);
+      sheet.setRowHeight(2 + i, 30);
+    } else if (r.clash) line.setBackground("#FBE0DF");
+    else if (r.past) line.setFontColor("#8A8A8A");
+  });
+}
+
+function styleHeaderRange_(range) {
+  range.setBackground(C.blue).setFontColor(C.white).setFontWeight("bold").setHorizontalAlignment("center").setVerticalAlignment("middle").setWrap(true);
 }
 
 function styleVenues_(sheet) {

@@ -8,7 +8,7 @@ const SCHEDULE = [HEAD,
   ["04.10\n11.00 и 13.00", "Спектакль «Бука»\n(малая сцена)", "Иванова М.В.", "Морозова Н.М.", "", "", ""],
   ["10.10", "Сказки из старого чемодана", "Петрова Л.Н.", "", "", "", ""]];
 const G = () => loadGas({now: NOW, tabs: {"Расписание": SCHEDULE, "Сотрудники": STAFF},
-  props: {SHEET_ID: "x", STYLE_VER: "6", TELEGRAM_BOT_TOKEN: "TOKEN", WEBHOOK_SECRET: "hook", APP_URL: "https://app.test"}});
+  props: {SHEET_ID: "x", STYLE_VER: "8", TELEGRAM_BOT_TOKEN: "TOKEN", WEBHOOK_SECRET: "hook", APP_URL: "https://app.test"}});
 
 const tg = (g, update) => g.run(`doPost(${JSON.stringify({parameter: {secret: "hook"}, postData: {contents: JSON.stringify(update)}})}).getContent()`);
 const msg = (id, text, contact) => ({update_id: Math.floor(Math.random() * 1e9), message: {chat: {id, type: "private"}, from: {id}, text, contact}});
@@ -124,7 +124,10 @@ test("styleSheets: перенос в новый формат (копия сох�
     ["ОКТЯБРЬ 2026||||", "04.10|11:00||Спектакль «Бука»|малая сцена", "04.10|13:00||Спектакль «Бука»|малая сцена", "10.10|||Сказки из старого чемодана|", "НОЯБРЬ 2026||||", "05.11|||Ноябрьское событие|"]);
   assert.deepEqual(sh[2].slice(5, 7), ["Иванова М.В.", "Морозова Н.М."]); // люди переехали вместе со строкой
   assert.ok(g.ss.sheets.some((x) => /^Расписание \(копия /.test(x.name)), "копия старого листа сохранена");
-  assert.deepEqual(g.ss.getSheetByName("Площадки").getDataRange().getDisplayValues(), [["Площадка", "Заметка"], ["Малая сцена", ""]]);
+  assert.deepEqual(g.ss.getSheetByName("Площадки").getDataRange().getDisplayValues().map((r) => r.slice(0, 2)).slice(0, 2), [["Площадка", "Заметка"], ["Малая сцена", ""]]);
+  const occ = g.ss.getSheetByName("Площадки").getDataRange().getDisplayValues().map((r) => r.slice(3, 7));
+  assert.deepEqual(occ[0], ["Дата", "Время", "Площадка", "Событие"]);
+  assert.ok(occ.some((r) => r[0] === "ОКТЯБРЬ 2026") && occ.some((r) => r[0] === "04.10" && r[1] === "11:00" && /Малая сцена/.test(r[2])), "занятость по месяцам и по времени");
   const log = g.ss.getSheetByName("Расписание").styleLog;
   assert.ok(log.some((l) => l[0] === "setBackground" && l[2] === "#1B3560")); // шапки месяцев
   assert.ok(log.some((l) => l[0] === "setBackground" && l[2] === "#0A96DC")); // заголовки колонок
@@ -161,7 +164,7 @@ test("группы: галочки в таблице -> состав групп;
 // ---------- ВКонтакте ----------
 const VKPROPS = {VK_TOKEN: "VKTOKEN", VK_GROUP_ID: "club123", VK_SECRET: "vksecret", VK_CONFIRM: "abc123", TG_CHANNEL: "@teatr"};
 const GV = (extra = {}) => loadGas({now: NOW, tabs: {"Расписание": SCHEDULE, "Сотрудники": STAFF},
-  props: {SHEET_ID: "x", STYLE_VER: "6", TELEGRAM_BOT_TOKEN: "TOKEN", WEBHOOK_SECRET: "hook", APP_URL: "https://app.test", ...VKPROPS, ...extra}});
+  props: {SHEET_ID: "x", STYLE_VER: "8", TELEGRAM_BOT_TOKEN: "TOKEN", WEBHOOK_SECRET: "hook", APP_URL: "https://app.test", ...VKPROPS, ...extra}});
 const vk = (g, update, secret = "hook") => g.run(`doPost(${JSON.stringify({parameter: {secret, vk: "1"}, postData: {contents: JSON.stringify(update)}})}).getContent()`);
 const vkMsg = (id, text, extra = {}) => ({type: "message_new", event_id: "e" + Math.random(), secret: "vksecret", object: {message: {peer_id: id, from_id: id, text, ...extra}}});
 const vkSent = (g, id) => g.fetches.filter((f) => f.url.endsWith("/messages.send") && String(f.body.user_id) === String(id));
@@ -358,7 +361,7 @@ test("после обновления таблица оформляется са
   const g = G();
   delete g.properties.STYLE_VER;
   g.run("everyMinute()"); // как после выкладки новой версии
-  assert.equal(g.properties.STYLE_VER, "6");
+  assert.equal(g.properties.STYLE_VER, "8");
   const staff = g.ss.getSheetByName("Сотрудники");
   assert.deepEqual(staff.getDataRange().getDisplayValues()[0].slice(4, 6), ["Доступ", "Комментарий"]);
   assert.deepEqual(g.ss.sheets.filter((x) => !x.hidden).map((x) => x.name).sort(), ["Площадки", "Расписание", "Сотрудники"]);
@@ -397,9 +400,9 @@ test("месяцы идут по порядку без повторов: пер�
   g.run("everyMinute()");
   const col = sch.getDataRange().getDisplayValues().map((r) => r[0]);
   const heads = col.filter((x) => /^[А-ЯЁ]+ \d{4}$/.test(x));
-  assert.deepEqual(heads, ["СЕНТЯБРЬ 2026", "ОКТЯБРЬ 2026"]);
-  assert.ok(col.indexOf("05.09") < col.indexOf("ОКТЯБРЬ 2026"));
-  assert.ok(col.indexOf("19.10") > col.indexOf("10.10"));
+  assert.deepEqual(heads, ["ОКТЯБРЬ 2026", "СЕНТЯБРЬ 2026"], "текущий месяц сверху, прошедший внизу");
+  assert.ok(col.indexOf("05.09") > col.indexOf("СЕНТЯБРЬ 2026"));
+  assert.ok(col.indexOf("19.10") > col.indexOf("10.10") && col.indexOf("19.10") < col.indexOf("СЕНТЯБРЬ 2026"));
   g.run("everyMinute()");
   assert.deepEqual(sch.getDataRange().getDisplayValues().map((r) => r[0]), col, "повторный проход ничего не меняет");
 });
@@ -488,7 +491,7 @@ test("«Сотрудники» как в жизни: тысяча строк-з�
 });
 
 test("заявка из ВК: в «ФИО» имя из профиля, роль «Заявка»; поставили «Доступ» — это уже обычный сотрудник", () => {
-  const g = GV({STYLE_VER: "6"});
+  const g = GV({STYLE_VER: "8"});
   g.run("styleSheets()");
   g.setFetchReply((url) => (/users\.get/.test(url) ? JSON.stringify({response: [{first_name: "Анна", last_name: "Смирнова"}]}) : ""));
   vk(g, vkMsg(77, "89112223344"));
@@ -501,4 +504,13 @@ test("заявка из ВК: в «ФИО» имя из профиля, роль
   assert.equal(g.run("store_().users().find((u) => u.phone === '9112223344').role"), "reader");
   g.run("tidyStaff_()");
   assert.equal(staff.cells[at - 1][2], "Читатель");
+});
+
+test("площадки: новая площадка встаёт сразу под списком, таблица занятости справа не страдает; прошедшие месяцы внизу", () => {
+  const g = G();
+  g.run("styleSheets()");
+  g.run("store_().addVenue('Фойе')");
+  const v = g.ss.getSheetByName("Площадки").getDataRange().getDisplayValues();
+  assert.deepEqual(v.slice(0, 3).map((r) => r.slice(0, 2)), [["Площадка", "Заметка"], ["Малая сцена", ""], ["Фойе", ""]]);
+  assert.ok(v.some((r) => r[3] === "ОКТЯБРЬ 2026"), "занятость на месте");
 });
