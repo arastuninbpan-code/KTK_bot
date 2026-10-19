@@ -23,6 +23,13 @@ class Range {
   merge() { this.sheet.styleLog.push(["merge", this.r]); return this; }
   setDataValidation(rule) { this.sheet.styleLog.push(["validation", rule]); return this; }
   clearDataValidations() { return this; }
+  shiftRowGroupDepth(n) {
+    const to = this.r + this.nr - 1;
+    const g = this.sheet.groups;
+    if (n > 0) g.push({from: this.r, to, collapsed: false});
+    else for (let i = g.length - 1; i >= 0; i--) if (g[i].from <= to && g[i].to >= this.r) { g.splice(i, 1); break; }
+    return this;
+  }
   breakApart() { this.sheet.styleLog.push(["breakApart"]); return this; }
 }
 for (const m of ["setNumberFormat", "setBackground", "setFontColor", "setFontWeight", "setHorizontalAlignment", "setVerticalAlignment", "setWrap", "setBorder", "setFontSize", "setFontFamily"]) {
@@ -30,7 +37,7 @@ for (const m of ["setNumberFormat", "setBackground", "setFontColor", "setFontWei
 }
 
 class Sheet {
-  constructor(name) { this.name = name; this.cells = []; this.maxRows = 1000; this.maxCols = 26; this.styleLog = []; this.rules = []; }
+  constructor(name) { this.name = name; this.cells = []; this.maxRows = 1000; this.maxCols = 26; this.styleLog = []; this.rules = []; this.groups = []; this.hidden = false; }
   put(r, c, v) { while (this.cells.length < r) this.cells.push([]); const row = this.cells[r - 1]; while (row.length < c) row.push(""); row[c - 1] = String(v); }
   getLastRow() { for (let i = this.cells.length; i > 0; i--) if (this.cells[i - 1].some((x) => x !== "")) return i; return 0; }
   getLastColumn() { let m = 0; for (const row of this.cells) for (let j = row.length; j > 0; j--) if (row[j - 1] !== "") { m = Math.max(m, j); break; } return m; }
@@ -41,6 +48,17 @@ class Sheet {
   copyTo(ss) { const s = new Sheet("Копия " + this.name); s.cells = structuredClone(this.cells); s.ss = ss; ss.sheets.push(s); return s; }
   setName(n) { this.name = n; return this; }
   getDataRange() { return new Range(this, 1, 1, Math.max(this.getLastRow(), 1), Math.max(this.getLastColumn(), 1)); }
+  insertColumnsBefore(c, n) { for (const row of this.cells) if (row.length >= c) row.splice(c - 1, 0, ...Array(n).fill("")); }
+  setRowGroupControlPosition(p) { this.styleLog.push(["groupPos", p]); }
+  getRowGroupDepth(r) { return this.groups.filter((g) => g.from <= r && g.to >= r).length; }
+  getRowGroup(r, depth) {
+    const g = this.groups.filter((x) => x.from <= r && x.to >= r)[depth - 1];
+    return g ? {isCollapsed: () => g.collapsed, collapse() { g.collapsed = true; return this; }, expand() { g.collapsed = false; return this; }} : null;
+  }
+  getName() { return this.name; }
+  hideSheet() { this.hidden = true; return this; }
+  showSheet() { this.hidden = false; return this; }
+  isSheetHidden() { return this.hidden; }
   insertRowBefore(r) { this.cells.splice(r - 1, 0, []); }
   insertRowsAfter(r, n) { for (let i = 0; i < n; i++) this.cells.splice(r, 0, []); }
   deleteRow(r) { this.cells.splice(r - 1, 1); }
@@ -55,6 +73,7 @@ class Sheet {
 
 class Spreadsheet {
   constructor(tabs) { this.sheets = Object.entries(tabs).map(([name, rows]) => { const s = new Sheet(name); s.ss = this; rows.forEach((row, i) => row.forEach((v, j) => s.put(i + 1, j + 1, v))); return s; }); }
+  getSheets() { return this.sheets.slice(); }
   getSheetByName(n) { return this.sheets.find((s) => s.name === n) || null; }
   insertSheet(n) { const s = new Sheet(n); s.ss = this; this.sheets.push(s); return s; }
 }
@@ -77,7 +96,7 @@ export function loadGas({tabs, props = {}, now = Date.now()}) {
   const respond = (code = 200, text = "{}") => ({getResponseCode: () => code, getContentText: () => text});
   const ctx = {
     console, Date: class extends Date { constructor(...a) { a.length ? super(...a) : super(clock); } static now() { return clock; } },
-    SpreadsheetApp: {openById: () => ss, newConditionalFormatRule: () => builder("cf"), newDataValidation: () => builder("dv"), BorderStyle: {SOLID: "SOLID"}},
+    SpreadsheetApp: {openById: () => ss, newConditionalFormatRule: () => builder("cf"), newDataValidation: () => builder("dv"), BorderStyle: {SOLID: "SOLID"}, GroupControlTogglePosition: {BEFORE: "BEFORE", AFTER: "AFTER"}},
     PropertiesService: {getScriptProperties: () => ({getProperty: (k) => properties[k] ?? null, setProperty: (k, v) => { properties[k] = String(v); }, deleteProperty: (k) => { delete properties[k]; }, getProperties: () => ({...properties})})},
     CacheService: {getScriptCache: () => ({get: (k) => cache.get(k) ?? null, put: (k, v) => { cache.set(k, v); }, remove: (k) => { cache.delete(k); }, removeAll: (ks) => { ks.forEach((k) => cache.delete(k)); }, getAll: (ks) => Object.fromEntries(ks.filter((k) => cache.has(k)).map((k) => [k, cache.get(k)])), putAll: (o) => { for (const [k, v] of Object.entries(o)) cache.set(k, v); }})},
     LockService: {getScriptLock: () => ({waitLock() {}, releaseLock() {}})},

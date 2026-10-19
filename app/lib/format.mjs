@@ -109,6 +109,9 @@ export const msgUnknownPhone = "💬 <b>Этого номера нет в спи
 export const msgStopped = "💬 <b>Уведомления отключены.</b>\nЧтобы включить снова, напишите /start.";
 export const msgConnected = (name, canPost = false) => `💬 <b>${esc(name)}</b>, вы подключены.\n\n${HELP}${canPost ? "\n/post — опубликовать афишу недели" : ""}`;
 export const msgBlocked = "💬 <b>Доступ закрыт.</b>\nОбратитесь к администратору.";
+export const msgRequestSent = "💬 <b>Вашего номера нет в списке сотрудников.</b>\nЗаявка передана администратору, он увидит её в таблице. Если хотите, напишите одним сообщением, кто вы (ФИО и должность): оно попадёт администратору.\n\nКак только доступ откроют, я напишу вам сам.";
+export const msgCommentSaved = "💬 <b>Передал администратору.</b>\nКак только откроют доступ, я напишу вам сам.";
+export const msgAccessGranted = (name) => `✈️ <b>Доступ открыт, ${esc(name)}!</b>\nТеперь я буду присылать уведомления о ваших сменах.\n\n${HELP}`;
 export const msgLogin = (login) => `🔑 <b>Ваш логин</b>
 
 <code>${esc(login)}</code>

@@ -131,9 +131,10 @@ test("styleSheets: перенос в новый формат (копия сох�
   assert.equal(g.ss.getSheetByName("Расписание").rules[0].calls[0][0], "whenFormulaSatisfied");
   assert.ok(log.some((l) => l[0] === "validation" && l[1].calls.some((c) => c[0] === "requireValueInRange"))); // площадка — выпадающий список
   const staff = g.ss.getSheetByName("Сотрудники");
-  assert.equal(staff.rules.length, 4);
+  assert.equal(staff.rules.length, 6); // 4 роли + заявка + доступ снят
   assert.ok(staff.styleLog.some((l) => l[0] === "validation" && l[1].calls.some((c) => c[0] === "requireCheckbox"))); // галочки групп
-  assert.deepEqual(staff.getDataRange().getDisplayValues()[0].slice(4), ["Актёры", "Техника", "Зал"]);
+  assert.deepEqual(staff.getDataRange().getDisplayValues()[0].slice(4), ["Доступ", "Комментарий", "Актёры", "Техника", "Зал"]);
+  assert.ok(staff.getDataRange().getDisplayValues().slice(1).every((r) => r[0] === "" || r[4] === "true"), "у внесённых людей доступ включён");
   assert.equal(staff.getDataRange().getDisplayValues()[3][2], "Читатель"); // пустая роль -> «Читатель»
   g.run("styleSheets()"); // повторный запуск ничего не дублирует
   assert.equal(g.ss.getSheetByName("Расписание").getDataRange().getDisplayValues().filter((r) => /^[А-ЯЁ]+ \d{4}$/.test(r[0])).length, 2);
@@ -144,7 +145,7 @@ test("группы: галочки в таблице -> состав групп;
   const g = G();
   g.run("styleSheets()");
   const staff = g.ss.getSheetByName("Сотрудники");
-  staff.put(2, 5, "TRUE"); staff.put(3, 5, "TRUE"); staff.put(3, 6, "TRUE"); // Иванова и Петрова — «Актёры», Петрова — ещё «Техника»
+  staff.put(2, 7, "TRUE"); staff.put(3, 7, "TRUE"); staff.put(3, 8, "TRUE"); // Иванова и Петрова — «Актёры», Петрова — ещё «Техника»
   g.run("store_().ensureLogins()");
   const admin = api(g, {method: "POST", path: "/api/login", body: {login: g.run("store_().users()[0].login")}});
   assert.equal(admin._status, 200);
@@ -154,7 +155,7 @@ test("группы: галочки в таблице -> состав групп;
   g.run("store_().ensureLogins()");
   const row = g.ss.getSheetByName("Сотрудники").getDataRange().getDisplayValues();
   assert.match(row[4][3], /^[A-Z][A-Z0-9]{5}$/);
-  assert.deepEqual([row[1][4], row[2][4], row[2][5]], ["TRUE", "TRUE", "TRUE"]);
+  assert.deepEqual([row[1][6], row[2][6], row[2][7]], ["TRUE", "TRUE", "TRUE"]);
 });
 
 // ---------- ВКонтакте ----------
@@ -316,4 +317,39 @@ test("кэш: большой лист режется на куски и чита
   assert.equal(JSON.stringify(g.run('cacheRead_("Площадки")')), JSON.stringify(rows)); // (массивы из изолированной среды сравниваем как текст)
   g.run('cacheDrop_("Площадки")');
   assert.equal(g.run('cacheRead_("Площадки")'), null);
+});
+
+test("styleSheets: видны только три листа; месяцы — группы строк (прошлые свёрнуты); новые шапки появляются сами", () => {
+  const g = G();
+  g.ss.getSheetByName("Расписание").put(4, 1, "05.09"); // событие в прошлом месяце
+  g.run("styleSheets()");
+  const visible = g.ss.sheets.filter((x) => !x.hidden).map((x) => x.name);
+  assert.deepEqual(visible.sort(), ["Площадки", "Расписание", "Сотрудники"].sort());
+  const sch = g.ss.getSheetByName("Расписание");
+  assert.ok(sch.groups.length >= 2);
+  const collapsed = sch.groups.filter((x) => x.collapsed).length;
+  assert.equal(collapsed, 1, "сентябрь (прошёл) свёрнут, октябрь открыт");
+  // человек добавил событие в новом месяце вручную -> таймер ставит шапку и обновляет версию данных
+  const row = sch.getLastRow() + 1;
+  sch.put(row, 1, "03.12"); sch.put(row, 4, "Новогоднее");
+  g.run("onSheetChange()");
+  g.run("everyMinute()");
+  const col = sch.getDataRange().getDisplayValues().map((r) => r[0]);
+  assert.ok(col.includes("ДЕКАБРЬ 2026") && col.indexOf("ДЕКАБРЬ 2026") < col.indexOf("03.12"));
+  g.run("everyMinute()"); // ничего не дублируется
+  assert.equal(sch.getDataRange().getDisplayValues().filter((r) => r[0] === "ДЕКАБРЬ 2026").length, 1);
+});
+
+test("приложение: me.login и me.channels для кнопок подключения", () => {
+  const g = G();
+  g.run("styleSheets()");
+  g.run("store_().ensureLogins()");
+  const login = g.run("store_().users()[0].login");
+  const t = api(g, {method: "POST", path: "/api/login", body: {login}}).token;
+  const before = api(g, {method: "GET", path: "/api/schedule", token: t}).me;
+  assert.equal(before.login, login);
+  assert.deepEqual(before.channels, []);
+  tg(g, msg(5, "", {user_id: 5, phone_number: "9000000001"}));
+  const after = api(g, {method: "GET", path: "/api/schedule", token: t}).me;
+  assert.deepEqual(after.channels, ["telegram"]);
 });

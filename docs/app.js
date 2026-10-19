@@ -322,6 +322,21 @@ function venueCard(venue, day, canEdit) {
     rows.length ? h("div", {class: "slots"}, ...rows) : null);
 }
 
+/** Занятость на 14 дней: площадки в строках, дни в столбцах; цвет — насколько день загружен (08:00–24:00), красный — пересечение. */
+function heatmap(venues, days, day) {
+  const cfg = window.KTK || {};
+  const head = h("tr", {}, h("th", {}), ...days.map((d) => { const p = dateParts(d); return h("th", {class: d === day ? "sel" : ""}, h("small", {}, p.wd), h("b", {}, String(p.d))); }));
+  const rows = venues.map((v) => h("tr", {}, h("th", {class: "hv"}, cap(v)), ...days.map((d) => {
+    const items = venueItems(v, d);
+    const busy = items.reduce((m, i) => m + Math.max(0, Math.min(i.b, TRACK_TO) - Math.max(i.a, TRACK_FROM)), 0);
+    const level = !items.length ? 0 : items.some((i) => i.clash) ? "x" : busy > 600 ? 3 : busy > 240 ? 2 : 1;
+    const text = !items.length ? "свободно" : items.some((i) => i.clash) ? "пересечение" : `занято: ${items.length}`;
+    return h("td", {}, h("button", {class: "hm l" + level + (d === day ? " sel" : ""), "aria-label": `${cap(v)}, ${dayTitle(d)}: ${text}`, title: `${cap(v)}: ${text}`, onclick: () => { state.day = d; render(); }}));
+  })));
+  return h("div", {class: "heat"}, h("div", {class: "heatscroll"}, h("table", {}, h("thead", {}, head), h("tbody", {}, ...rows))),
+    h("div", {class: "legend"}, [["l0", "свободно"], ["l1", "немного"], ["l2", "много"], ["l3", "почти весь день"], ["lx", "пересечение"]].map(([c, t]) => h("span", {}, h("i", {class: "hm " + c}), t))));
+}
+
 function venuesBody(canEdit) {
   const day = state.day && state.day >= state.today ? state.day : state.today;
   const strip = h("div", {class: "dstrip", role: "tablist"}, Array.from({length: 14}, (_, i) => addDays(state.today, i)).map((d) => {
@@ -329,8 +344,9 @@ function venuesBody(canEdit) {
     return h("button", {class: "dchip", role: "tab", "aria-selected": String(d === day), onclick: () => { state.day = d; render(); }}, h("small", {}, d === state.today ? "сегодня" : p.wd), h("b", {}, String(p.d)));
   }));
   const venues = state.venues.slice();
+  const days14 = Array.from({length: 14}, (_, i) => addDays(state.today, i));
   const noHall = state.events.filter((e) => !e.hall && onDay(e, day));
-  const body = h("div", {class: "venues"}, strip, h("h2", {class: "vday"}, dayTitle(day)));
+  const body = h("div", {class: "venues"}, venues.length ? heatmap(venues, days14, day) : null, strip, h("h2", {class: "vday"}, dayTitle(day)));
   if (canEdit) body.append(h("button", {class: "btn light addv", onclick: () => addVenueSheet()}, icon("plus"), "Новая площадка"));
   if (!venues.length) body.append(h("div", {class: "empty"}, cloud(), h("h3", {}, "Площадок пока нет"), canEdit ? h("div", {}, "Добавьте первую, и сможете видеть, когда она занята") : h("div", {}, "Их добавит администратор")));
   for (const v of venues) body.append(venueCard(v, day, canEdit));
@@ -358,6 +374,20 @@ async function removeVenue(name) {
   try { await api("DELETE", "/api/venues", {name}); toast("Площадка убрана"); await load(); } catch (e) { toast(e.message, {bad: true}); }
 }
 
+/** «Синхронизация» с мессенджерами: уже подключён — галочка, нет — кнопка-ссылка с логином (бот сам привяжет аккаунт). */
+function connectBar() {
+  const me = state.me, cfg = window.KTK || {};
+  const channels = me.channels || [];
+  const chip = (key, label, url) => {
+    const on = channels.includes(key);
+    if (on) return h("span", {class: "conn on"}, icon("check"), label + " подключён");
+    if (!url || !me.login) return null;
+    return h("a", {class: "conn", href: url + encodeURIComponent(me.login), target: "_blank", rel: "noopener"}, icon("plane"), "Подключить " + label);
+  };
+  const chips = [chip("telegram", "Telegram", cfg.BOT_URL ? cfg.BOT_URL + "?start=" : ""), chip("vk", "ВК", cfg.VK_URL ? cfg.VK_URL + "?ref=" : "")].filter(Boolean);
+  return chips.length ? h("div", {class: "connbar"}, ...chips) : null;
+}
+
 function appView() {
   const canEdit = state.me.canEdit;
   const body = state.tab === "venues" ? venuesBody(canEdit) : scheduleBody(canEdit);
@@ -372,7 +402,7 @@ function appView() {
         h("button", {class: "icon-btn", "aria-label": "Выйти", onclick: () => confirmDialog("Выйти?", "Чтобы войти снова, понадобится ваш логин.", "Выйти", logout)}, icon("exit"))),
       h("div", {class: "tabs", role: "tablist"},
         [["all", "Расписание"], ["mine", "Мои смены"], ["venues", "Площадки"]].map(([t, label]) => h("button", {class: "tab", role: "tab", "aria-selected": String(state.tab === t), onclick: () => { state.tab = t; render(); window.scrollTo(0, 0); }}, label)))),
-    old, body,
+    connectBar(), old, body,
     canEdit && state.tab !== "venues" ? h("button", {class: "fab", "aria-label": "Добавить событие", onclick: () => editor(null)}, icon("plus")) : null);
 }
 

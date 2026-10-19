@@ -3,4 +3,5 @@
 window.KTK = {
   API_URL: "https://solitary-fire-f032.a-rastuninbpan.workers.dev/api",
   BOT_URL: "https://t.me/k_t_k_bot",
+  VK_URL: "https://vk.me/club242412073",
 };

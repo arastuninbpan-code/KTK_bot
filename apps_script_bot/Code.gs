@@ -495,6 +495,9 @@ const msgUnknownPhone = "💬 <b>Этого номера нет в списке 
 const msgStopped = "💬 <b>Уведомления отключены.</b>\nЧтобы включить снова, напишите /start.";
 const msgConnected = (name, canPost = false) => `💬 <b>${esc(name)}</b>, вы подключены.\n\n${HELP}${canPost ? "\n/post — опубликовать афишу недели" : ""}`;
 const msgBlocked = "💬 <b>Доступ закрыт.</b>\nОбратитесь к администратору.";
+const msgRequestSent = "💬 <b>Вашего номера нет в списке сотрудников.</b>\nЗаявка передана администратору, он увидит её в таблице. Если хотите, напишите одним сообщением, кто вы (ФИО и должность): оно попадёт администратору.\n\nКак только доступ откроют, я напишу вам сам.";
+const msgCommentSaved = "💬 <b>Передал администратору.</b>\nКак только откроют доступ, я напишу вам сам.";
+const msgAccessGranted = (name) => `✈️ <b>Доступ открыт, ${esc(name)}!</b>\nТеперь я буду присылать уведомления о ваших сменах.\n\n${HELP}`;
 const msgLogin = (login) => `🔑 <b>Ваш логин</b>
 
 <code>${esc(login)}</code>
@@ -555,7 +558,9 @@ function telegramEvent(update) {
   const m = update.message;
   if (!m || !m.chat || m.chat.type !== "private") return null;
   const own = m.contact && m.from && m.contact.user_id === m.from.id;
-  return {chatId: m.chat.id, text: m.text || "", phone: own ? m.contact.phone_number : null, date: m.date || 0};
+  const f = m.from || {};
+  const label = "Telegram " + ([f.first_name, f.last_name].filter(Boolean).join(" ") || "без имени") + (f.username ? " @" + f.username : " (tg://user?id=" + (f.id || m.chat.id) + ")");
+  return {chatId: m.chat.id, text: m.text || "", phone: own ? m.contact.phone_number : null, date: m.date || 0, label};
 }
 
 // ===== lib/vk.mjs =====
@@ -586,7 +591,8 @@ function vkEvent(update) {
   if (!update || update.type !== "message_new") return null;
   const m = (update.object || {}).message;
   if (!m || m.out || !(m.from_id > 0) || m.peer_id !== m.from_id) return null;
-  return {chatId: String(m.peer_id), text: m.text || "", phone: null, eventId: update.event_id || "", date: m.date || 0};
+  // ref — значение из ссылки vk.me/club…?ref=…: так «Подключить ВК» в приложении передаёт логин
+  return {chatId: String(m.peer_id), text: m.text || "", phone: null, eventId: update.event_id || "", date: m.date || 0, start: String(m.ref || ""), label: "ВК https://vk.com/id" + m.peer_id};
 }
 
 /** Коды ошибок messages.send, при которых человеку писать нельзя (запретил сообщения или не начинал диалог). */
@@ -595,7 +601,8 @@ const VK_CANT_WRITE = [901, 902, 900];
 // ===== lib/store.mjs =====
 // Хранилище поверх таблицы: сотрудники и роли, чаты, снимок расписания, коды входа, блокировка.
 
-const TABS = {schedule: "Расписание", staff: "Сотрудники", venues: "Площадки", chats: "Подписчики", state: "_служебное", lock: "_замок"};
+const TABS = {schedule: "Расписание", staff: "Сотрудники", venues: "Площадки", chats: "Подписчики", requests: "_заявки", state: "_служебное", lock: "_замок"};
+const REQUESTS_HEADER = ["Канал", "ID чата", "Телефон"];
 const VENUES_HEADER = ["Площадка", "Заметка"];
 const CHECKED_RE = /^(true|да|yes|1|✓|✔|x|х)$/i; // галочка в таблице: TRUE / ✓ / «да»
 const SUBS_HEADER = ["Канал", "ID чата", "Телефон", "ФИО"];
@@ -622,29 +629,85 @@ class Store {
     this.now = now;
   }
 
-  // --- сотрудники: ФИО | Телефон | Роль (Админ / Редактор / Читатель / Заблокирован) | Логин | группы (колонки с галочками) ---
-  /** Колонки групп: всё правее «Логина», у чего в шапке есть название. */
-  groupCols_(rows) { return (rows[0] || []).map((h, col) => ({name: String(h || "").trim(), col})).filter((g) => g.col >= 4 && g.name); }
+  // --- сотрудники: ФИО | Телефон | Роль | Логин | Доступ (галочка) | Комментарий | группы (колонки с галочками) ---
+  /**
+   * Служебные колонки ищем по заголовку (правее «Логина»): «Доступ» и «Комментарий»; все остальные колонки с названием — группы.
+   * Если колонки «Доступ» нет (старая таблица), доступ есть у всех, кроме роли «Заблокирован».
+   */
+  staffCols_(rows) {
+    const head = (rows[0] || []).map((h) => String(h || "").trim());
+    const find = (re) => head.findIndex((h, i) => i >= 4 && re.test(h));
+    const access = find(/^доступ$/i);
+    const comment = find(/^комментарий$/i);
+    const groups = head.map((name, col) => ({name, col})).filter((g) => g.col >= 4 && g.name && g.col !== access && g.col !== comment);
+    return {access, comment, groups};
+  }
 
   users() {
     const rows = this.book.get(TABS.staff);
-    const defs = this.groupCols_(rows);
+    const {access, groups: defs} = this.staffCols_(rows);
     const out = [];
     for (const row of rows.slice(1)) {
       const [name = "", phones = "", role = "", login = ""] = row;
       const n = String(name).trim();
       if (!n) continue;
+      const hasAccess = access < 0 || CHECKED_RE.test(String(row[access] || "").trim()); // галочка «Доступ» снята — как «Заблокирован»
       const groups = defs.filter((g) => CHECKED_RE.test(String(row[g.col] || "").trim())).map((g) => g.name);
-      for (const phone of phonesIn(phones)) out.push({name: n, phone, role: parseRole(role), login: String(login).trim(), groups});
+      for (const phone of phonesIn(phones)) {
+        out.push({name: n, phone, role: hasAccess ? parseRole(role) : "blocked", login: String(login).trim(), groups, pending: /^заявка/i.test(n)});
+      }
     }
     return out;
   }
 
   /** Группы: [{name, members: [ФИО]}] в порядке колонок. Состав — по галочкам в таблице; заблокированные не входят. */
   groups() {
-    const defs = this.groupCols_(this.book.get(TABS.staff));
+    const {groups: defs} = this.staffCols_(this.book.get(TABS.staff));
     const active = this.activeUsers();
     return defs.map((g) => ({name: g.name, members: [...new Set(active.filter((u) => u.groups.includes(g.name)).map((u) => u.name))]}));
+  }
+
+  // --- заявки на доступ: незнакомый номер -> строка «ЗАЯВКА» в «Сотрудниках» (без галочки «Доступ») + запись в служебном листе ---
+  stamp() { const d = new Date(this.now() + 3 * 3600e3).toISOString(); return `${d.slice(8, 10)}.${d.slice(5, 7)} ${d.slice(11, 16)}`; }
+
+  /** Добавляет или дополняет заявку на доступ; администратор видит строку и комментарий прямо в таблице. */
+  addAccessRequest(phone, note) {
+    const rows = this.book.get(TABS.staff);
+    const cols = this.staffCols_(rows);
+    let commentCol = cols.comment;
+    if (commentCol < 0) { // в старой таблице колонки «Комментарий» ещё нет: заводим справа
+      commentCol = Math.max(4, (rows[0] || []).length);
+      this.book.setCell(TABS.staff, 1, commentCol + 1, "Комментарий");
+    }
+    const line = `[${this.stamp()}] ${note}`;
+    let at = rows.findIndex((r, i) => i > 0 && phonesIn(r[1] || "").includes(phone));
+    if (at >= 0) { // этот номер уже есть (старая заявка): дописываем
+      const old = String(rows[at][commentCol] || "").trim();
+      this.book.setCell(TABS.staff, at + 1, commentCol + 1, old ? old + "\n" + line : line);
+      return at + 1;
+    }
+    at = rows.length;
+    this.book.setCell(TABS.staff, at + 1, 1, "ЗАЯВКА");
+    this.book.setCell(TABS.staff, at + 1, 2, phone);
+    this.book.setCell(TABS.staff, at + 1, commentCol + 1, line);
+    return at + 1;
+  }
+
+  requests() {
+    if (!this.book.has(TABS.requests)) return [];
+    return this.book.get(TABS.requests).slice(1)
+      .map((r, i) => ({row: i + 2, channel: String(r[0] || ""), chatId: String(r[1] || ""), phone: normPhone(r[2] || "")}))
+      .filter((r) => r.channel && r.chatId);
+  }
+
+  addRequest(channel, chatId, phone) {
+    this.book.ensure(TABS.requests, REQUESTS_HEADER);
+    if (this.requests().some((r) => r.channel === channel && r.chatId === String(chatId))) return;
+    this.book.append(TABS.requests, [channel, String(chatId), phone]);
+  }
+
+  removeRequest(channel, chatId) {
+    for (const r of this.requests().filter((x) => x.channel === channel && x.chatId === String(chatId)).reverse()) this.book.clearRow(TABS.requests, r.row);
   }
 
   // --- площадки: лист «Площадки» (название | заметка) ---
@@ -821,6 +884,8 @@ function writeAt(store, table, date, cells, today) {
 }
 
 const publicUser = (u) => ({name: u.name, role: u.role, roleLabel: ROLE_LABELS[u.role], canEdit: canEdit(u.role)});
+/** Для кнопок «Подключить Telegram / ВК»: к каким каналам уже привязан человек и какой у него логин (он идёт в ссылку-подключение). */
+const connections = (store, me) => ({login: me.login, channels: [...new Set(store.chats().filter((c) => c.phone === me.phone).map((c) => c.channel))]});
 
 function handleApi(req, deps) {
   const {store, secret, now = () => Date.now(), afterChange = () => {}, getRev = () => "", bumpRev = () => {}} = deps;
@@ -856,7 +921,7 @@ function handleApi(req, deps) {
       const venues = [...store.venues()];
       for (const e of events) if (e.hall && !venues.some((v) => norm(v) === norm(e.hall))) venues.push(e.hall);
       const editor = canEdit(me.role);
-      return {status: 200, body: {today, me: publicUser(me), roles: headerRoles(table), layout: layoutOf(table).v, rev: getRev(), events, venues,
+      return {status: 200, body: {today, me: {...publicUser(me), ...connections(store, me)}, roles: headerRoles(table), layout: layoutOf(table).v, rev: getRev(), events, venues,
         staff: editor ? store.staffNames() : undefined, groups: editor ? store.groups() : undefined}};
     }
 
@@ -950,21 +1015,44 @@ function handleMessage({store, channel, ev, appUrl = "", now = Date.now(), publi
   const users = store.users();
   const btn = appButton(appUrl);
 
-  // логин, выданный администратором: сразу узнаём человека
-  const byLogin = !phone && text && !text.startsWith("/") ? users.find((x) => x.login && normLogin(x.login) === normLogin(text)) : null;
+  // логин, выданный администратором (или пришедший из ссылки «Подключить» в приложении: /start ЛОГИН): сразу узнаём человека
+  const startPayload = ev.start || (/^\/start(?:@\w+)?\s+(\S+)/i.exec(text) || [])[1] || "";
+  const loginText = startPayload || (text && !text.startsWith("/") ? text : "");
+  const byLogin = !phone && loginText ? users.find((x) => x.login && normLogin(x.login) === normLogin(loginText)) : null;
   if (byLogin) phone = byLogin.phone;
+
+  const label = ev.label || channel.name;
+  const myRequest = () => store.requests().find((r) => r.channel === channel.name && r.chatId === String(chat));
+  // человека нет в таблице: доступа нет, но заявка и его слова видны администратору прямо в листе «Сотрудники»
+  const askAccess = (typed) => {
+    const mine = myRequest();
+    if (mine) store.addAccessRequest(mine.phone, `${label}: пишет другой номер ${typed}`);
+    else { store.addAccessRequest(typed, `${label}: запросил доступ`); store.addRequest(channel.name, chat, typed); }
+    return channel.send(chat, msgRequestSent);
+  };
 
   if (phone) {
     const u = users.find((x) => x.phone === phone);
-    if (!u) return channel.send(chat, msgUnknownPhone);
-    if (u.role === "blocked") return channel.send(chat, msgBlocked);
+    if (!u) return askAccess(phone);
+    if (u.role === "blocked") {
+      if (!u.pending) return channel.send(chat, msgBlocked);
+      store.addRequest(channel.name, chat, phone); // заявка уже есть в таблице, связываем с этим чатом
+      return channel.send(chat, msgRequestSent);
+    }
     store.bind(channel.name, chat, phone, u.name);
     return channel.send(chat, msgWelcome(u.name), "remove");
   }
 
   const mine = store.chats().find((c) => c.channel === channel.name && c.chatId === String(chat));
   const user = mine ? users.find((x) => x.phone === mine.phone) : null;
-  if (!user) return channel.send(chat, msgAskPhone, "contact");
+  if (!user) {
+    const req = myRequest();
+    if (req && text && !text.startsWith("/")) { // сообщение от человека с открытой заявкой: пишем в комментарий администратору
+      store.addAccessRequest(req.phone, `${label}: ${text}`);
+      return channel.send(chat, msgCommentSaved);
+    }
+    return req ? channel.send(chat, msgRequestSent) : channel.send(chat, msgAskPhone, "contact");
+  }
   if (user.role === "blocked") return channel.send(chat, msgBlocked);
 
   const [first = "", ...rest] = text.split(/\s+/);
@@ -1003,6 +1091,14 @@ const text0 = (words) => String(words[0] || "").trim();
 /** Сверяет расписание с прошлой версией, рассылает уведомления и напоминания. senders: {telegram: {send}, ...} */
 function runCycle({store, senders, now = Date.now(), appUrl = "", log = console}) {
   store.ensureLogins();
+  // администратор открыл доступ тем, кто оставил заявку: подключаем их чат и пишем «доступ открыт»
+  for (const rq of store.requests()) {
+    const u = store.activeUsers().find((x) => x.phone === rq.phone);
+    if (!u) continue;
+    store.bind(rq.channel, rq.chatId, u.phone, u.name);
+    store.removeRequest(rq.channel, rq.chatId);
+    try { senders[rq.channel]?.send(rq.chatId, msgAccessGranted(u.name), "remove"); } catch (err) { if (!(err instanceof Gone)) log.error(String(err.message || err)); }
+  }
   const users = store.activeUsers();
   const table = store.book.get(TABS.schedule);
   const snap = store.snapshot();
@@ -1073,7 +1169,7 @@ function secret_() {
 // ---------- кэш листов ----------
 // Чтение листа из таблицы — самое медленное место (около 0,4 с на лист). Часто нужные листы держим в кэше Google и
 // сбрасываем при любой правке: скриптом (GasBook), на сайте (тоже через GasBook) и руками (onSheetChange).
-const CACHED_TABS_ = [TABS.schedule, TABS.staff, TABS.venues, TABS.chats];
+const CACHED_TABS_ = [TABS.schedule, TABS.staff, TABS.venues, TABS.chats, TABS.requests];
 const CACHE_TTL_ = 600; // запас: даже если сброс почему-то не сработал, через 10 минут данные обновятся
 const CACHE_PART_ = 30000; // значение в кэше Google ограничено 100 КБ, режем на куски
 
@@ -1258,6 +1354,7 @@ function everyMinute() {
   const dirty = Number(p.getProperty("dirty") || 0);
   const last = Number(p.getProperty("last_cycle") || 0);
   const dueDirty = dirty && now - dirty >= 15000;
+  if (p.getProperty("regroup")) { p.deleteProperty("regroup"); try { tidySchedule_(); } catch (err) { console.error("Месяцы: " + String(err && err.message ? err.message : err)); } }
   if (!dueDirty && now - last < 4 * 60e3 + 30e3) return;
   withLock_(() => {
     if (dueDirty) p.deleteProperty("dirty");
@@ -1273,6 +1370,7 @@ function everyMinute() {
 function onSheetChange() {
   dropAllCaches_(); // таблицу правили руками: кэшированные листы устарели
   const p = PropertiesService.getScriptProperties();
+  p.setProperty("regroup", "1"); // шапки месяцев и сворачивание поправит ближайший минутный таймер
   const mark = String(Date.now());
   p.setProperty("dirty", mark);
   bumpRev_();
@@ -1313,7 +1411,7 @@ function apiCall_(req) {
     getRev: getRev_,
     bumpRev: bumpRev_,
     // после правки сразу рассылаем уведомления (не ждём таймера); ошибки рассылки не ломают сохранение
-    afterChange: () => { try { runCycle_(); } catch (err) { console.error(String(err && err.message ? err.message : err)); } },
+    afterChange: () => { PropertiesService.getScriptProperties().setProperty("regroup", "1"); try { runCycle_(); } catch (err) { console.error(String(err && err.message ? err.message : err)); } },
   });
   const r = req.method && req.method !== "GET" ? withLock_(call) : call();
   return Object.assign({}, r.body, {_status: r.status});
@@ -1447,6 +1545,7 @@ function styleSheets() {
   styleVenues_(ss.getSheetByName(TABS.venues));
   const chats = ss.getSheetByName(TABS.chats);
   if (chats) styleHeader_(chats, 4);
+  hideHelperSheets_(ss);
   dropAllCaches_();
   console.log("Таблица оформлена.");
 }
@@ -1489,20 +1588,7 @@ function styleHeader_(sheet, cols) {
 /** Шапки месяцев («СЕНТЯБРЬ 2026»), заголовки колонок, чередование строк. */
 function styleSchedule_(sheet) {
   const today = todayIso(Date.now());
-  // 1) шапки месяцев перед первым событием каждого месяца (снизу вверх, чтобы номера строк не съезжали)
-  const values = sheet.getRange(1, 1, sheet.getLastRow(), 1).getDisplayValues();
-  const heads = [];
-  let prevMonth = "";
-  for (let r = 2; r <= values.length; r++) {
-    const cell = String(values[r - 1][0]).trim();
-    if (MONTH_ROW_RE.test(cell)) { prevMonth = cell; continue; }
-    const m = cell.match(/^\s*(\d{1,2}\.\d{2}(?:\.\d{2,4})?)/);
-    const d = m ? parseDate(m[1], today) : null;
-    if (!d) continue;
-    const title = MONTHS_UP[+d.slice(5, 7) - 1] + " " + d.slice(0, 4);
-    if (title !== prevMonth) { heads.push({row: r, title}); prevMonth = title; }
-  }
-  heads.reverse().forEach((h) => { sheet.insertRowBefore(h.row); sheet.getRange(h.row, 1).setNumberFormat("@").setValue(h.title); });
+  ensureMonthHeaders_(sheet);
 
   // 2) оформление
   const lastRow = Math.max(2, sheet.getLastRow());
@@ -1538,6 +1624,89 @@ function styleSchedule_(sheet) {
     .whenFormulaSatisfied('=AND(ISEVEN(ROW()),$A2<>"",NOT(REGEXMATCH($A2,"^[А-ЯЁ]+ [0-9]{4}$")))')
     .setBackground(C.light).setRanges([range]).build();
   sheet.setConditionalFormatRules([banding]);
+  groupMonths_(sheet, true);
+}
+
+/** Шапка месяца перед первым событием каждого месяца, если её нет (снизу вверх, чтобы номера строк не съезжали). Возвращает, сколько добавлено. */
+function ensureMonthHeaders_(sheet) {
+  const today = todayIso(Date.now());
+  const values = sheet.getRange(1, 1, Math.max(sheet.getLastRow(), 1), 1).getDisplayValues();
+  const heads = [];
+  let prevMonth = "";
+  for (let r = 2; r <= values.length; r++) {
+    const cell = String(values[r - 1][0]).trim();
+    if (MONTH_ROW_RE.test(cell)) { prevMonth = cell; continue; }
+    const m = cell.match(/^\s*(\d{1,2}\.\d{2}(?:\.\d{2,4})?)/);
+    const d = m ? parseDate(m[1], today) : null;
+    if (!d) continue;
+    const title = MONTHS_UP[+d.slice(5, 7) - 1] + " " + d.slice(0, 4);
+    if (title !== prevMonth) { heads.push({row: r, title}); prevMonth = title; }
+  }
+  heads.reverse().forEach((h) => { sheet.insertRowBefore(h.row); sheet.getRange(h.row, 1).setNumberFormat("@").setValue(h.title); });
+  return heads.length;
+}
+
+/**
+ * Каждый месяц — группа строк под шапкой: слева значок «−/+» сворачивает месяц целиком.
+ * Прошедшие месяцы свёрнуты по умолчанию; то, как человек развернул или свернул месяц руками, сохраняем.
+ */
+function groupMonths_(sheet, fresh) {
+  const last = sheet.getLastRow();
+  if (last < 2) return;
+  const today = todayIso(Date.now());
+  const col = sheet.getRange(1, 1, last, 1).getDisplayValues();
+  const months = [];
+  for (let r = 2; r <= last; r++) {
+    const t = String(col[r - 1][0]).trim();
+    if (MONTH_ROW_RE.test(t)) months.push({head: r, title: t, end: r});
+    else if (months.length) months[months.length - 1].end = r;
+  }
+  if (!months.length) return;
+  const thisMonth = MONTHS_UP[+today.slice(5, 7) - 1] + " " + today.slice(0, 4);
+  const monthKey = (t) => { const i = MONTHS_UP.indexOf(t.split(" ")[0]); return t.split(" ")[1] + String(i + 100); };
+  sheet.setRowGroupControlPosition(SpreadsheetApp.GroupControlTogglePosition.BEFORE);
+  months.forEach((m) => {
+    const rows = m.end - m.head;
+    if (rows < 1) return;
+    let collapsed = monthKey(m.title) < monthKey(thisMonth);
+    if (!fresh) { const g = sheet.getRowGroup(m.head + 1, 1); if (g) collapsed = g.isCollapsed(); }
+    const range = sheet.getRange(m.head + 1, 1, rows, 1);
+    let depth = sheet.getRowGroupDepth(m.head + 1);
+    if (depth > 1 || (depth === 1 && !sheet.getRowGroup(m.head + 1, 1))) { range.shiftRowGroupDepth(-depth); depth = 0; }
+    if (depth === 0) range.shiftRowGroupDepth(1);
+    const g = sheet.getRowGroup(m.head + 1, 1);
+    if (g) { if (collapsed) g.collapse(); else g.expand(); }
+  });
+}
+
+/** Следит за порядком в «Расписании»: шапки месяцев и сворачивание. Вызывается таймером после изменений. */
+function tidySchedule_() {
+  const ss = SpreadsheetApp.openById(prop_("SHEET_ID"));
+  const sheet = ss.getSheetByName(TABS.schedule);
+  if (!sheet) return;
+  const added = ensureMonthHeaders_(sheet);
+  if (added) {
+    const cols = Math.max(2, sheet.getLastColumn());
+    const col = sheet.getRange(1, 1, sheet.getLastRow(), 1).getDisplayValues();
+    for (let r = 2; r <= col.length; r++) {
+      if (!MONTH_ROW_RE.test(String(col[r - 1][0]).trim())) continue;
+      sheet.getRange(r, 1, 1, cols).merge().setBackground(C.navy).setFontColor(C.white).setFontWeight("bold").setHorizontalAlignment("center").setVerticalAlignment("middle").setFontSize(13);
+      sheet.setRowHeight(r, 38);
+    }
+    dropAllCaches_();
+    bumpRev_();
+  }
+  groupMonths_(sheet, false);
+}
+
+/** Видны только три листа: «Сотрудники», «Расписание», «Площадки». Остальные служебные прячем (они работают, как раньше). */
+function hideHelperSheets_(ss) {
+  const keep = [TABS.staff, TABS.schedule, TABS.venues];
+  ss.getSheets().forEach((sh) => {
+    const name = sh.getName();
+    const helper = keep.indexOf(name) < 0;
+    try { if (helper && !sh.isSheetHidden()) sh.hideSheet(); if (!helper && sh.isSheetHidden()) sh.showSheet(); } catch (e) { console.log("Лист «" + name + "» не скрыт: " + String(e.message || e)); }
+  });
 }
 
 /** Роли выпадающим списком с цветом: Админ / Редактор / Читатель / Заблокирован. */
@@ -1561,17 +1730,46 @@ function styleStaff_(sheet) {
   sheet.setColumnWidth(4, 150);
   sheet.getRange(2, 4, Math.max(sheet.getMaxRows() - 1, 1), 1).setFontFamily("Roboto Mono").setHorizontalAlignment("center");
 
-  // группы: каждая колонка правее «Логина» с названием в шапке — группа; в ячейках галочки «входит в группу»
-  let head = sheet.getRange(1, 1, 1, Math.max(sheet.getLastColumn(), 4)).getDisplayValues()[0];
-  if (head.slice(4).every((x) => !String(x).trim())) { sheet.getRange(1, 5, 1, 3).setNumberFormat("@").setValues([["Актёры", "Техника", "Зал"]]); } // примеры, переименуйте как нужно
-  head = sheet.getRange(1, 1, 1, Math.max(sheet.getLastColumn(), 4)).getDisplayValues()[0];
+  // «Доступ» (галочка) и «Комментарий» — сразу правее «Логина»; у уже внесённых людей доступ включён, у строк «ЗАЯВКА» — выключен
+  let head = sheet.getRange(1, 1, 1, Math.max(sheet.getLastColumn(), 4)).getDisplayValues()[0].map((x) => String(x).trim());
+  if (head.findIndex((x, i) => i >= 4 && /^доступ$/i.test(x)) < 0) {
+    sheet.insertColumnsBefore(5, 2);
+    sheet.getRange(1, 5, 1, 2).setNumberFormat("@").setValues([["Доступ", "Комментарий"]]);
+    const people = sheet.getLastRow() > 1 ? sheet.getRange(2, 1, sheet.getLastRow() - 1, 1).getDisplayValues() : [];
+    const ticks = people.map(([n]) => [String(n).trim() !== "" && !/^заявка/i.test(String(n).trim())]);
+    if (ticks.length) sheet.getRange(2, 5, ticks.length, 1).setValues(ticks);
+  } else if (head.findIndex((x, i) => i >= 4 && /^комментарий$/i.test(x)) < 0) {
+    const at = head.length + 1;
+    sheet.getRange(1, at).setNumberFormat("@").setValue("Комментарий");
+  }
+  head = sheet.getRange(1, 1, 1, Math.max(sheet.getLastColumn(), 4)).getDisplayValues()[0].map((x) => String(x).trim());
+  const accessCol = head.findIndex((x, i) => i >= 4 && /^доступ$/i.test(x)) + 1;
+  const commentCol = head.findIndex((x, i) => i >= 4 && /^комментарий$/i.test(x)) + 1;
   const lastRow = Math.max(sheet.getMaxRows(), 2);
+  const rows = lastRow - 1;
+  const checkbox = SpreadsheetApp.newDataValidation().requireCheckbox().build();
+  sheet.getRange(2, accessCol, rows, 1).setDataValidation(checkbox).setHorizontalAlignment("center");
+  sheet.setColumnWidth(accessCol, 80);
+  sheet.getRange(2, commentCol, rows, 1).setWrap(true).setVerticalAlignment("top");
+  sheet.setColumnWidth(commentCol, 320);
+
+  // группы: остальные колонки с названием в шапке; в ячейках галочки «входит в группу»
+  const isGroup = (x, i) => i >= 4 && x && i + 1 !== accessCol && i + 1 !== commentCol;
+  if (!head.some(isGroup)) { sheet.getRange(1, head.length + 1, 1, 3).setNumberFormat("@").setValues([["Актёры", "Техника", "Зал"]]); head = head.concat(["Актёры", "Техника", "Зал"]); } // примеры, переименуйте как нужно
   for (let c = 5; c <= head.length; c++) {
-    if (!String(head[c - 1]).trim()) continue;
-    sheet.getRange(2, c, lastRow - 1, 1).setDataValidation(SpreadsheetApp.newDataValidation().requireCheckbox().build()).setHorizontalAlignment("center");
+    if (!isGroup(head[c - 1], c - 1)) continue;
+    sheet.getRange(2, c, rows, 1).setDataValidation(checkbox).setHorizontalAlignment("center");
     sheet.setColumnWidth(c, 100);
   }
-  styleHeader_(sheet, Math.max(head.length, 4));
+  styleHeader_(sheet, Math.max(head.length, 6));
+
+  // подсветка: заявка — жёлтым, доступ снят — розовым и серым текстом (правилом, чтобы новые строки красились сами)
+  const A = (n) => String.fromCharCode(64 + n);
+  const whole = sheet.getRange(2, 1, rows, Math.max(head.length, 6));
+  const rules = sheet.getConditionalFormatRules();
+  const request = SpreadsheetApp.newConditionalFormatRule().whenFormulaSatisfied('=REGEXMATCH($A2,"^(?i)заявка")').setBackground("#FFF2B3").setRanges([whole]).build();
+  const off = SpreadsheetApp.newConditionalFormatRule().whenFormulaSatisfied("=AND($A2<>\"\",$" + A(accessCol) + "2=FALSE)").setBackground("#FBE0DF").setFontColor("#8A8A8A").setRanges([whole]).build();
+  sheet.setConditionalFormatRules(rules.concat([request, off]));
 }
 
 function styleVenues_(sheet) {

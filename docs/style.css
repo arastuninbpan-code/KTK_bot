@@ -202,3 +202,29 @@ body.modal-open { overflow: hidden; }
 @keyframes pulse { 0%, 70%, 100% { opacity: .3; transform: translateY(0) } 35% { opacity: 1; transform: translateY(-4px) } }
 @media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
 @media (min-width: 700px) { .overlay { align-items: center; } .sheet { border-bottom: 3px solid var(--navy); border-radius: 28px; } }
+
+/* тепловая карта занятости площадок */
+.heat { margin: 4px 0 12px; border: var(--line); border-radius: 18px; background: var(--white); padding: 10px 8px 8px; }
+.heatscroll { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+.heat table { border-collapse: separate; border-spacing: 3px; min-width: 100%; }
+.heat th { font-weight: 400; color: var(--muted); text-align: center; padding: 0 2px; }
+.heat th small { display: block; font-size: 10px; text-transform: uppercase; }
+.heat th b { display: block; font-size: 13px; color: var(--navy); }
+.heat th.sel b { color: var(--blue); text-decoration: underline; }
+.heat th.hv { position: sticky; left: 0; background: var(--white); text-align: left; font-size: 12px; font-weight: 700; color: var(--navy); padding-right: 6px; max-width: 110px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; z-index: 1; }
+.hm { display: block; width: 26px; height: 26px; min-width: 26px; border-radius: 8px; border: 2px solid transparent; padding: 0; cursor: pointer; background: var(--light); }
+.hm.l0 { background: #EAF8EE; border-color: #BFE6CB; }
+.hm.l1 { background: #FBF0B8; }
+.hm.l2 { background: var(--peach); }
+.hm.l3 { background: var(--orange); }
+.hm.lx { background: var(--coral); }
+.hm.sel { border-color: var(--navy); }
+.legend { display: flex; flex-wrap: wrap; gap: 6px 12px; margin-top: 8px; font-size: 11px; color: var(--muted); }
+.legend span { display: inline-flex; align-items: center; gap: 4px; }
+.legend .hm { width: 12px; height: 12px; min-width: 12px; border-radius: 4px; cursor: default; }
+
+/* подключение Telegram / ВК */
+.connbar { display: flex; flex-wrap: wrap; gap: 8px; margin: 8px 0 4px; }
+.conn { display: inline-flex; align-items: center; gap: 6px; padding: 7px 12px; border: var(--line); border-radius: 999px; background: var(--cream); color: var(--navy); font-size: 13px; font-weight: 700; text-decoration: none; }
+.conn.on { background: #EAF8EE; border-width: 2px; }
+.conn .ico { width: 16px; height: 16px; }

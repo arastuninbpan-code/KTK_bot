@@ -1,6 +1,6 @@
 // Диалог с сотрудником (одинаков для любого мессенджера) и рассылка уведомлений. Синхронный код.
 import {looksLikePhone, matchPhones, normPhone, parseEvents, parseGrid, planCycle, todayIso} from "./core.mjs";
-import {afishaText, appButton, msgAskPhone, msgBlocked, msgChange, msgConnected, msgLogin, msgPostEmpty, msgPostNoRights, msgPostNotConfigured, msgPostPreview, msgPostResult, msgReminder, msgStopped, msgUnknownPhone, msgWelcome, publicAfishaText, shiftsText} from "./format.mjs";
+import {afishaText, appButton, msgAskPhone, msgBlocked, msgChange, msgConnected, msgAccessGranted, msgCommentSaved, msgLogin, msgPostEmpty, msgPostNoRights, msgPostNotConfigured, msgPostPreview, msgPostResult, msgReminder, msgRequestSent, msgStopped, msgWelcome, publicAfishaText, shiftsText} from "./format.mjs";
 import {Gone} from "./telegram.mjs";
 import {canEdit, normLogin, TABS} from "./store.mjs";
 
@@ -17,21 +17,44 @@ export function handleMessage({store, channel, ev, appUrl = "", now = Date.now()
   const users = store.users();
   const btn = appButton(appUrl);
 
-  // логин, выданный администратором: сразу узнаём человека
-  const byLogin = !phone && text && !text.startsWith("/") ? users.find((x) => x.login && normLogin(x.login) === normLogin(text)) : null;
+  // логин, выданный администратором (или пришедший из ссылки «Подключить» в приложении: /start ЛОГИН): сразу узнаём человека
+  const startPayload = ev.start || (/^\/start(?:@\w+)?\s+(\S+)/i.exec(text) || [])[1] || "";
+  const loginText = startPayload || (text && !text.startsWith("/") ? text : "");
+  const byLogin = !phone && loginText ? users.find((x) => x.login && normLogin(x.login) === normLogin(loginText)) : null;
   if (byLogin) phone = byLogin.phone;
+
+  const label = ev.label || channel.name;
+  const myRequest = () => store.requests().find((r) => r.channel === channel.name && r.chatId === String(chat));
+  // человека нет в таблице: доступа нет, но заявка и его слова видны администратору прямо в листе «Сотрудники»
+  const askAccess = (typed) => {
+    const mine = myRequest();
+    if (mine) store.addAccessRequest(mine.phone, `${label}: пишет другой номер ${typed}`);
+    else { store.addAccessRequest(typed, `${label}: запросил доступ`); store.addRequest(channel.name, chat, typed); }
+    return channel.send(chat, msgRequestSent);
+  };
 
   if (phone) {
     const u = users.find((x) => x.phone === phone);
-    if (!u) return channel.send(chat, msgUnknownPhone);
-    if (u.role === "blocked") return channel.send(chat, msgBlocked);
+    if (!u) return askAccess(phone);
+    if (u.role === "blocked") {
+      if (!u.pending) return channel.send(chat, msgBlocked);
+      store.addRequest(channel.name, chat, phone); // заявка уже есть в таблице, связываем с этим чатом
+      return channel.send(chat, msgRequestSent);
+    }
     store.bind(channel.name, chat, phone, u.name);
     return channel.send(chat, msgWelcome(u.name), "remove");
   }
 
   const mine = store.chats().find((c) => c.channel === channel.name && c.chatId === String(chat));
   const user = mine ? users.find((x) => x.phone === mine.phone) : null;
-  if (!user) return channel.send(chat, msgAskPhone, "contact");
+  if (!user) {
+    const req = myRequest();
+    if (req && text && !text.startsWith("/")) { // сообщение от человека с открытой заявкой: пишем в комментарий администратору
+      store.addAccessRequest(req.phone, `${label}: ${text}`);
+      return channel.send(chat, msgCommentSaved);
+    }
+    return req ? channel.send(chat, msgRequestSent) : channel.send(chat, msgAskPhone, "contact");
+  }
   if (user.role === "blocked") return channel.send(chat, msgBlocked);
 
   const [first = "", ...rest] = text.split(/\s+/);
@@ -70,6 +93,14 @@ const text0 = (words) => String(words[0] || "").trim();
 /** Сверяет расписание с прошлой версией, рассылает уведомления и напоминания. senders: {telegram: {send}, ...} */
 export function runCycle({store, senders, now = Date.now(), appUrl = "", log = console}) {
   store.ensureLogins();
+  // администратор открыл доступ тем, кто оставил заявку: подключаем их чат и пишем «доступ открыт»
+  for (const rq of store.requests()) {
+    const u = store.activeUsers().find((x) => x.phone === rq.phone);
+    if (!u) continue;
+    store.bind(rq.channel, rq.chatId, u.phone, u.name);
+    store.removeRequest(rq.channel, rq.chatId);
+    try { senders[rq.channel]?.send(rq.chatId, msgAccessGranted(u.name), "remove"); } catch (err) { if (!(err instanceof Gone)) log.error(String(err.message || err)); }
+  }
   const users = store.activeUsers();
   const table = store.book.get(TABS.schedule);
   const snap = store.snapshot();

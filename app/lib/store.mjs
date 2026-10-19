@@ -2,7 +2,8 @@
 import {normPhone, phonesIn} from "./core.mjs";
 import {platform} from "./platform.mjs";
 
-export const TABS = {schedule: "Расписание", staff: "Сотрудники", venues: "Площадки", chats: "Подписчики", state: "_служебное", lock: "_замок"};
+export const TABS = {schedule: "Расписание", staff: "Сотрудники", venues: "Площадки", chats: "Подписчики", requests: "_заявки", state: "_служебное", lock: "_замок"};
+export const REQUESTS_HEADER = ["Канал", "ID чата", "Телефон"];
 export const VENUES_HEADER = ["Площадка", "Заметка"];
 const CHECKED_RE = /^(true|да|yes|1|✓|✔|x|х)$/i; // галочка в таблице: TRUE / ✓ / «да»
 export const SUBS_HEADER = ["Канал", "ID чата", "Телефон", "ФИО"];
@@ -29,29 +30,85 @@ export class Store {
     this.now = now;
   }
 
-  // --- сотрудники: ФИО | Телефон | Роль (Админ / Редактор / Читатель / Заблокирован) | Логин | группы (колонки с галочками) ---
-  /** Колонки групп: всё правее «Логина», у чего в шапке есть название. */
-  groupCols_(rows) { return (rows[0] || []).map((h, col) => ({name: String(h || "").trim(), col})).filter((g) => g.col >= 4 && g.name); }
+  // --- сотрудники: ФИО | Телефон | Роль | Логин | Доступ (галочка) | Комментарий | группы (колонки с галочками) ---
+  /**
+   * Служебные колонки ищем по заголовку (правее «Логина»): «Доступ» и «Комментарий»; все остальные колонки с названием — группы.
+   * Если колонки «Доступ» нет (старая таблица), доступ есть у всех, кроме роли «Заблокирован».
+   */
+  staffCols_(rows) {
+    const head = (rows[0] || []).map((h) => String(h || "").trim());
+    const find = (re) => head.findIndex((h, i) => i >= 4 && re.test(h));
+    const access = find(/^доступ$/i);
+    const comment = find(/^комментарий$/i);
+    const groups = head.map((name, col) => ({name, col})).filter((g) => g.col >= 4 && g.name && g.col !== access && g.col !== comment);
+    return {access, comment, groups};
+  }
 
   users() {
     const rows = this.book.get(TABS.staff);
-    const defs = this.groupCols_(rows);
+    const {access, groups: defs} = this.staffCols_(rows);
     const out = [];
     for (const row of rows.slice(1)) {
       const [name = "", phones = "", role = "", login = ""] = row;
       const n = String(name).trim();
       if (!n) continue;
+      const hasAccess = access < 0 || CHECKED_RE.test(String(row[access] || "").trim()); // галочка «Доступ» снята — как «Заблокирован»
       const groups = defs.filter((g) => CHECKED_RE.test(String(row[g.col] || "").trim())).map((g) => g.name);
-      for (const phone of phonesIn(phones)) out.push({name: n, phone, role: parseRole(role), login: String(login).trim(), groups});
+      for (const phone of phonesIn(phones)) {
+        out.push({name: n, phone, role: hasAccess ? parseRole(role) : "blocked", login: String(login).trim(), groups, pending: /^заявка/i.test(n)});
+      }
     }
     return out;
   }
 
   /** Группы: [{name, members: [ФИО]}] в порядке колонок. Состав — по галочкам в таблице; заблокированные не входят. */
   groups() {
-    const defs = this.groupCols_(this.book.get(TABS.staff));
+    const {groups: defs} = this.staffCols_(this.book.get(TABS.staff));
     const active = this.activeUsers();
     return defs.map((g) => ({name: g.name, members: [...new Set(active.filter((u) => u.groups.includes(g.name)).map((u) => u.name))]}));
+  }
+
+  // --- заявки на доступ: незнакомый номер -> строка «ЗАЯВКА» в «Сотрудниках» (без галочки «Доступ») + запись в служебном листе ---
+  stamp() { const d = new Date(this.now() + 3 * 3600e3).toISOString(); return `${d.slice(8, 10)}.${d.slice(5, 7)} ${d.slice(11, 16)}`; }
+
+  /** Добавляет или дополняет заявку на доступ; администратор видит строку и комментарий прямо в таблице. */
+  addAccessRequest(phone, note) {
+    const rows = this.book.get(TABS.staff);
+    const cols = this.staffCols_(rows);
+    let commentCol = cols.comment;
+    if (commentCol < 0) { // в старой таблице колонки «Комментарий» ещё нет: заводим справа
+      commentCol = Math.max(4, (rows[0] || []).length);
+      this.book.setCell(TABS.staff, 1, commentCol + 1, "Комментарий");
+    }
+    const line = `[${this.stamp()}] ${note}`;
+    let at = rows.findIndex((r, i) => i > 0 && phonesIn(r[1] || "").includes(phone));
+    if (at >= 0) { // этот номер уже есть (старая заявка): дописываем
+      const old = String(rows[at][commentCol] || "").trim();
+      this.book.setCell(TABS.staff, at + 1, commentCol + 1, old ? old + "\n" + line : line);
+      return at + 1;
+    }
+    at = rows.length;
+    this.book.setCell(TABS.staff, at + 1, 1, "ЗАЯВКА");
+    this.book.setCell(TABS.staff, at + 1, 2, phone);
+    this.book.setCell(TABS.staff, at + 1, commentCol + 1, line);
+    return at + 1;
+  }
+
+  requests() {
+    if (!this.book.has(TABS.requests)) return [];
+    return this.book.get(TABS.requests).slice(1)
+      .map((r, i) => ({row: i + 2, channel: String(r[0] || ""), chatId: String(r[1] || ""), phone: normPhone(r[2] || "")}))
+      .filter((r) => r.channel && r.chatId);
+  }
+
+  addRequest(channel, chatId, phone) {
+    this.book.ensure(TABS.requests, REQUESTS_HEADER);
+    if (this.requests().some((r) => r.channel === channel && r.chatId === String(chatId))) return;
+    this.book.append(TABS.requests, [channel, String(chatId), phone]);
+  }
+
+  removeRequest(channel, chatId) {
+    for (const r of this.requests().filter((x) => x.channel === channel && x.chatId === String(chatId)).reverse()) this.book.clearRow(TABS.requests, r.row);
   }
 
   // --- площадки: лист «Площадки» (название | заметка) ---

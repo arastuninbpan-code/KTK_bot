@@ -28,6 +28,8 @@ function writeAt(store, table, date, cells, today) {
 }
 
 const publicUser = (u) => ({name: u.name, role: u.role, roleLabel: ROLE_LABELS[u.role], canEdit: canEdit(u.role)});
+/** Для кнопок «Подключить Telegram / ВК»: к каким каналам уже привязан человек и какой у него логин (он идёт в ссылку-подключение). */
+const connections = (store, me) => ({login: me.login, channels: [...new Set(store.chats().filter((c) => c.phone === me.phone).map((c) => c.channel))]});
 
 export function handleApi(req, deps) {
   const {store, secret, now = () => Date.now(), afterChange = () => {}, getRev = () => "", bumpRev = () => {}} = deps;
@@ -63,7 +65,7 @@ export function handleApi(req, deps) {
       const venues = [...store.venues()];
       for (const e of events) if (e.hall && !venues.some((v) => norm(v) === norm(e.hall))) venues.push(e.hall);
       const editor = canEdit(me.role);
-      return {status: 200, body: {today, me: publicUser(me), roles: headerRoles(table), layout: layoutOf(table).v, rev: getRev(), events, venues,
+      return {status: 200, body: {today, me: {...publicUser(me), ...connections(store, me)}, roles: headerRoles(table), layout: layoutOf(table).v, rev: getRev(), events, venues,
         staff: editor ? store.staffNames() : undefined, groups: editor ? store.groups() : undefined}};
     }
 

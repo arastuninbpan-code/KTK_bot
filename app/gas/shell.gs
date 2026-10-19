@@ -36,7 +36,7 @@ function secret_() {
 // ---------- кэш листов ----------
 // Чтение листа из таблицы — самое медленное место (около 0,4 с на лист). Часто нужные листы держим в кэше Google и
 // сбрасываем при любой правке: скриптом (GasBook), на сайте (тоже через GasBook) и руками (onSheetChange).
-const CACHED_TABS_ = [TABS.schedule, TABS.staff, TABS.venues, TABS.chats];
+const CACHED_TABS_ = [TABS.schedule, TABS.staff, TABS.venues, TABS.chats, TABS.requests];
 const CACHE_TTL_ = 600; // запас: даже если сброс почему-то не сработал, через 10 минут данные обновятся
 const CACHE_PART_ = 30000; // значение в кэше Google ограничено 100 КБ, режем на куски
 
@@ -221,6 +221,7 @@ function everyMinute() {
   const dirty = Number(p.getProperty("dirty") || 0);
   const last = Number(p.getProperty("last_cycle") || 0);
   const dueDirty = dirty && now - dirty >= 15000;
+  if (p.getProperty("regroup")) { p.deleteProperty("regroup"); try { tidySchedule_(); } catch (err) { console.error("Месяцы: " + String(err && err.message ? err.message : err)); } }
   if (!dueDirty && now - last < 4 * 60e3 + 30e3) return;
   withLock_(() => {
     if (dueDirty) p.deleteProperty("dirty");
@@ -236,6 +237,7 @@ function everyMinute() {
 function onSheetChange() {
   dropAllCaches_(); // таблицу правили руками: кэшированные листы устарели
   const p = PropertiesService.getScriptProperties();
+  p.setProperty("regroup", "1"); // шапки месяцев и сворачивание поправит ближайший минутный таймер
   const mark = String(Date.now());
   p.setProperty("dirty", mark);
   bumpRev_();
@@ -276,7 +278,7 @@ function apiCall_(req) {
     getRev: getRev_,
     bumpRev: bumpRev_,
     // после правки сразу рассылаем уведомления (не ждём таймера); ошибки рассылки не ломают сохранение
-    afterChange: () => { try { runCycle_(); } catch (err) { console.error(String(err && err.message ? err.message : err)); } },
+    afterChange: () => { PropertiesService.getScriptProperties().setProperty("regroup", "1"); try { runCycle_(); } catch (err) { console.error(String(err && err.message ? err.message : err)); } },
   });
   const r = req.method && req.method !== "GET" ? withLock_(call) : call();
   return Object.assign({}, r.body, {_status: r.status});
@@ -410,6 +412,7 @@ function styleSheets() {
   styleVenues_(ss.getSheetByName(TABS.venues));
   const chats = ss.getSheetByName(TABS.chats);
   if (chats) styleHeader_(chats, 4);
+  hideHelperSheets_(ss);
   dropAllCaches_();
   console.log("Таблица оформлена.");
 }
@@ -452,20 +455,7 @@ function styleHeader_(sheet, cols) {
 /** Шапки месяцев («СЕНТЯБРЬ 2026»), заголовки колонок, чередование строк. */
 function styleSchedule_(sheet) {
   const today = todayIso(Date.now());
-  // 1) шапки месяцев перед первым событием каждого месяца (снизу вверх, чтобы номера строк не съезжали)
-  const values = sheet.getRange(1, 1, sheet.getLastRow(), 1).getDisplayValues();
-  const heads = [];
-  let prevMonth = "";
-  for (let r = 2; r <= values.length; r++) {
-    const cell = String(values[r - 1][0]).trim();
-    if (MONTH_ROW_RE.test(cell)) { prevMonth = cell; continue; }
-    const m = cell.match(/^\s*(\d{1,2}\.\d{2}(?:\.\d{2,4})?)/);
-    const d = m ? parseDate(m[1], today) : null;
-    if (!d) continue;
-    const title = MONTHS_UP[+d.slice(5, 7) - 1] + " " + d.slice(0, 4);
-    if (title !== prevMonth) { heads.push({row: r, title}); prevMonth = title; }
-  }
-  heads.reverse().forEach((h) => { sheet.insertRowBefore(h.row); sheet.getRange(h.row, 1).setNumberFormat("@").setValue(h.title); });
+  ensureMonthHeaders_(sheet);
 
   // 2) оформление
   const lastRow = Math.max(2, sheet.getLastRow());
@@ -501,6 +491,89 @@ function styleSchedule_(sheet) {
     .whenFormulaSatisfied('=AND(ISEVEN(ROW()),$A2<>"",NOT(REGEXMATCH($A2,"^[А-ЯЁ]+ [0-9]{4}$")))')
     .setBackground(C.light).setRanges([range]).build();
   sheet.setConditionalFormatRules([banding]);
+  groupMonths_(sheet, true);
+}
+
+/** Шапка месяца перед первым событием каждого месяца, если её нет (снизу вверх, чтобы номера строк не съезжали). Возвращает, сколько добавлено. */
+function ensureMonthHeaders_(sheet) {
+  const today = todayIso(Date.now());
+  const values = sheet.getRange(1, 1, Math.max(sheet.getLastRow(), 1), 1).getDisplayValues();
+  const heads = [];
+  let prevMonth = "";
+  for (let r = 2; r <= values.length; r++) {
+    const cell = String(values[r - 1][0]).trim();
+    if (MONTH_ROW_RE.test(cell)) { prevMonth = cell; continue; }
+    const m = cell.match(/^\s*(\d{1,2}\.\d{2}(?:\.\d{2,4})?)/);
+    const d = m ? parseDate(m[1], today) : null;
+    if (!d) continue;
+    const title = MONTHS_UP[+d.slice(5, 7) - 1] + " " + d.slice(0, 4);
+    if (title !== prevMonth) { heads.push({row: r, title}); prevMonth = title; }
+  }
+  heads.reverse().forEach((h) => { sheet.insertRowBefore(h.row); sheet.getRange(h.row, 1).setNumberFormat("@").setValue(h.title); });
+  return heads.length;
+}
+
+/**
+ * Каждый месяц — группа строк под шапкой: слева значок «−/+» сворачивает месяц целиком.
+ * Прошедшие месяцы свёрнуты по умолчанию; то, как человек развернул или свернул месяц руками, сохраняем.
+ */
+function groupMonths_(sheet, fresh) {
+  const last = sheet.getLastRow();
+  if (last < 2) return;
+  const today = todayIso(Date.now());
+  const col = sheet.getRange(1, 1, last, 1).getDisplayValues();
+  const months = [];
+  for (let r = 2; r <= last; r++) {
+    const t = String(col[r - 1][0]).trim();
+    if (MONTH_ROW_RE.test(t)) months.push({head: r, title: t, end: r});
+    else if (months.length) months[months.length - 1].end = r;
+  }
+  if (!months.length) return;
+  const thisMonth = MONTHS_UP[+today.slice(5, 7) - 1] + " " + today.slice(0, 4);
+  const monthKey = (t) => { const i = MONTHS_UP.indexOf(t.split(" ")[0]); return t.split(" ")[1] + String(i + 100); };
+  sheet.setRowGroupControlPosition(SpreadsheetApp.GroupControlTogglePosition.BEFORE);
+  months.forEach((m) => {
+    const rows = m.end - m.head;
+    if (rows < 1) return;
+    let collapsed = monthKey(m.title) < monthKey(thisMonth);
+    if (!fresh) { const g = sheet.getRowGroup(m.head + 1, 1); if (g) collapsed = g.isCollapsed(); }
+    const range = sheet.getRange(m.head + 1, 1, rows, 1);
+    let depth = sheet.getRowGroupDepth(m.head + 1);
+    if (depth > 1 || (depth === 1 && !sheet.getRowGroup(m.head + 1, 1))) { range.shiftRowGroupDepth(-depth); depth = 0; }
+    if (depth === 0) range.shiftRowGroupDepth(1);
+    const g = sheet.getRowGroup(m.head + 1, 1);
+    if (g) { if (collapsed) g.collapse(); else g.expand(); }
+  });
+}
+
+/** Следит за порядком в «Расписании»: шапки месяцев и сворачивание. Вызывается таймером после изменений. */
+function tidySchedule_() {
+  const ss = SpreadsheetApp.openById(prop_("SHEET_ID"));
+  const sheet = ss.getSheetByName(TABS.schedule);
+  if (!sheet) return;
+  const added = ensureMonthHeaders_(sheet);
+  if (added) {
+    const cols = Math.max(2, sheet.getLastColumn());
+    const col = sheet.getRange(1, 1, sheet.getLastRow(), 1).getDisplayValues();
+    for (let r = 2; r <= col.length; r++) {
+      if (!MONTH_ROW_RE.test(String(col[r - 1][0]).trim())) continue;
+      sheet.getRange(r, 1, 1, cols).merge().setBackground(C.navy).setFontColor(C.white).setFontWeight("bold").setHorizontalAlignment("center").setVerticalAlignment("middle").setFontSize(13);
+      sheet.setRowHeight(r, 38);
+    }
+    dropAllCaches_();
+    bumpRev_();
+  }
+  groupMonths_(sheet, false);
+}
+
+/** Видны только три листа: «Сотрудники», «Расписание», «Площадки». Остальные служебные прячем (они работают, как раньше). */
+function hideHelperSheets_(ss) {
+  const keep = [TABS.staff, TABS.schedule, TABS.venues];
+  ss.getSheets().forEach((sh) => {
+    const name = sh.getName();
+    const helper = keep.indexOf(name) < 0;
+    try { if (helper && !sh.isSheetHidden()) sh.hideSheet(); if (!helper && sh.isSheetHidden()) sh.showSheet(); } catch (e) { console.log("Лист «" + name + "» не скрыт: " + String(e.message || e)); }
+  });
 }
 
 /** Роли выпадающим списком с цветом: Админ / Редактор / Читатель / Заблокирован. */
@@ -524,17 +597,46 @@ function styleStaff_(sheet) {
   sheet.setColumnWidth(4, 150);
   sheet.getRange(2, 4, Math.max(sheet.getMaxRows() - 1, 1), 1).setFontFamily("Roboto Mono").setHorizontalAlignment("center");
 
-  // группы: каждая колонка правее «Логина» с названием в шапке — группа; в ячейках галочки «входит в группу»
-  let head = sheet.getRange(1, 1, 1, Math.max(sheet.getLastColumn(), 4)).getDisplayValues()[0];
-  if (head.slice(4).every((x) => !String(x).trim())) { sheet.getRange(1, 5, 1, 3).setNumberFormat("@").setValues([["Актёры", "Техника", "Зал"]]); } // примеры, переименуйте как нужно
-  head = sheet.getRange(1, 1, 1, Math.max(sheet.getLastColumn(), 4)).getDisplayValues()[0];
+  // «Доступ» (галочка) и «Комментарий» — сразу правее «Логина»; у уже внесённых людей доступ включён, у строк «ЗАЯВКА» — выключен
+  let head = sheet.getRange(1, 1, 1, Math.max(sheet.getLastColumn(), 4)).getDisplayValues()[0].map((x) => String(x).trim());
+  if (head.findIndex((x, i) => i >= 4 && /^доступ$/i.test(x)) < 0) {
+    sheet.insertColumnsBefore(5, 2);
+    sheet.getRange(1, 5, 1, 2).setNumberFormat("@").setValues([["Доступ", "Комментарий"]]);
+    const people = sheet.getLastRow() > 1 ? sheet.getRange(2, 1, sheet.getLastRow() - 1, 1).getDisplayValues() : [];
+    const ticks = people.map(([n]) => [String(n).trim() !== "" && !/^заявка/i.test(String(n).trim())]);
+    if (ticks.length) sheet.getRange(2, 5, ticks.length, 1).setValues(ticks);
+  } else if (head.findIndex((x, i) => i >= 4 && /^комментарий$/i.test(x)) < 0) {
+    const at = head.length + 1;
+    sheet.getRange(1, at).setNumberFormat("@").setValue("Комментарий");
+  }
+  head = sheet.getRange(1, 1, 1, Math.max(sheet.getLastColumn(), 4)).getDisplayValues()[0].map((x) => String(x).trim());
+  const accessCol = head.findIndex((x, i) => i >= 4 && /^доступ$/i.test(x)) + 1;
+  const commentCol = head.findIndex((x, i) => i >= 4 && /^комментарий$/i.test(x)) + 1;
   const lastRow = Math.max(sheet.getMaxRows(), 2);
+  const rows = lastRow - 1;
+  const checkbox = SpreadsheetApp.newDataValidation().requireCheckbox().build();
+  sheet.getRange(2, accessCol, rows, 1).setDataValidation(checkbox).setHorizontalAlignment("center");
+  sheet.setColumnWidth(accessCol, 80);
+  sheet.getRange(2, commentCol, rows, 1).setWrap(true).setVerticalAlignment("top");
+  sheet.setColumnWidth(commentCol, 320);
+
+  // группы: остальные колонки с названием в шапке; в ячейках галочки «входит в группу»
+  const isGroup = (x, i) => i >= 4 && x && i + 1 !== accessCol && i + 1 !== commentCol;
+  if (!head.some(isGroup)) { sheet.getRange(1, head.length + 1, 1, 3).setNumberFormat("@").setValues([["Актёры", "Техника", "Зал"]]); head = head.concat(["Актёры", "Техника", "Зал"]); } // примеры, переименуйте как нужно
   for (let c = 5; c <= head.length; c++) {
-    if (!String(head[c - 1]).trim()) continue;
-    sheet.getRange(2, c, lastRow - 1, 1).setDataValidation(SpreadsheetApp.newDataValidation().requireCheckbox().build()).setHorizontalAlignment("center");
+    if (!isGroup(head[c - 1], c - 1)) continue;
+    sheet.getRange(2, c, rows, 1).setDataValidation(checkbox).setHorizontalAlignment("center");
     sheet.setColumnWidth(c, 100);
   }
-  styleHeader_(sheet, Math.max(head.length, 4));
+  styleHeader_(sheet, Math.max(head.length, 6));
+
+  // подсветка: заявка — жёлтым, доступ снят — розовым и серым текстом (правилом, чтобы новые строки красились сами)
+  const A = (n) => String.fromCharCode(64 + n);
+  const whole = sheet.getRange(2, 1, rows, Math.max(head.length, 6));
+  const rules = sheet.getConditionalFormatRules();
+  const request = SpreadsheetApp.newConditionalFormatRule().whenFormulaSatisfied('=REGEXMATCH($A2,"^(?i)заявка")').setBackground("#FFF2B3").setRanges([whole]).build();
+  const off = SpreadsheetApp.newConditionalFormatRule().whenFormulaSatisfied("=AND($A2<>\"\",$" + A(accessCol) + "2=FALSE)").setBackground("#FBE0DF").setFontColor("#8A8A8A").setRanges([whole]).build();
+  sheet.setConditionalFormatRules(rules.concat([request, off]));
 }
 
 function styleVenues_(sheet) {

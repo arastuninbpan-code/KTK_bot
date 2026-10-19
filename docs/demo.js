@@ -19,7 +19,7 @@
     {row: 7, date: iso(6), dateEnd: "", time: "11:00", end: "13:00", title: "Спектакль «Мери Поппинс»", hall: "Большая сцена", roles: {[A]: ["Иванова М.В.", "Сидорова Л.Р."], [G]: ["Морозова Н.М."], [K]: ["Орлова А.В."], [M]: ["Кузнецова Е.Н."]}},
     {row: 8, date: iso(8), dateEnd: iso(12), time: "", end: "", title: "Фестиваль в Барнауле", hall: "", roles: {}},
   ].map((e) => ({...e, rev: "d" + e.row}));
-  const users = {"ADMIN": {name: "Иванова М.В.", role: "admin", roleLabel: "Админ", canEdit: true}, "READER": {name: "Петрова Л.Н.", role: "reader", roleLabel: "Читатель", canEdit: false}};
+  const users = {"ADMIN": {name: "Иванова М.В.", role: "admin", roleLabel: "Админ", canEdit: true, login: "ADMIN", channels: ["telegram"]}, "READER": {name: "Петрова Л.Н.", role: "reader", roleLabel: "Читатель", canEdit: false, login: "READER", channels: []}};
   const key = (s) => String(s || "").toLowerCase().split(/\s+/).filter(Boolean).join(" ");
   const toMin = (t) => { const m = /^(\d{1,2}):(\d{2})$/.exec(t || ""); return m ? +m[1] * 60 + +m[2] : null; };
   const slots = (e) => { const s = String(e.time || "").split(/,\s*/).map(toMin).filter((x) => x !== null); if (e.dateEnd || !s.length) return [[0, 1440]]; const en = s.length === 1 ? toMin(e.end) : null; return s.map((a) => [a, en !== null && en > a ? en : a + 120]); };

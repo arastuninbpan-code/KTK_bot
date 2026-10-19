@@ -25,7 +25,8 @@ export function vkEvent(update) {
   if (!update || update.type !== "message_new") return null;
   const m = (update.object || {}).message;
   if (!m || m.out || !(m.from_id > 0) || m.peer_id !== m.from_id) return null;
-  return {chatId: String(m.peer_id), text: m.text || "", phone: null, eventId: update.event_id || "", date: m.date || 0};
+  // ref — значение из ссылки vk.me/club…?ref=…: так «Подключить ВК» в приложении передаёт логин
+  return {chatId: String(m.peer_id), text: m.text || "", phone: null, eventId: update.event_id || "", date: m.date || 0, start: String(m.ref || ""), label: "ВК https://vk.com/id" + m.peer_id};
 }
 
 /** Коды ошибок messages.send, при которых человеку писать нельзя (запретил сообщения или не начинал диалог). */
