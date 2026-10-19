@@ -9,7 +9,7 @@ import {canEdit, normLogin, TABS} from "./store.mjs";
  * ev: {chatId, text, phone}
  * publishers: {targets(): [названия мест], post(text): [строки-итоги]} — публикация афиши в группу ВК / канал Telegram (необязательно)
  */
-export function handleMessage({store, channel, ev, appUrl = "", now = Date.now(), publishers = null}) {
+export function handleMessage({store, channel, ev, appUrl = "", now = Date.now(), publishers = null, log = () => {}}) {
   const chat = ev.chatId;
   const text = String(ev.text || "").trim();
   let phone = ev.phone ? normPhone(ev.phone) : null;
@@ -28,8 +28,8 @@ export function handleMessage({store, channel, ev, appUrl = "", now = Date.now()
   // человека нет в таблице: доступа нет, но заявка и его слова видны администратору прямо в листе «Сотрудники»
   const askAccess = (typed) => {
     const mine = myRequest();
-    if (mine) store.addAccessRequest(mine.phone, `${label}: пишет другой номер ${typed}`);
-    else { store.addAccessRequest(typed, `${label}: запросил доступ`); store.addRequest(channel.name, chat, typed); }
+    if (mine) log("Заявка: комментарий дописан в строку " + store.addAccessRequest(mine.phone, `${label}: пишет другой номер ${typed}`));
+    else { log("Заявка: записана в строку " + store.addAccessRequest(typed, `${label}: запросил доступ`)); store.addRequest(channel.name, chat, typed); }
     return channel.send(chat, msgRequestSent);
   };
 
@@ -50,7 +50,7 @@ export function handleMessage({store, channel, ev, appUrl = "", now = Date.now()
   if (!user) {
     const req = myRequest();
     if (req && text && !text.startsWith("/")) { // сообщение от человека с открытой заявкой: пишем в комментарий администратору
-      store.addAccessRequest(req.phone, `${label}: ${text}`);
+      log("Заявка: комментарий записан в строку " + store.addAccessRequest(req.phone, `${label}: ${text}`));
       return channel.send(chat, msgCommentSaved);
     }
     return req ? channel.send(chat, msgRequestSent) : channel.send(chat, msgAskPhone, "contact");

@@ -1081,7 +1081,7 @@ function handleApi(req, deps) {
  * ev: {chatId, text, phone}
  * publishers: {targets(): [названия мест], post(text): [строки-итоги]} — публикация афиши в группу ВК / канал Telegram (необязательно)
  */
-function handleMessage({store, channel, ev, appUrl = "", now = Date.now(), publishers = null}) {
+function handleMessage({store, channel, ev, appUrl = "", now = Date.now(), publishers = null, log = () => {}}) {
   const chat = ev.chatId;
   const text = String(ev.text || "").trim();
   let phone = ev.phone ? normPhone(ev.phone) : null;
@@ -1100,8 +1100,8 @@ function handleMessage({store, channel, ev, appUrl = "", now = Date.now(), publi
   // человека нет в таблице: доступа нет, но заявка и его слова видны администратору прямо в листе «Сотрудники»
   const askAccess = (typed) => {
     const mine = myRequest();
-    if (mine) store.addAccessRequest(mine.phone, `${label}: пишет другой номер ${typed}`);
-    else { store.addAccessRequest(typed, `${label}: запросил доступ`); store.addRequest(channel.name, chat, typed); }
+    if (mine) log("Заявка: комментарий дописан в строку " + store.addAccessRequest(mine.phone, `${label}: пишет другой номер ${typed}`));
+    else { log("Заявка: записана в строку " + store.addAccessRequest(typed, `${label}: запросил доступ`)); store.addRequest(channel.name, chat, typed); }
     return channel.send(chat, msgRequestSent);
   };
 
@@ -1122,7 +1122,7 @@ function handleMessage({store, channel, ev, appUrl = "", now = Date.now(), publi
   if (!user) {
     const req = myRequest();
     if (req && text && !text.startsWith("/")) { // сообщение от человека с открытой заявкой: пишем в комментарий администратору
-      store.addAccessRequest(req.phone, `${label}: ${text}`);
+      log("Заявка: комментарий записан в строку " + store.addAccessRequest(req.phone, `${label}: ${text}`));
       return channel.send(chat, msgCommentSaved);
     }
     return req ? channel.send(chat, msgRequestSent) : channel.send(chat, msgAskPhone, "contact");
@@ -1558,7 +1558,7 @@ function telegramUpdate_(e) {
   if (ev) {
     const t0 = Date.now();
     netMs_ = 0;
-    const run = () => handleMessage({store: store_(), channel: SENDERS.telegram, ev, appUrl: prop_("APP_URL") || "", now: Date.now(), publishers: publishers_()});
+    const run = () => handleMessage({store: store_(), channel: SENDERS.telegram, ev, appUrl: prop_("APP_URL") || "", now: Date.now(), publishers: publishers_(), log: diag_});
     try {
       if (READ_ONLY_RE_.test(ev.text || "")) run(); else withLock_(run); // чтение расписания блокировки не требует
       diag_("TG " + speed_(ev, t0));
@@ -1604,7 +1604,7 @@ function vkUpdate_(e) {
     cache.put(dedupe, "1", 21600);
     const t0 = Date.now();
     netMs_ = 0;
-    const run = () => handleMessage({store: store_(), channel: SENDERS.vk, ev, appUrl: prop_("APP_URL") || "", now: Date.now(), publishers: publishers_()});
+    const run = () => handleMessage({store: store_(), channel: SENDERS.vk, ev, appUrl: prop_("APP_URL") || "", now: Date.now(), publishers: publishers_(), log: diag_});
     if (READ_ONLY_RE_.test(ev.text || "")) run(); else withLock_(run); // чтение расписания блокировки не требует
     diag_("VK: сообщение от " + ev.chatId + " обработано, ответ отправлен. " + speed_(ev, t0));
   } catch (err) {
