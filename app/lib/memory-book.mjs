@@ -5,6 +5,8 @@ export class MemoryBook {
   constructor(tabs = {}) { this.tabs = structuredClone(tabs); }
   #t(tab) { return (this.tabs[tab] ||= []); }
   ensure(tab, header) { if (!this.tabs[tab]) this.tabs[tab] = header ? [[...header]] : []; }
+  has(tab) { return Boolean(this.tabs[tab]); }
+  setCell(tab, row, col, value) { const t = this.#t(tab); while (t.length < row) t.push([]); const r = t[row - 1]; while (r.length < col) r.push(""); r[col - 1] = String(value); }
   get(tab) { return structuredClone(this.#t(tab)); }
   set(tab, row, values) { const t = this.#t(tab); while (t.length < row - 1) t.push([]); t[row - 1] = values.map(String); }
   append(tab, values) { this.#t(tab).push(values.map(String)); }

@@ -42,6 +42,12 @@ class GasBook {
     const s = this.ss.insertSheet(tab);
     if (header) s.getRange(1, 1, 1, header.length).setNumberFormat("@").setValues([header.map(String)]);
   }
+  has(tab) { return this.ss.getSheetByName(tab) !== null; }
+  /** Одна ячейка текстом (остальные в строке, например галочки групп, не трогаем). */
+  setCell(tab, row, col, value) {
+    this.memo = {};
+    this.sheet(tab).getRange(row, col).setNumberFormat("@").setValue(String(value));
+  }
   get(tab) {
     if (this.memo[tab]) return this.memo[tab];
     const s = this.sheet(tab);
@@ -109,7 +115,12 @@ function withLock_(fn) {
   try { return fn(); } finally { lock.releaseLock(); }
 }
 
-/** Таймер раз в минуту: подхватывает правки таблицы (через ~15 с тишины) и раз в ~5 минут проверяет напоминания. */
+// «Версия данных»: приложение раз в несколько секунд спрашивает, не изменилось ли что-то (дёшево: таблицу при этом не читаем)
+const getRev_ = () => prop_("DATA_REV") || "0";
+const bumpRev_ = () => PropertiesService.getScriptProperties().setProperty("DATA_REV", String(Date.now()));
+const SYNC_DELAY_MS = 5000; // сколько ждём тишины после правки таблицы, чтобы не рассылать недописанное
+
+/** Таймер раз в минуту: страховка (если быстрая сверка не сработала) и проверка напоминаний раз в ~5 минут. */
 function everyMinute() {
   const p = PropertiesService.getScriptProperties();
   const now = Date.now();
@@ -124,9 +135,22 @@ function everyMinute() {
   });
 }
 
-/** Срабатывает при любой правке таблицы руками; только отмечает время, работа — в everyMinute. */
+/**
+ * Срабатывает при любой правке таблицы руками. Отмечает «версия данных изменилась» (приложение подхватит за секунды),
+ * ждёт ~5 секунд тишины и сразу рассылает уведомления, не дожидаясь минутного таймера.
+ */
 function onSheetChange() {
-  PropertiesService.getScriptProperties().setProperty("dirty", String(Date.now()));
+  const p = PropertiesService.getScriptProperties();
+  const mark = String(Date.now());
+  p.setProperty("dirty", mark);
+  bumpRev_();
+  Utilities.sleep(SYNC_DELAY_MS);
+  if (p.getProperty("dirty") !== mark) return; // позже была ещё правка — сверку сделает она
+  withLock_(() => {
+    p.deleteProperty("dirty");
+    p.setProperty("last_cycle", String(Date.now()));
+    runCycle_();
+  });
 }
 
 // ---------- точки входа ----------
@@ -154,6 +178,8 @@ function apiCall_(req) {
   const call = () => handleApi({method: req.method || "GET", path: req.path, token: req.token, body: req.body || {}}, {
     store: store_(),
     secret: secret_(),
+    getRev: getRev_,
+    bumpRev: bumpRev_,
     // после правки сразу рассылаем уведомления (не ждём таймера); ошибки рассылки не ломают сохранение
     afterChange: () => { try { runCycle_(); } catch (err) { console.error(String(err && err.message ? err.message : err)); } },
   });
@@ -183,6 +209,7 @@ function setup() {
   ScriptApp.newTrigger("onSheetChange").forSpreadsheet(ss).onEdit().create();
   ScriptApp.newTrigger("everyMinute").timeBased().everyMinutes(1).create();
   new GasBook().ensure(TABS.chats, SUBS_HEADER);
+  new GasBook().ensure(TABS.venues, VENUES_HEADER);
   console.log("Готово: таймеры созданы. Теперь запустите setWebhook() и styleSheets().");
 }
 
@@ -227,11 +254,44 @@ const ROLE_LIST = ["Админ", "Редактор", "Читатель", "Заб
 
 function styleSheets() {
   const ss = SpreadsheetApp.openById(prop_("SHEET_ID"));
+  migrateSchedule();
+  const book = new GasBook();
+  book.ensure(TABS.venues, VENUES_HEADER);
+  seedVenues_(book);
   styleSchedule_(ss.getSheetByName(TABS.schedule));
   styleStaff_(ss.getSheetByName(TABS.staff));
+  styleVenues_(ss.getSheetByName(TABS.venues));
   const chats = ss.getSheetByName(TABS.chats);
   if (chats) styleHeader_(chats, 4);
   console.log("Таблица оформлена.");
+}
+
+/**
+ * Старый лист (Дата/Время | Спектакль/Сцена | роли) -> новый (Дата | Начало | Конец | Событие | Площадка | роли).
+ * Перед переносом делается копия листа «Расписание (копия …)». Если лист уже новый, ничего не делает.
+ */
+function migrateSchedule() {
+  const ss = SpreadsheetApp.openById(prop_("SHEET_ID"));
+  const sheet = ss.getSheetByName(TABS.schedule);
+  const table = new GasBook().get(TABS.schedule);
+  if (layoutOf(table).v === 2) { console.log("Расписание уже в новом формате."); return; }
+  const stamp = Utilities.formatDate(new Date(), "Europe/Moscow", "dd.MM HH:mm");
+  sheet.copyTo(ss).setName(TABS.schedule + " (копия " + stamp + ")");
+  const next = migrateTable(table, todayIso(Date.now()));
+  sheet.getDataRange().breakApart();
+  sheet.clear();
+  sheet.getRange(1, 1, next.length, next[0].length).setNumberFormat("@").setValues(next);
+  console.log("Расписание перенесено в новый формат (строк: " + (next.length - 1) + "). Копия старого листа сохранена.");
+}
+
+/** В листе «Площадки» после переноса оказываются все площадки, уже встречающиеся в расписании. */
+function seedVenues_(book) {
+  if (book.get(TABS.venues).length > 1) return;
+  const seen = {};
+  parseEvents(book.get(TABS.schedule), todayIso(Date.now())).forEach((e) => {
+    const key = norm(e.hall);
+    if (e.hall && !seen[key]) { seen[key] = true; book.append(TABS.venues, [e.hall.charAt(0).toUpperCase() + e.hall.slice(1), ""]); }
+  });
 }
 
 function styleHeader_(sheet, cols) {
@@ -273,9 +333,20 @@ function styleSchedule_(sheet) {
     row.merge().setBackground(C.navy).setFontColor(C.white).setFontWeight("bold").setHorizontalAlignment("center").setVerticalAlignment("middle").setFontSize(13);
     sheet.setRowHeight(r, 38);
   }
-  sheet.setColumnWidth(1, 120);
-  sheet.setColumnWidth(2, 260);
-  for (let c = 3; c <= cols; c++) sheet.setColumnWidth(c, 160);
+  const lay = layoutOf([sheet.getRange(1, 1, 1, Math.max(2, sheet.getLastColumn())).getDisplayValues()[0]]);
+  if (lay.v === 2) {
+    [110, 80, 80, 260, 160].forEach((w, i) => sheet.setColumnWidth(i + 1, w));
+    for (let c = 6; c <= cols; c++) sheet.setColumnWidth(c, 160);
+    sheet.getRange(2, 2, Math.max(sheet.getMaxRows() - 1, 1), 2).setHorizontalAlignment("center");
+    // площадка — выпадающий список из листа «Площадки» (можно вписать и новую)
+    const venues = sheet.getParent().getSheetByName(TABS.venues);
+    if (venues) sheet.getRange(2, 5, Math.max(sheet.getMaxRows() - 1, 1), 1).setDataValidation(
+      SpreadsheetApp.newDataValidation().requireValueInRange(venues.getRange("A2:A300"), true).setAllowInvalid(true).build());
+  } else {
+    sheet.setColumnWidth(1, 120);
+    sheet.setColumnWidth(2, 260);
+    for (let c = 3; c <= cols; c++) sheet.setColumnWidth(c, 160);
+  }
   // чередование строк белый / светло-голубой (кроме шапок месяцев) — правилом, чтобы новые строки красились сами
   const range = sheet.getRange(2, 1, Math.max(sheet.getMaxRows() - 1, 1), cols);
   const banding = SpreadsheetApp.newConditionalFormatRule()
@@ -304,4 +375,23 @@ function styleStaff_(sheet) {
   sheet.setColumnWidth(3, 150);
   sheet.setColumnWidth(4, 150);
   sheet.getRange(2, 4, Math.max(sheet.getMaxRows() - 1, 1), 1).setFontFamily("Roboto Mono").setHorizontalAlignment("center");
+
+  // группы: каждая колонка правее «Логина» с названием в шапке — группа; в ячейках галочки «входит в группу»
+  let head = sheet.getRange(1, 1, 1, Math.max(sheet.getLastColumn(), 4)).getDisplayValues()[0];
+  if (head.slice(4).every((x) => !String(x).trim())) { sheet.getRange(1, 5, 1, 3).setNumberFormat("@").setValues([["Актёры", "Техника", "Зал"]]); } // примеры, переименуйте как нужно
+  head = sheet.getRange(1, 1, 1, Math.max(sheet.getLastColumn(), 4)).getDisplayValues()[0];
+  const lastRow = Math.max(sheet.getMaxRows(), 2);
+  for (let c = 5; c <= head.length; c++) {
+    if (!String(head[c - 1]).trim()) continue;
+    sheet.getRange(2, c, lastRow - 1, 1).setDataValidation(SpreadsheetApp.newDataValidation().requireCheckbox().build()).setHorizontalAlignment("center");
+    sheet.setColumnWidth(c, 100);
+  }
+  styleHeader_(sheet, Math.max(head.length, 4));
+}
+
+function styleVenues_(sheet) {
+  styleHeader_(sheet, 2);
+  sheet.setColumnWidth(1, 260);
+  sheet.setColumnWidth(2, 300);
+  sheet.getRange(2, 1, Math.max(sheet.getMaxRows() - 1, 1), 2).setFontColor(C.navy).setVerticalAlignment("middle");
 }

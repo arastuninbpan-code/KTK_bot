@@ -77,7 +77,7 @@ h1, h2, h3 { font-family: var(--h); font-weight: 700; }
 .icon-btn { width: 44px; height: 44px; border-radius: 14px; border: var(--line); background: #fff; box-shadow: 3px 3px 0 var(--navy); display: grid; place-items: center; padding: 0; }
 .icon-btn:active { transform: translate(3px, 3px); box-shadow: 0 0 0 var(--navy); }
 .tabs { display: flex; gap: 6px; margin-top: 12px; padding: 5px; border-radius: 18px; background: var(--light); border: var(--line); }
-.tab { flex: 1; padding: 9px 8px; border: 0; border-radius: 13px; background: transparent; font-weight: 900; color: var(--muted); }
+.tab { flex: 1; padding: 9px 4px; white-space: nowrap; font-size: 15px; border: 0; border-radius: 13px; background: transparent; font-weight: 900; color: var(--muted); }
 .tab[aria-selected="true"] { background: var(--blue); color: #fff; box-shadow: 2px 2px 0 var(--navy); }
 
 .day { margin: 26px 0 10px; display: flex; align-items: center; gap: 10px; }
@@ -92,10 +92,10 @@ button.ev { font: inherit; }
 button.ev:active { transform: translate(2px, 2px); box-shadow: 1px 1px 0 var(--navy); }
 .time { align-self: start; padding: 8px 4px; border-radius: 14px; background: var(--light); border: var(--line); text-align: center; font: 700 16px/1.2 var(--h); }
 .time.none { background: var(--cream); font: 800 13px/1.2 "Nunito", system-ui, sans-serif; }
+.time .until { margin-top: 3px; font: 800 12px/1.2 "Nunito", system-ui, sans-serif; color: var(--muted); }
 .ev h3 { margin: 1px 0 6px; font-size: 18px; line-height: 1.25; padding-right: 52px; }
 .hall { display: inline-flex; align-items: center; gap: 5px; margin: 0 6px 8px 0; padding: 1px 10px 1px 7px; border-radius: 999px; border: 2px solid var(--navy); font-size: 12.5px; font-weight: 900; background: var(--cream); }
 .hall .ico { width: 15px; height: 15px; stroke-width: 2.8; }
-.hall.small { background: var(--light); }
 .roles { display: grid; gap: 9px; margin: 6px 0 0; padding: 0; list-style: none; }
 .roles li { font-size: 15.5px; font-weight: 800; line-height: 1.25; }
 .tag { display: inline-block; margin: 0 0 2px; padding: 0 9px; border-radius: 999px; border: 2px solid var(--navy); font-size: 11.5px; font-weight: 900; letter-spacing: .01em; }
@@ -115,12 +115,52 @@ button.ev:active { transform: translate(2px, 2px); box-shadow: 1px 1px 0 var(--n
 .fab .ico { width: 32px; height: 32px; stroke: #fff; stroke-width: 3.4; }
 .fab:active { transform: translate(3px, 3px); box-shadow: 1px 1px 0 var(--navy); }
 
+/* ---------- площадки ---------- */
+.venues { padding-top: 4px; }
+.dstrip { display: flex; gap: 8px; margin: 14px -16px 0; padding: 4px 16px 10px; overflow-x: auto; scrollbar-width: none; }
+.dstrip::-webkit-scrollbar { display: none; }
+.dchip { flex: none; width: 66px; padding: 7px 0 8px; border: var(--line); border-radius: 16px; background: #fff; text-align: center; box-shadow: 2px 2px 0 var(--navy); }
+.dchip small { display: block; font-size: 11px; font-weight: 900; color: var(--muted); }
+.dchip b { font: 700 20px var(--h); }
+.dchip[aria-selected="true"] { background: var(--blue); color: #fff; }
+.dchip[aria-selected="true"] small { color: #fff; }
+.vday { margin: 14px 0 6px; font-size: 19px; }
+.addv { margin: 10px 0 4px; }
+.venue { margin: 14px 0; padding: 14px; background: #fff; border: var(--line); border-radius: 20px; box-shadow: 3px 3px 0 var(--navy); }
+.venue.clash { border-color: var(--coral); box-shadow: 3px 3px 0 var(--coral); }
+.vhead { display: flex; align-items: center; gap: 8px; }
+.vhead h3 { flex: 1; margin: 0; font-size: 18px; min-width: 0; }
+.vbadge { padding: 1px 10px; border-radius: 999px; border: 2px solid var(--navy); font-size: 12px; font-weight: 900; background: var(--light); white-space: nowrap; }
+.vbadge.free { background: #d9f5df; } .vbadge.bad { background: var(--coral); color: #fff; }
+.mini { width: 34px; height: 34px; padding: 0; border-radius: 10px; border: 2.5px solid var(--navy); background: #fff; display: grid; place-items: center; }
+.mini .ico { width: 18px; height: 18px; }
+.track { position: relative; height: 16px; margin: 12px 0 2px; border-radius: 999px; border: 2.5px solid var(--navy); background: var(--cream); overflow: hidden; }
+.seg { position: absolute; top: 0; bottom: 0; background: var(--blue); border-right: 2px solid var(--navy); border-left: 2px solid var(--navy); }
+.seg.all { background: repeating-linear-gradient(135deg, var(--peach) 0 6px, var(--cream) 6px 12px); }
+.seg.clash { background: var(--coral); }
+.ticks { display: flex; justify-content: space-between; padding: 0 2px; font-size: 11px; font-weight: 800; color: var(--muted); }
+.slots { display: grid; gap: 6px; margin-top: 10px; }
+.slot { display: flex; gap: 10px; align-items: baseline; width: 100%; padding: 8px 10px; border-radius: 12px; border: 2px solid var(--navy); background: var(--light); text-align: left; font-weight: 700; }
+.slot b { flex: none; min-width: 92px; font-family: var(--h); }
+.slot.clash { background: #ffe3dd; border-color: var(--coral); }
+.warn, .note { display: flex; gap: 8px; align-items: flex-start; margin-top: 10px; padding: 9px 12px; border-radius: 14px; border: 2.5px solid var(--coral); background: #ffe3dd; font-size: 14px; font-weight: 800; }
+.note { margin: 12px 0 0; border-color: var(--orange); background: var(--cream); }
+.warn .ico, .note .ico { margin-top: 1px; }
+.hint-line { margin-top: 6px; font-size: 13px; font-weight: 700; color: var(--muted); }
+.chip.group { display: inline-flex; align-items: center; gap: 6px; background: var(--cream); }
+.chip.group .ico { width: 18px; height: 18px; }
+.chip.group.on { background: var(--blue); color: #fff; }
+.chip.group.on .ico { stroke: #fff; }
+.groups { margin-bottom: 12px; }
+
 /* ---------- панели, как в DNA ---------- */
-.overlay { position: fixed; inset: 0; z-index: 20; display: flex; align-items: flex-end; justify-content: center; background: rgba(27,53,96,.55); animation: fade .18s both; }
+body.modal-open { overflow: hidden; }
+.overlay { position: fixed; inset: 0; z-index: 20; overscroll-behavior: contain; display: flex; align-items: flex-end; justify-content: center; background: rgba(27,53,96,.55); animation: fade .18s both; }
 .overlay.center { align-items: center; padding: 20px; }
-.sheet { width: 100%; max-width: 560px; max-height: 92dvh; overflow: auto; background: #fff; border: 3px solid var(--navy); border-bottom: 0; border-radius: 28px 28px 0 0; padding: 10px 18px calc(22px + var(--safe-b)); animation: up .26s cubic-bezier(.16,.84,.28,1) both; }
+.sheet { width: 100%; max-width: 560px; max-height: 92dvh; overflow: auto; overscroll-behavior: contain; touch-action: pan-y; background: #fff; border: 3px solid var(--navy); border-bottom: 0; border-radius: 28px 28px 0 0; padding: 10px 18px calc(22px + var(--safe-b)); animation: up .26s cubic-bezier(.16,.84,.28,1) both; }
 .modal { width: 100%; max-width: 380px; background: #fff; border: 3px solid var(--navy); border-radius: 24px; box-shadow: 5px 5px 0 var(--navy); padding: 20px; animation: pop .2s both; }
-.handle { width: 44px; height: 5px; margin: 2px auto 10px; border-radius: 3px; background: var(--navy); opacity: .25; }
+.handle { width: 44px; height: 5px; margin: 2px auto 10px; border-radius: 3px; background: var(--navy); opacity: .25; position: relative; cursor: grab; touch-action: none; }
+.handle::after { content: ""; position: absolute; inset: -14px -30px; } /* ручку легко поймать пальцем */
 .sheet h2, .modal h2 { margin: 6px 0 12px; text-align: center; font-size: 21px; }
 .modal p { margin: 0 0 16px; text-align: center; color: var(--muted); }
 .row2 { display: flex; gap: 10px; }

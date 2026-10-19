@@ -111,62 +111,136 @@ function splitPeople(text) {
   return String(text).split(/[/;,\n]/).map((p) => p.trim()).filter(Boolean);
 }
 
-const headerRoles = (table) => (table[0] || []).slice(2).map((c) => String(c).split(/\s+/).filter(Boolean).join(" "));
+/**
+ * Формат листа «Расписание». v1 — как вело театр: Дата/Время | Спектакль/Сцена | роли…
+ * v2 — Дата | Начало | Конец | Событие | Площадка | роли… (определяем по заголовку, оба читаются).
+ */
+function layoutOf(table) {
+  const head = (table && table[0]) || [];
+  if (/начал/i.test(String(head[1] || "")) && /конец|оконч/i.test(String(head[2] || ""))) return {v: 2, roleStart: 5};
+  return {v: 1, roleStart: 2};
+}
+
+const headerRoles = (table) => (table[0] || []).slice(layoutOf(table).roleStart).map((c) => String(c).split(/\s+/).filter(Boolean).join(" "));
+
+/** Время из текста -> «09:05» или «». */
+function clock(s) {
+  const m = String(s || "").match(/\b(\d{1,2})[.:](\d{2})\b/);
+  return m && +m[1] < 24 && +m[2] < 60 ? String(+m[1]).padStart(2, "0") + ":" + m[2] : "";
+}
+
+/** Ячейка даты: «04.10», «04.10.2026», «25.10 до 31.10» (+ в старом формате время на второй строке). */
+function parseDateCell(text, today) {
+  const dm = text.match(/^\s*(\d{1,2}\.\d{2}(?:\.\d{2,4})?)/);
+  const date = dm ? parseDate(dm[1], today) : null;
+  if (!date) return null;
+  let rest = text.slice(dm[0].length);
+  let dateEnd = "";
+  const rm = rest.match(/до\s+(\d{1,2}\.\d{2}(?:\.\d{2,4})?)/);
+  if (rm) {
+    const end = parseDate(rm[1], today);
+    const days = end ? Math.round((Date.parse(end) - Date.parse(date)) / DAY_MS) : 0;
+    if (days > 0 && days <= 31) dateEnd = end;
+    rest = rest.slice(0, rm.index) + rest.slice(rm.index + rm[0].length);
+  }
+  return {date, dateEnd, rest};
+}
+
+/** «Название\n(большая сцена)» -> {title, hall} (старый формат: зал в скобках со словом «сцена»). */
+function splitTitleHall(cell) {
+  let title = cell.split("\n").map((x) => x.trim()).filter(Boolean).join(" / ");
+  let hall = "";
+  const hm = title.match(HALL_RE);
+  if (hm) {
+    hall = hm[1].trim();
+    title = (title.slice(0, hm.index) + title.slice(hm.index + hm[0].length)).split(/\s+/).join(" ").replace(/^[ /]+|[ /]+$/g, "");
+  }
+  return {title, hall};
+}
 
 /**
- * Таблица -> события (по одному на строку): {row, date, dateEnd, time, title, hall, roles: {роль: [имена]}}.
- * row — номер строки в листе (1 = заголовок). Пустые дни пропускаются.
+ * Таблица -> события (по одному на строку): {row, date, dateEnd, time, end, title, hall, roles: {роль: [имена]}}.
+ * time — начало («11:00», в старом формате может быть список «11:00, 13:00»), end — окончание или «».
+ * hall — площадка. row — номер строки в листе (1 = заголовок). Пустые дни пропускаются.
  */
 function parseEvents(table, today) {
   if (!table || !table.length) return [];
+  const lay = layoutOf(table);
   const roles = headerRoles(table);
   const out = [];
   table.slice(1).forEach((raw, idx) => {
     const cells = raw.map((c) => String(c).trim());
-    while (cells.length < roles.length + 2) cells.push("");
-    const dm = cells[0].match(/^\s*(\d{1,2}\.\d{2}(?:\.\d{2,4})?)/);
-    const date = dm ? parseDate(dm[1], today) : null;
-    if (!date) return;
-    let rest = cells[0].slice(dm[0].length);
-    let dateEnd = "";
-    const rm = rest.match(/до\s+(\d{1,2}\.\d{2}(?:\.\d{2,4})?)/); // «25.10 до 31.10» — диапазон
-    if (rm) {
-      const end = parseDate(rm[1], today);
-      const days = end ? Math.round((Date.parse(end) - Date.parse(date)) / DAY_MS) : 0;
-      if (days > 0 && days <= 31) dateEnd = end;
-      rest = rest.slice(0, rm.index) + rest.slice(rm.index + rm[0].length);
-    }
-    const time = [...rest.matchAll(/\b(\d{1,2})[.:](\d{2})\b/g)].map((m) => String(+m[1]).padStart(2, "0") + ":" + m[2]).join(", ");
-    let title = cells[1].split("\n").map((x) => x.trim()).filter(Boolean).join(" / ");
-    let hall = "";
-    const hm = title.match(HALL_RE);
-    if (hm) {
-      hall = hm[1].trim();
-      title = (title.slice(0, hm.index) + title.slice(hm.index + hm[0].length)).split(/\s+/).join(" ").replace(/^[ /]+|[ /]+$/g, "");
+    while (cells.length < roles.length + lay.roleStart) cells.push("");
+    const d = parseDateCell(cells[0], today);
+    if (!d) return;
+    let time, end = "", title, hall;
+    if (lay.v === 2) {
+      time = clock(cells[1]);
+      end = clock(cells[2]);
+      title = cells[3].split("\n").map((x) => x.trim()).filter(Boolean).join(" / ");
+      hall = cells[4].split(/\s+/).filter(Boolean).join(" ");
+    } else {
+      time = [...d.rest.matchAll(/\b(\d{1,2})[.:](\d{2})\b/g)].map((m) => String(+m[1]).padStart(2, "0") + ":" + m[2]).join(", ");
+      ({title, hall} = splitTitleHall(cells[1]));
     }
     const byRole = {};
     let staffed = 0;
     roles.forEach((role, i) => {
-      const people = splitPeople(cells[i + 2]);
+      const people = splitPeople(cells[i + lay.roleStart]);
       if (people.length) { byRole[role] = people; staffed += people.length; }
     });
     if (!title && !staffed) return;
-    out.push({row: idx + 2, date, dateEnd, time, title: title || "Смена", hall, roles: byRole, staffed: staffed > 0});
+    out.push({row: idx + 2, date: d.date, dateEnd: d.dateEnd, time, end, title: title || "Смена", hall, roles: byRole, staffed: staffed > 0});
   });
+  return out;
+}
+
+// ===== занятость площадок =====
+const DEFAULT_MINUTES = 120; // если конец не указан, считаем, что событие идёт 2 часа
+const toMin = (t) => { const m = /^(\d{1,2}):(\d{2})$/.exec(t || ""); return m ? +m[1] * 60 + +m[2] : null; };
+const daysOf = (e) => { const out = []; for (let d = e.date; d <= (e.dateEnd || e.date); d = addDays(d, 1)) out.push(d); return out; };
+
+/** Интервалы занятости события внутри дня (минуты от полуночи). Без времени или многодневное — занято весь день. */
+function slotsOf(e) {
+  const starts = String(e.time || "").split(/,\s*/).map(toMin).filter((x) => x !== null);
+  if (e.dateEnd || !starts.length) return [[0, 1440]];
+  const end = starts.length === 1 ? toMin(e.end) : null;
+  return starts.map((s) => [s, end !== null && end > s ? end : Math.min(s + DEFAULT_MINUTES, 24 * 60 + 60)]);
+}
+
+/** События на той же площадке, которые пересекаются по времени с `cand` (сам `cand`, row = cand.row, не считается). */
+function findConflicts(events, cand) {
+  const hall = norm(cand.hall || "");
+  if (!hall) return [];
+  const mine = slotsOf(cand);
+  const days = new Set(daysOf(cand));
+  const out = [];
+  for (const e of events) {
+    if (e.row === cand.row || norm(e.hall || "") !== hall) continue;
+    if (!daysOf(e).some((d) => days.has(d))) continue;
+    if (slotsOf(e).some(([a, b]) => mine.some(([c, d]) => a < d && c < b))) out.push({row: e.row, title: e.title, date: e.date, dateEnd: e.dateEnd, time: e.time, end: e.end});
+  }
   return out;
 }
 
 /** События -> строки «один человек в одной роли на одном дне» (для сравнения версий и напоминаний). */
 function eventsToRows(events) {
   const out = [];
+  const seen = new Map(); // одно и то же событие дважды в день (11:00 и 13:00) — разные строки, различаем по номеру
   for (const e of events) {
     const days = [e.date];
     if (e.dateEnd) for (let d = addDays(e.date, 1); d <= e.dateEnd; d = addDays(d, 1)) days.push(d);
     for (const day of days) {
-      const base = {date: day, time: e.time, event: e.title, hall: e.hall};
+      const base = {date: day, time: e.time, end: e.end || "", event: e.title, hall: e.hall};
+      const push = (role, person) => {
+        const k = [day, norm(e.title), norm(role), norm(person)].join("|");
+        const n = seen.get(k) || 0;
+        seen.set(k, n + 1);
+        out.push({...base, role, person, seq: n});
+      };
       const entries = Object.entries(e.roles);
-      if (!entries.length) out.push({...base, role: "", person: ""});
-      for (const [role, people] of entries) for (const person of people) out.push({...base, role, person});
+      if (!entries.length) push("", "");
+      for (const [role, people] of entries) for (const person of people) push(role, person);
     }
   }
   return out;
@@ -175,7 +249,7 @@ function eventsToRows(events) {
 const parseGrid = (table, today) => eventsToRows(parseEvents(table, today));
 
 // ===== строки расписания =====
-const rowKey = (r) => [r.date, norm(r.event), norm(r.role), norm(r.person)].join("|");
+const rowKey = (r) => [r.date, norm(r.event), norm(r.role), norm(r.person)].join("|") + (r.seq ? "#" + r.seq : "");
 
 /** Начало смены (самое раннее из указанных времён) в мс UTC или null, если времени нет. */
 function startMs(r) {
@@ -194,7 +268,7 @@ function diffRows(oldRows, newRows, today) {
   for (const [k, r] of n) {
     if (r.date < today) continue;
     if (!o.has(k)) out.push({kind: "added", person: r.person, row: r});
-    else if (o.get(k).time !== r.time || o.get(k).hall !== r.hall) out.push({kind: "changed", person: r.person, row: r, old: o.get(k)});
+    else if (o.get(k).time !== r.time || (o.get(k).end || "") !== (r.end || "") || o.get(k).hall !== r.hall) out.push({kind: "changed", person: r.person, row: r, old: o.get(k)});
   }
   for (const [k, r] of o) if (!n.has(k) && r.date >= today) out.push({kind: "removed", person: r.person, row: r});
   return out;
@@ -255,16 +329,45 @@ function planCycle(table, users, snap, nowMs) {
 // ===== запись события обратно в таблицу (в том же виде, как её ведёт театр) =====
 const dd = (iso) => `${iso.slice(8, 10)}.${iso.slice(5, 7)}`;
 
-/** Событие -> ячейки строки: «04.10\n11.00 и 13.00» | «Название\n(малая сцена)» | «Иванова М.В./ Петрова Л.Н.» | ... */
-function buildRow(event, roles, today) {
-  const year = today.slice(0, 4);
-  const dateText = (iso) => (iso.slice(0, 4) === year ? dd(iso) : `${dd(iso)}.${iso.slice(0, 4)}`);
-  const times = String(event.time || "").split(/[,;]|\s+и\s+/).map((t) => t.trim()).filter(Boolean).map((t) => t.replace(":", "."));
-  const dateCell = [dateText(event.date) + (event.dateEnd ? ` до ${dateText(event.dateEnd)}` : ""), times.join(" и ")].filter(Boolean).join("\n");
+const dateTextOf = (iso, today) => (iso.slice(0, 4) === today.slice(0, 4) ? dd(iso) : `${dd(iso)}.${iso.slice(0, 4)}`);
+const dateRangeText = (e, today) => dateTextOf(e.date, today) + (e.dateEnd ? ` до ${dateTextOf(e.dateEnd, today)}` : "");
+
+/**
+ * Событие -> ячейки строки.
+ * v2: «04.10» | «11:00» | «12:30» | «Название» | «Большая сцена» | «Иванова М.В./ Петрова Л.Н.» | …
+ * v1: «04.10\n11.00 и 13.00» | «Название\n(малая сцена)» | … (конец и площадка вне скобок в старом формате не хранятся)
+ */
+function buildRow(event, roles, today, layout = {v: 1}) {
   const title = String(event.title || "").trim();
   const hall = String(event.hall || "").trim();
+  const people = roles.map((r) => (event.roles?.[r] || []).join("/ "));
+  if (layout.v === 2) {
+    return [dateRangeText(event, today), clock(String(event.time || "").split(/[,;]|\s+и\s+/)[0]), clock(event.end), title, hall, ...people];
+  }
+  const times = String(event.time || "").split(/[,;]|\s+и\s+/).map((t) => t.trim()).filter(Boolean).map((t) => t.replace(":", "."));
+  const dateCell = [dateRangeText(event, today), times.join(" и ")].filter(Boolean).join("\n");
   const titleCell = [title, hall ? `(${hall})` : ""].filter(Boolean).join("\n");
-  return [dateCell, titleCell, ...roles.map((r) => (event.roles?.[r] || []).join("/ "))];
+  return [dateCell, titleCell, ...people];
+}
+
+/** Старый лист -> новый (Дата | Начало | Конец | Событие | Площадка | роли…). События с двумя временами делятся на две строки. */
+function migrateTable(table, today) {
+  if (layoutOf(table).v === 2) return table;
+  const oldRoles = (table[0] || []).slice(2).map(String);
+  const byRow = new Map(parseEvents(table, today).map((e) => [e.row, e]));
+  const width = 5 + oldRoles.length;
+  const pad = (cells) => { while (cells.length < width) cells.push(""); return cells; };
+  const out = [pad(["Дата", "Начало", "Конец", "Событие", "Площадка", ...oldRoles])];
+  table.slice(1).forEach((raw, idx) => {
+    const cells = raw.map((c) => String(c).trim());
+    const e = byRow.get(idx + 2);
+    const roleCells = oldRoles.map((_, i) => cells[i + 2] || "");
+    if (!e) { out.push(pad([cells[0] || "", "", "", cells[1] || "", "", ...roleCells])); return; } // шапки месяцев и прочее переносим как есть
+    const {title} = splitTitleHall(cells[1] || "");
+    const starts = e.time ? e.time.split(/,\s*/) : [""];
+    for (const start of starts) out.push(pad([dateRangeText(e, today), start, "", title, e.hall, ...roleCells]));
+  });
+  return out;
 }
 
 function validateEvent(e) {
@@ -273,6 +376,8 @@ function validateEvent(e) {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(e.date || "") || !isoDate(+e.date.slice(0, 4), +e.date.slice(5, 7), +e.date.slice(8, 10))) errors.push("Укажите дату");
   if (e.dateEnd && !(/^\d{4}-\d{2}-\d{2}$/.test(e.dateEnd) && e.dateEnd >= e.date)) errors.push("Дата окончания не может быть раньше даты начала");
   if (e.time && !/^\s*\d{1,2}[.:]\d{2}(\s*(,|;|и)\s*\d{1,2}[.:]\d{2})*\s*$/.test(e.time)) errors.push("Время укажите как 11:00 или 11:00, 13:00");
+  if (e.end && !/^\s*\d{1,2}[.:]\d{2}\s*$/.test(e.end)) errors.push("Время окончания укажите как 12:30");
+  if (e.end && !e.time) errors.push("Укажите время начала");
   if (!String(e.title || "").trim()) errors.push("Укажите название");
   return errors;
 }
@@ -299,6 +404,8 @@ const dateShort = (iso) => { const p = parts(iso); return `${WD_SHORT[p.wd]}, ${
 
 const roleText = (role) => String(role || "").replace(/\s*\/\s*/g, " / ");
 const timeText = (t) => String(t || "").split(/,\s*/).filter(Boolean).join(" и ");
+/** «11:00–12:30» (начало–окончание); без окончания — только начало. */
+const timeRange = (r) => { const s = timeText(r && r.time); return s && r.end ? `${s}–${r.end}` : s; };
 
 /**
  * Блок одной смены: жирное название, дата · время, зал, роль.
@@ -309,8 +416,8 @@ function shiftBlock(r, opts = {}) {
   const lines = [strike ? `<b><s>${esc(r.event)}</s></b>` : `<b>${esc(r.event)}</b>`];
   const when = [];
   if (withDate) when.push(`🗓 ${dateShort(r.date)}`);
-  if (old && old.time !== r.time) when.push(`⏰ ${old.time ? `<s>${timeText(old.time)}</s> → ` : ""}<b>${timeText(r.time) || "время уточняется"}</b>`);
-  else if (r.time) when.push(`⏰ ${timeText(r.time)}`);
+  if (old && timeRange(old) !== timeRange(r)) when.push(`⏰ ${timeRange(old) ? `<s>${timeRange(old)}</s> → ` : ""}<b>${timeRange(r) || "время уточняется"}</b>`);
+  else if (r.time) when.push(`⏰ ${timeRange(r)}`);
   if (when.length) lines.push(when.join(" · "));
   if (old && old.hall !== r.hall) lines.push(`📍 ${old.hall ? `<s>${esc(cap(old.hall))}</s> → ` : ""}<b>${esc(cap(r.hall)) || "уточняется"}</b>`);
   else if (r.hall) lines.push(`📍 ${esc(cap(r.hall))}`);
@@ -365,7 +472,7 @@ function afishaText(rows, limit = 12) {
   let day = "";
   for (const {r, roles} of [...events.values()].slice(0, limit)) {
     if (r.date !== day) { day = r.date; out.push(`\n🗓 <b>${dateShort(r.date)}</b>`); }
-    const meta = [r.time && `⏰ ${timeText(r.time)}`, r.hall && `📍 ${esc(cap(r.hall))}`].filter(Boolean).join(" · ");
+    const meta = [r.time && `⏰ ${timeRange(r)}`, r.hall && `📍 ${esc(cap(r.hall))}`].filter(Boolean).join(" · ");
     out.push(`<b>${esc(r.event)}</b>${meta ? `\n${meta}` : ""}`);
     for (const [role, people] of roles) out.push(`👤 ${esc(roleText(role))}: ${people.map(esc).join(", ")}`);
     out.push("");
@@ -425,7 +532,9 @@ function telegramEvent(update) {
 // ===== lib/store.mjs =====
 // Хранилище поверх таблицы: сотрудники и роли, чаты, снимок расписания, коды входа, блокировка.
 
-const TABS = {schedule: "Расписание", staff: "Сотрудники", chats: "Подписчики", state: "_служебное", lock: "_замок"};
+const TABS = {schedule: "Расписание", staff: "Сотрудники", venues: "Площадки", chats: "Подписчики", state: "_служебное", lock: "_замок"};
+const VENUES_HEADER = ["Площадка", "Заметка"];
+const CHECKED_RE = /^(true|да|yes|1|✓|✔|x|х)$/i; // галочка в таблице: TRUE / ✓ / «да»
 const SUBS_HEADER = ["Канал", "ID чата", "Телефон", "ФИО"];
 const ROLE_LABELS = {admin: "Админ", editor: "Редактор", reader: "Читатель", blocked: "Заблокирован"};
 const CHUNK = 40000; // лимит ячейки Google — 50 000 знаков
@@ -450,15 +559,59 @@ class Store {
     this.now = now;
   }
 
-  // --- сотрудники: ФИО | Телефон | Роль (Админ / Редактор / Читатель / Заблокирован) | Логин ---
+  // --- сотрудники: ФИО | Телефон | Роль (Админ / Редактор / Читатель / Заблокирован) | Логин | группы (колонки с галочками) ---
+  /** Колонки групп: всё правее «Логина», у чего в шапке есть название. */
+  #groupCols(rows) { return (rows[0] || []).map((h, col) => ({name: String(h || "").trim(), col})).filter((g) => g.col >= 4 && g.name); }
+
   users() {
+    const rows = this.book.get(TABS.staff);
+    const defs = this.#groupCols(rows);
     const out = [];
-    for (const [name = "", phones = "", role = "", login = ""] of this.book.get(TABS.staff).slice(1)) {
+    for (const row of rows.slice(1)) {
+      const [name = "", phones = "", role = "", login = ""] = row;
       const n = String(name).trim();
       if (!n) continue;
-      for (const phone of phonesIn(phones)) out.push({name: n, phone, role: parseRole(role), login: String(login).trim()});
+      const groups = defs.filter((g) => CHECKED_RE.test(String(row[g.col] || "").trim())).map((g) => g.name);
+      for (const phone of phonesIn(phones)) out.push({name: n, phone, role: parseRole(role), login: String(login).trim(), groups});
     }
     return out;
+  }
+
+  /** Группы: [{name, members: [ФИО]}] в порядке колонок. Состав — по галочкам в таблице; заблокированные не входят. */
+  groups() {
+    const defs = this.#groupCols(this.book.get(TABS.staff));
+    const active = this.activeUsers();
+    return defs.map((g) => ({name: g.name, members: [...new Set(active.filter((u) => u.groups.includes(g.name)).map((u) => u.name))]}));
+  }
+
+  // --- площадки: лист «Площадки» (название | заметка) ---
+  venues() {
+    if (!this.book.has(TABS.venues)) return [];
+    const seen = new Set();
+    const out = [];
+    for (const [name = ""] of this.book.get(TABS.venues).slice(1)) {
+      const n = String(name).split(/\s+/).filter(Boolean).join(" ");
+      if (n && !seen.has(n.toLowerCase())) { seen.add(n.toLowerCase()); out.push(n); }
+    }
+    return out;
+  }
+
+  addVenue(name) {
+    const n = String(name || "").split(/\s+/).filter(Boolean).join(" ");
+    if (!n) return false;
+    this.book.ensure(TABS.venues, VENUES_HEADER);
+    if (this.venues().some((v) => v.toLowerCase() === n.toLowerCase())) return false;
+    this.book.append(TABS.venues, [n, ""]);
+    return true;
+  }
+
+  removeVenue(name) {
+    if (!this.book.has(TABS.venues)) return false;
+    const want = String(name || "").trim().toLowerCase();
+    const i = this.book.get(TABS.venues).findIndex((r, k) => k > 0 && String(r[0] || "").trim().toLowerCase() === want);
+    if (i < 0) return false;
+    this.book.remove(TABS.venues, i + 1);
+    return true;
   }
 
   /** Активные сотрудники (без заблокированных): им можно писать и входить на сайт. */
@@ -530,10 +683,10 @@ class Store {
         for (let k = 0; k < 5; k++) login += LOGIN_ALPHABET[platform.randomInt(LOGIN_ALPHABET.length)];
       } while (used.has(normLogin(login)));
       used.add(normLogin(login));
-      this.book.set(TABS.staff, i + 1, [r[0] || "", r[1] || "", r[2] || "", login]);
+      this.book.setCell(TABS.staff, i + 1, 4, login); // только колонка «Логин»: галочки групп правее не трогаем
       n++;
     }
-    if (n && !String(rows[0][3] || "").trim()) this.book.set(TABS.staff, 1, [rows[0][0] || "ФИО", rows[0][1] || "Телефон", rows[0][2] || "Роль", "Логин"]);
+    if (n && !String(rows[0][3] || "").trim()) this.book.setCell(TABS.staff, 1, 4, "Логин");
     return n;
   }
 
@@ -582,7 +735,7 @@ function readToken(token, secret, now = Date.now()) {
 // API приложения. Чистая функция: запрос -> {status, body}. Синхронный код, никакой привязки к платформе.
 
 class HttpError extends Error {
-  constructor(status, message) { super(message); this.status = status; }
+  constructor(status, message, extra = {}) { super(message); this.status = status; this.extra = extra; }
 }
 
 /** Версия строки: по ней ловим одновременные правки (если строку уже изменили, вернём 409). */
@@ -607,7 +760,7 @@ function writeAt(store, table, date, cells, today) {
 const publicUser = (u) => ({name: u.name, role: u.role, roleLabel: ROLE_LABELS[u.role], canEdit: canEdit(u.role)});
 
 function handleApi(req, deps) {
-  const {store, secret, now = () => Date.now(), afterChange = () => {}} = deps;
+  const {store, secret, now = () => Date.now(), afterChange = () => {}, getRev = () => "", bumpRev = () => {}} = deps;
   const {method, path, body = {}, token} = req;
   try {
     // --- без входа ---
@@ -622,6 +775,8 @@ function handleApi(req, deps) {
     // --- нужен вход ---
     const session = readToken(token, secret, now());
     if (!session) throw new HttpError(401, "Нужно войти");
+    // лёгкая проверка «есть ли новое»: без чтения таблицы (только подпись входа и счётчик версий)
+    if (path === "/api/ping") { const rv = getRev(); return {status: 200, body: {rev: rv, changed: body.rev !== rv}}; }
     const users = store.users();
     const me = users.find((u) => u.phone === session.sub);
     if (!me || me.role === "blocked" || !me.login || session.l !== store.loginMark(me.login)) throw new HttpError(401, "Нужно войти");
@@ -634,13 +789,34 @@ function handleApi(req, deps) {
         .sort((a, b) => (a.date + a.time).localeCompare(b.date + b.time))
         .map((e) => ({...e, rev: rev(table[e.row - 1]),
           mine: Object.entries(e.roles).filter(([, names]) => names.some((n) => matchPhones(n, users).includes(me.phone))).map(([role]) => role)}));
-      return {status: 200, body: {today, me: publicUser(me), roles: headerRoles(table), events, staff: canEdit(me.role) ? store.staffNames() : undefined}};
+      // площадки: список из листа «Площадки» + все, что уже вписано в события
+      const venues = [...store.venues()];
+      for (const e of events) if (e.hall && !venues.some((v) => norm(v) === norm(e.hall))) venues.push(e.hall);
+      const editor = canEdit(me.role);
+      return {status: 200, body: {today, me: publicUser(me), roles: headerRoles(table), layout: layoutOf(table).v, rev: getRev(), events, venues,
+        staff: editor ? store.staffNames() : undefined, groups: editor ? store.groups() : undefined}};
+    }
+
+    if (path === "/api/venues" && ["POST", "DELETE"].includes(method)) {
+      if (!canEdit(me.role)) throw new HttpError(403, "Площадки могут менять только администратор и редактор.");
+      const name = String(body.name || "").split(/\s+/).filter(Boolean).join(" ");
+      if (!name) throw new HttpError(400, "Укажите название площадки");
+      if (name.length > 60) throw new HttpError(400, "Название слишком длинное");
+      if (method === "POST") store.addVenue(name);
+      else {
+        const busy = parseEvents(store.book.get(TABS.schedule), today).some((e) => norm(e.hall) === norm(name) && (e.dateEnd || e.date) >= today);
+        if (busy) throw new HttpError(409, "На этой площадке есть будущие события. Сначала перенесите их.");
+        store.removeVenue(name);
+      }
+      bumpRev();
+      return {status: 200, body: {ok: true, venues: store.venues()}};
     }
 
     if (["POST", "PUT", "DELETE"].includes(method) && path.startsWith("/api/events")) {
       if (!canEdit(me.role)) throw new HttpError(403, "Менять расписание могут только администратор и редактор.");
       const table = store.book.get(TABS.schedule);
       const roles = headerRoles(table);
+      const layout = layoutOf(table);
       const rowNo = Number(path.split("/")[3] || 0);
 
       if (method !== "POST") {
@@ -649,6 +825,7 @@ function handleApi(req, deps) {
       }
       if (method === "DELETE") {
         store.book.remove(TABS.schedule, rowNo);
+        bumpRev();
         afterChange();
         return {status: 200, body: {ok: true}};
       }
@@ -661,7 +838,15 @@ function handleApi(req, deps) {
         for (const n of names) if (!staff.has(n)) errors.push(`Нет такого сотрудника: ${n}`);
       }
       if (errors.length) throw new HttpError(400, errors.join(". "));
-      const cells = buildRow(event, roles, today);
+      // площадка занята в это время? Предупреждаем; если человек подтвердил (force) — сохраняем
+      if (!body.force && event.hall) {
+        const clash = findConflicts(parseEvents(table, today), {...event, row: method === "PUT" ? rowNo : -1});
+        if (clash.length) {
+          const c = clash[0];
+          throw new HttpError(409, `Площадка «${event.hall}» занята: ${c.title}${c.time ? ` (${c.time}${c.end ? "–" + c.end : ""})` : ""}`, {conflicts: clash});
+        }
+      }
+      const cells = buildRow(event, roles, today, layout);
 
       if (method === "POST") {
         writeAt(store, table, event.date, cells, today);
@@ -674,12 +859,13 @@ function handleApi(req, deps) {
           store.book.set(TABS.schedule, rowNo, cells);
         }
       }
+      bumpRev();
       afterChange();
       return {status: 200, body: {ok: true}};
     }
     throw new HttpError(404, "Не найдено");
   } catch (e) {
-    if (e instanceof HttpError) return {status: e.status, body: {error: e.message}};
+    if (e instanceof HttpError) return {status: e.status, body: {error: e.message, ...e.extra}};
     console.error(String(e?.message || e));
     return {status: 500, body: {error: "Что-то пошло не так. Попробуйте ещё раз."}};
   }
@@ -817,6 +1003,12 @@ class GasBook {
     const s = this.ss.insertSheet(tab);
     if (header) s.getRange(1, 1, 1, header.length).setNumberFormat("@").setValues([header.map(String)]);
   }
+  has(tab) { return this.ss.getSheetByName(tab) !== null; }
+  /** Одна ячейка текстом (остальные в строке, например галочки групп, не трогаем). */
+  setCell(tab, row, col, value) {
+    this.memo = {};
+    this.sheet(tab).getRange(row, col).setNumberFormat("@").setValue(String(value));
+  }
   get(tab) {
     if (this.memo[tab]) return this.memo[tab];
     const s = this.sheet(tab);
@@ -884,7 +1076,12 @@ function withLock_(fn) {
   try { return fn(); } finally { lock.releaseLock(); }
 }
 
-/** Таймер раз в минуту: подхватывает правки таблицы (через ~15 с тишины) и раз в ~5 минут проверяет напоминания. */
+// «Версия данных»: приложение раз в несколько секунд спрашивает, не изменилось ли что-то (дёшево: таблицу при этом не читаем)
+const getRev_ = () => prop_("DATA_REV") || "0";
+const bumpRev_ = () => PropertiesService.getScriptProperties().setProperty("DATA_REV", String(Date.now()));
+const SYNC_DELAY_MS = 5000; // сколько ждём тишины после правки таблицы, чтобы не рассылать недописанное
+
+/** Таймер раз в минуту: страховка (если быстрая сверка не сработала) и проверка напоминаний раз в ~5 минут. */
 function everyMinute() {
   const p = PropertiesService.getScriptProperties();
   const now = Date.now();
@@ -899,9 +1096,22 @@ function everyMinute() {
   });
 }
 
-/** Срабатывает при любой правке таблицы руками; только отмечает время, работа — в everyMinute. */
+/**
+ * Срабатывает при любой правке таблицы руками. Отмечает «версия данных изменилась» (приложение подхватит за секунды),
+ * ждёт ~5 секунд тишины и сразу рассылает уведомления, не дожидаясь минутного таймера.
+ */
 function onSheetChange() {
-  PropertiesService.getScriptProperties().setProperty("dirty", String(Date.now()));
+  const p = PropertiesService.getScriptProperties();
+  const mark = String(Date.now());
+  p.setProperty("dirty", mark);
+  bumpRev_();
+  Utilities.sleep(SYNC_DELAY_MS);
+  if (p.getProperty("dirty") !== mark) return; // позже была ещё правка — сверку сделает она
+  withLock_(() => {
+    p.deleteProperty("dirty");
+    p.setProperty("last_cycle", String(Date.now()));
+    runCycle_();
+  });
 }
 
 // ---------- точки входа ----------
@@ -929,6 +1139,8 @@ function apiCall_(req) {
   const call = () => handleApi({method: req.method || "GET", path: req.path, token: req.token, body: req.body || {}}, {
     store: store_(),
     secret: secret_(),
+    getRev: getRev_,
+    bumpRev: bumpRev_,
     // после правки сразу рассылаем уведомления (не ждём таймера); ошибки рассылки не ломают сохранение
     afterChange: () => { try { runCycle_(); } catch (err) { console.error(String(err && err.message ? err.message : err)); } },
   });
@@ -958,6 +1170,7 @@ function setup() {
   ScriptApp.newTrigger("onSheetChange").forSpreadsheet(ss).onEdit().create();
   ScriptApp.newTrigger("everyMinute").timeBased().everyMinutes(1).create();
   new GasBook().ensure(TABS.chats, SUBS_HEADER);
+  new GasBook().ensure(TABS.venues, VENUES_HEADER);
   console.log("Готово: таймеры созданы. Теперь запустите setWebhook() и styleSheets().");
 }
 
@@ -1002,11 +1215,44 @@ const ROLE_LIST = ["Админ", "Редактор", "Читатель", "Заб
 
 function styleSheets() {
   const ss = SpreadsheetApp.openById(prop_("SHEET_ID"));
+  migrateSchedule();
+  const book = new GasBook();
+  book.ensure(TABS.venues, VENUES_HEADER);
+  seedVenues_(book);
   styleSchedule_(ss.getSheetByName(TABS.schedule));
   styleStaff_(ss.getSheetByName(TABS.staff));
+  styleVenues_(ss.getSheetByName(TABS.venues));
   const chats = ss.getSheetByName(TABS.chats);
   if (chats) styleHeader_(chats, 4);
   console.log("Таблица оформлена.");
+}
+
+/**
+ * Старый лист (Дата/Время | Спектакль/Сцена | роли) -> новый (Дата | Начало | Конец | Событие | Площадка | роли).
+ * Перед переносом делается копия листа «Расписание (копия …)». Если лист уже новый, ничего не делает.
+ */
+function migrateSchedule() {
+  const ss = SpreadsheetApp.openById(prop_("SHEET_ID"));
+  const sheet = ss.getSheetByName(TABS.schedule);
+  const table = new GasBook().get(TABS.schedule);
+  if (layoutOf(table).v === 2) { console.log("Расписание уже в новом формате."); return; }
+  const stamp = Utilities.formatDate(new Date(), "Europe/Moscow", "dd.MM HH:mm");
+  sheet.copyTo(ss).setName(TABS.schedule + " (копия " + stamp + ")");
+  const next = migrateTable(table, todayIso(Date.now()));
+  sheet.getDataRange().breakApart();
+  sheet.clear();
+  sheet.getRange(1, 1, next.length, next[0].length).setNumberFormat("@").setValues(next);
+  console.log("Расписание перенесено в новый формат (строк: " + (next.length - 1) + "). Копия старого листа сохранена.");
+}
+
+/** В листе «Площадки» после переноса оказываются все площадки, уже встречающиеся в расписании. */
+function seedVenues_(book) {
+  if (book.get(TABS.venues).length > 1) return;
+  const seen = {};
+  parseEvents(book.get(TABS.schedule), todayIso(Date.now())).forEach((e) => {
+    const key = norm(e.hall);
+    if (e.hall && !seen[key]) { seen[key] = true; book.append(TABS.venues, [e.hall.charAt(0).toUpperCase() + e.hall.slice(1), ""]); }
+  });
 }
 
 function styleHeader_(sheet, cols) {
@@ -1048,9 +1294,20 @@ function styleSchedule_(sheet) {
     row.merge().setBackground(C.navy).setFontColor(C.white).setFontWeight("bold").setHorizontalAlignment("center").setVerticalAlignment("middle").setFontSize(13);
     sheet.setRowHeight(r, 38);
   }
-  sheet.setColumnWidth(1, 120);
-  sheet.setColumnWidth(2, 260);
-  for (let c = 3; c <= cols; c++) sheet.setColumnWidth(c, 160);
+  const lay = layoutOf([sheet.getRange(1, 1, 1, Math.max(2, sheet.getLastColumn())).getDisplayValues()[0]]);
+  if (lay.v === 2) {
+    [110, 80, 80, 260, 160].forEach((w, i) => sheet.setColumnWidth(i + 1, w));
+    for (let c = 6; c <= cols; c++) sheet.setColumnWidth(c, 160);
+    sheet.getRange(2, 2, Math.max(sheet.getMaxRows() - 1, 1), 2).setHorizontalAlignment("center");
+    // площадка — выпадающий список из листа «Площадки» (можно вписать и новую)
+    const venues = sheet.getParent().getSheetByName(TABS.venues);
+    if (venues) sheet.getRange(2, 5, Math.max(sheet.getMaxRows() - 1, 1), 1).setDataValidation(
+      SpreadsheetApp.newDataValidation().requireValueInRange(venues.getRange("A2:A300"), true).setAllowInvalid(true).build());
+  } else {
+    sheet.setColumnWidth(1, 120);
+    sheet.setColumnWidth(2, 260);
+    for (let c = 3; c <= cols; c++) sheet.setColumnWidth(c, 160);
+  }
   // чередование строк белый / светло-голубой (кроме шапок месяцев) — правилом, чтобы новые строки красились сами
   const range = sheet.getRange(2, 1, Math.max(sheet.getMaxRows() - 1, 1), cols);
   const banding = SpreadsheetApp.newConditionalFormatRule()
@@ -1079,4 +1336,23 @@ function styleStaff_(sheet) {
   sheet.setColumnWidth(3, 150);
   sheet.setColumnWidth(4, 150);
   sheet.getRange(2, 4, Math.max(sheet.getMaxRows() - 1, 1), 1).setFontFamily("Roboto Mono").setHorizontalAlignment("center");
+
+  // группы: каждая колонка правее «Логина» с названием в шапке — группа; в ячейках галочки «входит в группу»
+  let head = sheet.getRange(1, 1, 1, Math.max(sheet.getLastColumn(), 4)).getDisplayValues()[0];
+  if (head.slice(4).every((x) => !String(x).trim())) { sheet.getRange(1, 5, 1, 3).setNumberFormat("@").setValues([["Актёры", "Техника", "Зал"]]); } // примеры, переименуйте как нужно
+  head = sheet.getRange(1, 1, 1, Math.max(sheet.getLastColumn(), 4)).getDisplayValues()[0];
+  const lastRow = Math.max(sheet.getMaxRows(), 2);
+  for (let c = 5; c <= head.length; c++) {
+    if (!String(head[c - 1]).trim()) continue;
+    sheet.getRange(2, c, lastRow - 1, 1).setDataValidation(SpreadsheetApp.newDataValidation().requireCheckbox().build()).setHorizontalAlignment("center");
+    sheet.setColumnWidth(c, 100);
+  }
+  styleHeader_(sheet, Math.max(head.length, 4));
+}
+
+function styleVenues_(sheet) {
+  styleHeader_(sheet, 2);
+  sheet.setColumnWidth(1, 260);
+  sheet.setColumnWidth(2, 300);
+  sheet.getRange(2, 1, Math.max(sheet.getMaxRows() - 1, 1), 2).setFontColor(C.navy).setVerticalAlignment("middle");
 }

@@ -90,62 +90,136 @@ export function splitPeople(text) {
   return String(text).split(/[/;,\n]/).map((p) => p.trim()).filter(Boolean);
 }
 
-export const headerRoles = (table) => (table[0] || []).slice(2).map((c) => String(c).split(/\s+/).filter(Boolean).join(" "));
+/**
+ * Формат листа «Расписание». v1 — как вело театр: Дата/Время | Спектакль/Сцена | роли…
+ * v2 — Дата | Начало | Конец | Событие | Площадка | роли… (определяем по заголовку, оба читаются).
+ */
+export function layoutOf(table) {
+  const head = (table && table[0]) || [];
+  if (/начал/i.test(String(head[1] || "")) && /конец|оконч/i.test(String(head[2] || ""))) return {v: 2, roleStart: 5};
+  return {v: 1, roleStart: 2};
+}
+
+export const headerRoles = (table) => (table[0] || []).slice(layoutOf(table).roleStart).map((c) => String(c).split(/\s+/).filter(Boolean).join(" "));
+
+/** Время из текста -> «09:05» или «». */
+export function clock(s) {
+  const m = String(s || "").match(/\b(\d{1,2})[.:](\d{2})\b/);
+  return m && +m[1] < 24 && +m[2] < 60 ? String(+m[1]).padStart(2, "0") + ":" + m[2] : "";
+}
+
+/** Ячейка даты: «04.10», «04.10.2026», «25.10 до 31.10» (+ в старом формате время на второй строке). */
+function parseDateCell(text, today) {
+  const dm = text.match(/^\s*(\d{1,2}\.\d{2}(?:\.\d{2,4})?)/);
+  const date = dm ? parseDate(dm[1], today) : null;
+  if (!date) return null;
+  let rest = text.slice(dm[0].length);
+  let dateEnd = "";
+  const rm = rest.match(/до\s+(\d{1,2}\.\d{2}(?:\.\d{2,4})?)/);
+  if (rm) {
+    const end = parseDate(rm[1], today);
+    const days = end ? Math.round((Date.parse(end) - Date.parse(date)) / DAY_MS) : 0;
+    if (days > 0 && days <= 31) dateEnd = end;
+    rest = rest.slice(0, rm.index) + rest.slice(rm.index + rm[0].length);
+  }
+  return {date, dateEnd, rest};
+}
+
+/** «Название\n(большая сцена)» -> {title, hall} (старый формат: зал в скобках со словом «сцена»). */
+function splitTitleHall(cell) {
+  let title = cell.split("\n").map((x) => x.trim()).filter(Boolean).join(" / ");
+  let hall = "";
+  const hm = title.match(HALL_RE);
+  if (hm) {
+    hall = hm[1].trim();
+    title = (title.slice(0, hm.index) + title.slice(hm.index + hm[0].length)).split(/\s+/).join(" ").replace(/^[ /]+|[ /]+$/g, "");
+  }
+  return {title, hall};
+}
 
 /**
- * Таблица -> события (по одному на строку): {row, date, dateEnd, time, title, hall, roles: {роль: [имена]}}.
- * row — номер строки в листе (1 = заголовок). Пустые дни пропускаются.
+ * Таблица -> события (по одному на строку): {row, date, dateEnd, time, end, title, hall, roles: {роль: [имена]}}.
+ * time — начало («11:00», в старом формате может быть список «11:00, 13:00»), end — окончание или «».
+ * hall — площадка. row — номер строки в листе (1 = заголовок). Пустые дни пропускаются.
  */
 export function parseEvents(table, today) {
   if (!table || !table.length) return [];
+  const lay = layoutOf(table);
   const roles = headerRoles(table);
   const out = [];
   table.slice(1).forEach((raw, idx) => {
     const cells = raw.map((c) => String(c).trim());
-    while (cells.length < roles.length + 2) cells.push("");
-    const dm = cells[0].match(/^\s*(\d{1,2}\.\d{2}(?:\.\d{2,4})?)/);
-    const date = dm ? parseDate(dm[1], today) : null;
-    if (!date) return;
-    let rest = cells[0].slice(dm[0].length);
-    let dateEnd = "";
-    const rm = rest.match(/до\s+(\d{1,2}\.\d{2}(?:\.\d{2,4})?)/); // «25.10 до 31.10» — диапазон
-    if (rm) {
-      const end = parseDate(rm[1], today);
-      const days = end ? Math.round((Date.parse(end) - Date.parse(date)) / DAY_MS) : 0;
-      if (days > 0 && days <= 31) dateEnd = end;
-      rest = rest.slice(0, rm.index) + rest.slice(rm.index + rm[0].length);
-    }
-    const time = [...rest.matchAll(/\b(\d{1,2})[.:](\d{2})\b/g)].map((m) => String(+m[1]).padStart(2, "0") + ":" + m[2]).join(", ");
-    let title = cells[1].split("\n").map((x) => x.trim()).filter(Boolean).join(" / ");
-    let hall = "";
-    const hm = title.match(HALL_RE);
-    if (hm) {
-      hall = hm[1].trim();
-      title = (title.slice(0, hm.index) + title.slice(hm.index + hm[0].length)).split(/\s+/).join(" ").replace(/^[ /]+|[ /]+$/g, "");
+    while (cells.length < roles.length + lay.roleStart) cells.push("");
+    const d = parseDateCell(cells[0], today);
+    if (!d) return;
+    let time, end = "", title, hall;
+    if (lay.v === 2) {
+      time = clock(cells[1]);
+      end = clock(cells[2]);
+      title = cells[3].split("\n").map((x) => x.trim()).filter(Boolean).join(" / ");
+      hall = cells[4].split(/\s+/).filter(Boolean).join(" ");
+    } else {
+      time = [...d.rest.matchAll(/\b(\d{1,2})[.:](\d{2})\b/g)].map((m) => String(+m[1]).padStart(2, "0") + ":" + m[2]).join(", ");
+      ({title, hall} = splitTitleHall(cells[1]));
     }
     const byRole = {};
     let staffed = 0;
     roles.forEach((role, i) => {
-      const people = splitPeople(cells[i + 2]);
+      const people = splitPeople(cells[i + lay.roleStart]);
       if (people.length) { byRole[role] = people; staffed += people.length; }
     });
     if (!title && !staffed) return;
-    out.push({row: idx + 2, date, dateEnd, time, title: title || "Смена", hall, roles: byRole, staffed: staffed > 0});
+    out.push({row: idx + 2, date: d.date, dateEnd: d.dateEnd, time, end, title: title || "Смена", hall, roles: byRole, staffed: staffed > 0});
   });
+  return out;
+}
+
+// ===== занятость площадок =====
+export const DEFAULT_MINUTES = 120; // если конец не указан, считаем, что событие идёт 2 часа
+const toMin = (t) => { const m = /^(\d{1,2}):(\d{2})$/.exec(t || ""); return m ? +m[1] * 60 + +m[2] : null; };
+const daysOf = (e) => { const out = []; for (let d = e.date; d <= (e.dateEnd || e.date); d = addDays(d, 1)) out.push(d); return out; };
+
+/** Интервалы занятости события внутри дня (минуты от полуночи). Без времени или многодневное — занято весь день. */
+export function slotsOf(e) {
+  const starts = String(e.time || "").split(/,\s*/).map(toMin).filter((x) => x !== null);
+  if (e.dateEnd || !starts.length) return [[0, 1440]];
+  const end = starts.length === 1 ? toMin(e.end) : null;
+  return starts.map((s) => [s, end !== null && end > s ? end : Math.min(s + DEFAULT_MINUTES, 24 * 60 + 60)]);
+}
+
+/** События на той же площадке, которые пересекаются по времени с `cand` (сам `cand`, row = cand.row, не считается). */
+export function findConflicts(events, cand) {
+  const hall = norm(cand.hall || "");
+  if (!hall) return [];
+  const mine = slotsOf(cand);
+  const days = new Set(daysOf(cand));
+  const out = [];
+  for (const e of events) {
+    if (e.row === cand.row || norm(e.hall || "") !== hall) continue;
+    if (!daysOf(e).some((d) => days.has(d))) continue;
+    if (slotsOf(e).some(([a, b]) => mine.some(([c, d]) => a < d && c < b))) out.push({row: e.row, title: e.title, date: e.date, dateEnd: e.dateEnd, time: e.time, end: e.end});
+  }
   return out;
 }
 
 /** События -> строки «один человек в одной роли на одном дне» (для сравнения версий и напоминаний). */
 export function eventsToRows(events) {
   const out = [];
+  const seen = new Map(); // одно и то же событие дважды в день (11:00 и 13:00) — разные строки, различаем по номеру
   for (const e of events) {
     const days = [e.date];
     if (e.dateEnd) for (let d = addDays(e.date, 1); d <= e.dateEnd; d = addDays(d, 1)) days.push(d);
     for (const day of days) {
-      const base = {date: day, time: e.time, event: e.title, hall: e.hall};
+      const base = {date: day, time: e.time, end: e.end || "", event: e.title, hall: e.hall};
+      const push = (role, person) => {
+        const k = [day, norm(e.title), norm(role), norm(person)].join("|");
+        const n = seen.get(k) || 0;
+        seen.set(k, n + 1);
+        out.push({...base, role, person, seq: n});
+      };
       const entries = Object.entries(e.roles);
-      if (!entries.length) out.push({...base, role: "", person: ""});
-      for (const [role, people] of entries) for (const person of people) out.push({...base, role, person});
+      if (!entries.length) push("", "");
+      for (const [role, people] of entries) for (const person of people) push(role, person);
     }
   }
   return out;
@@ -154,7 +228,7 @@ export function eventsToRows(events) {
 export const parseGrid = (table, today) => eventsToRows(parseEvents(table, today));
 
 // ===== строки расписания =====
-export const rowKey = (r) => [r.date, norm(r.event), norm(r.role), norm(r.person)].join("|");
+export const rowKey = (r) => [r.date, norm(r.event), norm(r.role), norm(r.person)].join("|") + (r.seq ? "#" + r.seq : "");
 
 /** Начало смены (самое раннее из указанных времён) в мс UTC или null, если времени нет. */
 export function startMs(r) {
@@ -173,7 +247,7 @@ export function diffRows(oldRows, newRows, today) {
   for (const [k, r] of n) {
     if (r.date < today) continue;
     if (!o.has(k)) out.push({kind: "added", person: r.person, row: r});
-    else if (o.get(k).time !== r.time || o.get(k).hall !== r.hall) out.push({kind: "changed", person: r.person, row: r, old: o.get(k)});
+    else if (o.get(k).time !== r.time || (o.get(k).end || "") !== (r.end || "") || o.get(k).hall !== r.hall) out.push({kind: "changed", person: r.person, row: r, old: o.get(k)});
   }
   for (const [k, r] of o) if (!n.has(k) && r.date >= today) out.push({kind: "removed", person: r.person, row: r});
   return out;
@@ -234,16 +308,45 @@ export function planCycle(table, users, snap, nowMs) {
 // ===== запись события обратно в таблицу (в том же виде, как её ведёт театр) =====
 const dd = (iso) => `${iso.slice(8, 10)}.${iso.slice(5, 7)}`;
 
-/** Событие -> ячейки строки: «04.10\n11.00 и 13.00» | «Название\n(малая сцена)» | «Иванова М.В./ Петрова Л.Н.» | ... */
-export function buildRow(event, roles, today) {
-  const year = today.slice(0, 4);
-  const dateText = (iso) => (iso.slice(0, 4) === year ? dd(iso) : `${dd(iso)}.${iso.slice(0, 4)}`);
-  const times = String(event.time || "").split(/[,;]|\s+и\s+/).map((t) => t.trim()).filter(Boolean).map((t) => t.replace(":", "."));
-  const dateCell = [dateText(event.date) + (event.dateEnd ? ` до ${dateText(event.dateEnd)}` : ""), times.join(" и ")].filter(Boolean).join("\n");
+const dateTextOf = (iso, today) => (iso.slice(0, 4) === today.slice(0, 4) ? dd(iso) : `${dd(iso)}.${iso.slice(0, 4)}`);
+const dateRangeText = (e, today) => dateTextOf(e.date, today) + (e.dateEnd ? ` до ${dateTextOf(e.dateEnd, today)}` : "");
+
+/**
+ * Событие -> ячейки строки.
+ * v2: «04.10» | «11:00» | «12:30» | «Название» | «Большая сцена» | «Иванова М.В./ Петрова Л.Н.» | …
+ * v1: «04.10\n11.00 и 13.00» | «Название\n(малая сцена)» | … (конец и площадка вне скобок в старом формате не хранятся)
+ */
+export function buildRow(event, roles, today, layout = {v: 1}) {
   const title = String(event.title || "").trim();
   const hall = String(event.hall || "").trim();
+  const people = roles.map((r) => (event.roles?.[r] || []).join("/ "));
+  if (layout.v === 2) {
+    return [dateRangeText(event, today), clock(String(event.time || "").split(/[,;]|\s+и\s+/)[0]), clock(event.end), title, hall, ...people];
+  }
+  const times = String(event.time || "").split(/[,;]|\s+и\s+/).map((t) => t.trim()).filter(Boolean).map((t) => t.replace(":", "."));
+  const dateCell = [dateRangeText(event, today), times.join(" и ")].filter(Boolean).join("\n");
   const titleCell = [title, hall ? `(${hall})` : ""].filter(Boolean).join("\n");
-  return [dateCell, titleCell, ...roles.map((r) => (event.roles?.[r] || []).join("/ "))];
+  return [dateCell, titleCell, ...people];
+}
+
+/** Старый лист -> новый (Дата | Начало | Конец | Событие | Площадка | роли…). События с двумя временами делятся на две строки. */
+export function migrateTable(table, today) {
+  if (layoutOf(table).v === 2) return table;
+  const oldRoles = (table[0] || []).slice(2).map(String);
+  const byRow = new Map(parseEvents(table, today).map((e) => [e.row, e]));
+  const width = 5 + oldRoles.length;
+  const pad = (cells) => { while (cells.length < width) cells.push(""); return cells; };
+  const out = [pad(["Дата", "Начало", "Конец", "Событие", "Площадка", ...oldRoles])];
+  table.slice(1).forEach((raw, idx) => {
+    const cells = raw.map((c) => String(c).trim());
+    const e = byRow.get(idx + 2);
+    const roleCells = oldRoles.map((_, i) => cells[i + 2] || "");
+    if (!e) { out.push(pad([cells[0] || "", "", "", cells[1] || "", "", ...roleCells])); return; } // шапки месяцев и прочее переносим как есть
+    const {title} = splitTitleHall(cells[1] || "");
+    const starts = e.time ? e.time.split(/,\s*/) : [""];
+    for (const start of starts) out.push(pad([dateRangeText(e, today), start, "", title, e.hall, ...roleCells]));
+  });
+  return out;
 }
 
 export function validateEvent(e) {
@@ -252,6 +355,8 @@ export function validateEvent(e) {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(e.date || "") || !isoDate(+e.date.slice(0, 4), +e.date.slice(5, 7), +e.date.slice(8, 10))) errors.push("Укажите дату");
   if (e.dateEnd && !(/^\d{4}-\d{2}-\d{2}$/.test(e.dateEnd) && e.dateEnd >= e.date)) errors.push("Дата окончания не может быть раньше даты начала");
   if (e.time && !/^\s*\d{1,2}[.:]\d{2}(\s*(,|;|и)\s*\d{1,2}[.:]\d{2})*\s*$/.test(e.time)) errors.push("Время укажите как 11:00 или 11:00, 13:00");
+  if (e.end && !/^\s*\d{1,2}[.:]\d{2}\s*$/.test(e.end)) errors.push("Время окончания укажите как 12:30");
+  if (e.end && !e.time) errors.push("Укажите время начала");
   if (!String(e.title || "").trim()) errors.push("Укажите название");
   return errors;
 }

@@ -22,6 +22,8 @@ class Range {
   clearContent() { this.#each((r, c) => { if (this.#grid()[r - 1]) this.#grid()[r - 1][c - 1] = ""; }); return this; }
   merge() { this.sheet.styleLog.push(["merge", this.r]); return this; }
   setDataValidation(rule) { this.sheet.styleLog.push(["validation", rule]); return this; }
+  clearDataValidations() { return this; }
+  breakApart() { this.sheet.styleLog.push(["breakApart"]); return this; }
 }
 for (const m of ["setNumberFormat", "setBackground", "setFontColor", "setFontWeight", "setHorizontalAlignment", "setVerticalAlignment", "setWrap", "setBorder", "setFontSize", "setFontFamily"]) {
   Range.prototype[m] = function (...a) { this.sheet.styleLog.push([m, this.r, ...a]); return this; };
@@ -34,7 +36,10 @@ class Sheet {
   getLastColumn() { let m = 0; for (const row of this.cells) for (let j = row.length; j > 0; j--) if (row[j - 1] !== "") { m = Math.max(m, j); break; } return m; }
   getMaxRows() { return Math.max(this.maxRows, this.cells.length); }
   getMaxColumns() { return this.maxCols; }
-  getRange(r, c, nr = 1, nc = 1) { return new Range(this, r, c, nr, nc); }
+  getRange(r, c, nr = 1, nc = 1) { if (typeof r === "string") return {a1: r}; return new Range(this, r, c, nr, nc); }
+  getParent() { return this.ss; }
+  copyTo(ss) { const s = new Sheet("Копия " + this.name); s.cells = structuredClone(this.cells); s.ss = ss; ss.sheets.push(s); return s; }
+  setName(n) { this.name = n; return this; }
   getDataRange() { return new Range(this, 1, 1, Math.max(this.getLastRow(), 1), Math.max(this.getLastColumn(), 1)); }
   insertRowBefore(r) { this.cells.splice(r - 1, 0, []); }
   insertRowsAfter(r, n) { for (let i = 0; i < n; i++) this.cells.splice(r, 0, []); }
@@ -48,14 +53,14 @@ class Sheet {
 }
 
 class Spreadsheet {
-  constructor(tabs) { this.sheets = Object.entries(tabs).map(([name, rows]) => { const s = new Sheet(name); rows.forEach((row, i) => row.forEach((v, j) => s.put(i + 1, j + 1, v))); return s; }); }
+  constructor(tabs) { this.sheets = Object.entries(tabs).map(([name, rows]) => { const s = new Sheet(name); s.ss = this; rows.forEach((row, i) => row.forEach((v, j) => s.put(i + 1, j + 1, v))); return s; }); }
   getSheetByName(n) { return this.sheets.find((s) => s.name === n) || null; }
-  insertSheet(n) { const s = new Sheet(n); this.sheets.push(s); return s; }
+  insertSheet(n) { const s = new Sheet(n); s.ss = this; this.sheets.push(s); return s; }
 }
 
 const builder = (kind) => {
   const o = {kind};
-  for (const m of ["whenFormulaSatisfied", "whenTextEqualTo", "setBackground", "setFontColor", "setBold", "setRanges", "requireValueInList", "setAllowInvalid"]) o[m] = (...a) => { (o.calls ||= []).push([m, ...a]); return o; };
+  for (const m of ["whenFormulaSatisfied", "whenTextEqualTo", "setBackground", "setFontColor", "setBold", "setRanges", "requireValueInList", "requireValueInRange", "requireCheckbox", "setAllowInvalid"]) o[m] = (...a) => { (o.calls ||= []).push([m, ...a]); return o; };
   o.build = () => o;
   return o;
 };
@@ -86,7 +91,7 @@ export function loadGas({tabs, props = {}, now = Date.now()}) {
       base64EncodeWebSafe: (v) => bytesOf(v).toString("base64").replace(/\+/g, "-").replace(/\//g, "_"),
       base64DecodeWebSafe: (s) => { if (s.length % 4 === 1) throw new Error("Неверный base64"); return signed(Buffer.from(s.replace(/-/g, "+").replace(/_/g, "/"), "base64")); },
       newBlob: (s) => ({getBytes: () => signed(Buffer.from(s)), getDataAsString: () => Buffer.from(s).toString()}),
-      getUuid: randomUUID, sleep: () => {},
+      getUuid: randomUUID, sleep: () => {}, formatDate: () => "01.10 10:00",
     },
   };
   ctx.Utilities.newBlob = (v) => { const buf = typeof v === "string" ? Buffer.from(v) : unsigned(v); return {getBytes: () => signed(buf), getDataAsString: () => buf.toString()}; };

@@ -2,7 +2,9 @@
 import {normPhone, phonesIn} from "./core.mjs";
 import {platform} from "./platform.mjs";
 
-export const TABS = {schedule: "Расписание", staff: "Сотрудники", chats: "Подписчики", state: "_служебное", lock: "_замок"};
+export const TABS = {schedule: "Расписание", staff: "Сотрудники", venues: "Площадки", chats: "Подписчики", state: "_служебное", lock: "_замок"};
+export const VENUES_HEADER = ["Площадка", "Заметка"];
+const CHECKED_RE = /^(true|да|yes|1|✓|✔|x|х)$/i; // галочка в таблице: TRUE / ✓ / «да»
 export const SUBS_HEADER = ["Канал", "ID чата", "Телефон", "ФИО"];
 export const ROLE_LABELS = {admin: "Админ", editor: "Редактор", reader: "Читатель", blocked: "Заблокирован"};
 const CHUNK = 40000; // лимит ячейки Google — 50 000 знаков
@@ -27,15 +29,59 @@ export class Store {
     this.now = now;
   }
 
-  // --- сотрудники: ФИО | Телефон | Роль (Админ / Редактор / Читатель / Заблокирован) | Логин ---
+  // --- сотрудники: ФИО | Телефон | Роль (Админ / Редактор / Читатель / Заблокирован) | Логин | группы (колонки с галочками) ---
+  /** Колонки групп: всё правее «Логина», у чего в шапке есть название. */
+  #groupCols(rows) { return (rows[0] || []).map((h, col) => ({name: String(h || "").trim(), col})).filter((g) => g.col >= 4 && g.name); }
+
   users() {
+    const rows = this.book.get(TABS.staff);
+    const defs = this.#groupCols(rows);
     const out = [];
-    for (const [name = "", phones = "", role = "", login = ""] of this.book.get(TABS.staff).slice(1)) {
+    for (const row of rows.slice(1)) {
+      const [name = "", phones = "", role = "", login = ""] = row;
       const n = String(name).trim();
       if (!n) continue;
-      for (const phone of phonesIn(phones)) out.push({name: n, phone, role: parseRole(role), login: String(login).trim()});
+      const groups = defs.filter((g) => CHECKED_RE.test(String(row[g.col] || "").trim())).map((g) => g.name);
+      for (const phone of phonesIn(phones)) out.push({name: n, phone, role: parseRole(role), login: String(login).trim(), groups});
     }
     return out;
+  }
+
+  /** Группы: [{name, members: [ФИО]}] в порядке колонок. Состав — по галочкам в таблице; заблокированные не входят. */
+  groups() {
+    const defs = this.#groupCols(this.book.get(TABS.staff));
+    const active = this.activeUsers();
+    return defs.map((g) => ({name: g.name, members: [...new Set(active.filter((u) => u.groups.includes(g.name)).map((u) => u.name))]}));
+  }
+
+  // --- площадки: лист «Площадки» (название | заметка) ---
+  venues() {
+    if (!this.book.has(TABS.venues)) return [];
+    const seen = new Set();
+    const out = [];
+    for (const [name = ""] of this.book.get(TABS.venues).slice(1)) {
+      const n = String(name).split(/\s+/).filter(Boolean).join(" ");
+      if (n && !seen.has(n.toLowerCase())) { seen.add(n.toLowerCase()); out.push(n); }
+    }
+    return out;
+  }
+
+  addVenue(name) {
+    const n = String(name || "").split(/\s+/).filter(Boolean).join(" ");
+    if (!n) return false;
+    this.book.ensure(TABS.venues, VENUES_HEADER);
+    if (this.venues().some((v) => v.toLowerCase() === n.toLowerCase())) return false;
+    this.book.append(TABS.venues, [n, ""]);
+    return true;
+  }
+
+  removeVenue(name) {
+    if (!this.book.has(TABS.venues)) return false;
+    const want = String(name || "").trim().toLowerCase();
+    const i = this.book.get(TABS.venues).findIndex((r, k) => k > 0 && String(r[0] || "").trim().toLowerCase() === want);
+    if (i < 0) return false;
+    this.book.remove(TABS.venues, i + 1);
+    return true;
   }
 
   /** Активные сотрудники (без заблокированных): им можно писать и входить на сайт. */
@@ -107,10 +153,10 @@ export class Store {
         for (let k = 0; k < 5; k++) login += LOGIN_ALPHABET[platform.randomInt(LOGIN_ALPHABET.length)];
       } while (used.has(normLogin(login)));
       used.add(normLogin(login));
-      this.book.set(TABS.staff, i + 1, [r[0] || "", r[1] || "", r[2] || "", login]);
+      this.book.setCell(TABS.staff, i + 1, 4, login); // только колонка «Логин»: галочки групп правее не трогаем
       n++;
     }
-    if (n && !String(rows[0][3] || "").trim()) this.book.set(TABS.staff, 1, [rows[0][0] || "ФИО", rows[0][1] || "Телефон", rows[0][2] || "Роль", "Логин"]);
+    if (n && !String(rows[0][3] || "").trim()) this.book.setCell(TABS.staff, 1, 4, "Логин");
     return n;
   }
 

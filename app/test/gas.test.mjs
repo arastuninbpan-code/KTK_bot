@@ -68,19 +68,29 @@ test("вход по коду из бота и работа приложения:
   assert.match(notes[0].body.text, /✈️ <b>Вам назначена смена<\/b>\n\n<b>Экскурсия<\/b>\n🗓 Вт, 6 октября · ⏰ 15:00\n📍 Большая сцена\n👤 Администратор \/ Капельдинер/);
 });
 
-test("правка таблицы руками подхватывается таймером через ~15 секунд тишины", () => {
+test("правка таблицы руками рассылается сразу после паузы, не дожидаясь минутного таймера; версия данных растёт", () => {
   const g = G();
   tg(g, msg(5, "", {user_id: 5, phone_number: "9000000001"}));
   g.run("everyMinute()");
-  const sh = g.ss.getSheetByName("Расписание");
-  sh.put(2, 1, "04.10\n12.00 и 14.00");
+  const rev0 = g.run("getRev_()");
+  g.ss.getSheetByName("Расписание").put(2, 1, "04.10\n12.00 и 14.00");
   g.run("onSheetChange()");
-  const n = sentTo(g, 5).length;
-  g.run("everyMinute()"); // слишком рано: правка только что была
-  assert.equal(sentTo(g, 5).length, n);
-  g.advance(20000);
-  g.run("everyMinute()");
   assert.match(sentTo(g, 5).at(-1).body.text, /💬 <b>Смена изменена<\/b>[\s\S]*<s>11:00 и 13:00<\/s> → <b>12:00 и 14:00<\/b>/);
+  assert.notEqual(g.run("getRev_()"), rev0);
+  assert.equal(g.properties.dirty, undefined);
+});
+
+test("быстрая сверка: если за время паузы была ещё правка, лишний запуск не делает рассылку", () => {
+  const g = G();
+  tg(g, msg(5, "", {user_id: 5, phone_number: "9000000001"}));
+  g.run("everyMinute()");
+  g.ss.getSheetByName("Расписание").put(2, 1, "04.10\n12.00 и 14.00");
+  // «новая правка» появляется, пока первая обработка спит
+  g.run("Utilities.sleep = () => { PropertiesService.getScriptProperties().setProperty('dirty', 'newer'); }");
+  const n = sentTo(g, 5).length;
+  g.run("onSheetChange()");
+  assert.equal(sentTo(g, 5).length, n);
+  assert.equal(g.properties.dirty, "newer"); // дело за той самой «новой» обработкой или минутным таймером
 });
 
 test("setup создаёт таймеры и секреты; setWebhook показывает только адрес сайта; заблокировавший бота отвязывается", () => {
@@ -98,26 +108,50 @@ test("setup создаёт таймеры и секреты; setWebhook пока
   tg(g, msg(5, "", {user_id: 5, phone_number: "9000000001"}));
   g.run("everyMinute()");
   g.ss.getSheetByName("Расписание").put(2, 1, "04.10\n12.00");
-  g.run("onSheetChange()"); g.advance(20000);
   g.setFetchStatus(403); // Telegram: «бот заблокирован»
-  g.run("everyMinute()");
+  g.run("onSheetChange()");
   assert.equal(g.ss.getSheetByName("Подписчики").getDataRange().getDisplayValues().slice(1).filter((r) => r[0] && r[1]).length, 0);
 });
 
-test("styleSheets: шапки месяцев, заголовки, чередование строк, роли выпадающим списком", () => {
+test("styleSheets: перенос в новый формат (копия сохранена), шапки месяцев, чередование, роли списком, группы галочками, площадки", () => {
   const g = G();
   g.ss.getSheetByName("Расписание").put(4, 1, "05.11"); g.ss.getSheetByName("Расписание").put(4, 2, "Ноябрьское событие");
   g.run("styleSheets()");
-  const rows = g.ss.getSheetByName("Расписание").getDataRange().getDisplayValues().map((r) => r[0].split("\n")[0]);
-  assert.deepEqual(rows.slice(1), ["ОКТЯБРЬ 2026", "04.10", "10.10", "НОЯБРЬ 2026", "05.11"]);
+  const sh = g.ss.getSheetByName("Расписание").getDataRange().getDisplayValues();
+  assert.deepEqual(sh[0].slice(0, 5), ["Дата", "Начало", "Конец", "Событие", "Площадка"]);
+  assert.deepEqual(sh.slice(1).map((r) => r.slice(0, 5).join("|")),
+    ["ОКТЯБРЬ 2026||||", "04.10|11:00||Спектакль «Бука»|малая сцена", "04.10|13:00||Спектакль «Бука»|малая сцена", "10.10|||Сказки из старого чемодана|", "НОЯБРЬ 2026||||", "05.11|||Ноябрьское событие|"]);
+  assert.deepEqual(sh[2].slice(5, 7), ["Иванова М.В.", "Морозова Н.М."]); // люди переехали вместе со строкой
+  assert.ok(g.ss.sheets.some((x) => /^Расписание \(копия /.test(x.name)), "копия старого листа сохранена");
+  assert.deepEqual(g.ss.getSheetByName("Площадки").getDataRange().getDisplayValues(), [["Площадка", "Заметка"], ["Малая сцена", ""]]);
   const log = g.ss.getSheetByName("Расписание").styleLog;
   assert.ok(log.some((l) => l[0] === "setBackground" && l[2] === "#1B3560")); // шапки месяцев
   assert.ok(log.some((l) => l[0] === "setBackground" && l[2] === "#0A96DC")); // заголовки колонок
   assert.equal(g.ss.getSheetByName("Расписание").rules[0].calls[0][0], "whenFormulaSatisfied");
+  assert.ok(log.some((l) => l[0] === "validation" && l[1].calls.some((c) => c[0] === "requireValueInRange"))); // площадка — выпадающий список
   const staff = g.ss.getSheetByName("Сотрудники");
   assert.equal(staff.rules.length, 4);
-  assert.ok(staff.styleLog.some((l) => l[0] === "validation"));
+  assert.ok(staff.styleLog.some((l) => l[0] === "validation" && l[1].calls.some((c) => c[0] === "requireCheckbox"))); // галочки групп
+  assert.deepEqual(staff.getDataRange().getDisplayValues()[0].slice(4), ["Актёры", "Техника", "Зал"]);
   assert.equal(staff.getDataRange().getDisplayValues()[3][2], "Читатель"); // пустая роль -> «Читатель»
   g.run("styleSheets()"); // повторный запуск ничего не дублирует
   assert.equal(g.ss.getSheetByName("Расписание").getDataRange().getDisplayValues().filter((r) => /^[А-ЯЁ]+ \d{4}$/.test(r[0])).length, 2);
+  assert.equal(g.ss.sheets.filter((x) => /^Расписание \(копия /.test(x.name)).length, 1);
+});
+
+test("группы: галочки в таблице -> состав групп; выдача логинов не затирает галочки", () => {
+  const g = G();
+  g.run("styleSheets()");
+  const staff = g.ss.getSheetByName("Сотрудники");
+  staff.put(2, 5, "TRUE"); staff.put(3, 5, "TRUE"); staff.put(3, 6, "TRUE"); // Иванова и Петрова — «Актёры», Петрова — ещё «Техника»
+  g.run("store_().ensureLogins()");
+  const admin = api(g, {method: "POST", path: "/api/login", body: {login: g.run("store_().users()[0].login")}});
+  assert.equal(admin._status, 200);
+  const sched = api(g, {method: "GET", path: "/api/schedule", token: admin.token});
+  assert.deepEqual(sched.groups, [{name: "Актёры", members: ["Иванова М.В.", "Петрова Л.Н."]}, {name: "Техника", members: ["Петрова Л.Н."]}, {name: "Зал", members: []}]);
+  staff.put(5, 1, "Новичок Н.Н."); staff.put(5, 2, "9000000010"); // человек без логина: он выдастся, галочки соседей остаются
+  g.run("store_().ensureLogins()");
+  const row = g.ss.getSheetByName("Сотрудники").getDataRange().getDisplayValues();
+  assert.match(row[4][3], /^[A-Z][A-Z0-9]{5}$/);
+  assert.deepEqual([row[1][4], row[2][4], row[2][5]], ["TRUE", "TRUE", "TRUE"]);
 });

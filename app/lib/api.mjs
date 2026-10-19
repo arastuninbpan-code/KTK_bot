@@ -1,11 +1,11 @@
 // API приложения. Чистая функция: запрос -> {status, body}. Синхронный код, никакой привязки к платформе.
 import {makeToken, readToken} from "./auth.mjs";
-import {buildRow, headerRoles, matchPhones, parseDate, parseEvents, todayIso, validateEvent} from "./core.mjs";
+import {buildRow, findConflicts, headerRoles, layoutOf, matchPhones, norm, parseDate, parseEvents, todayIso, validateEvent} from "./core.mjs";
 import {platform} from "./platform.mjs";
 import {canEdit, ROLE_LABELS, TABS} from "./store.mjs";
 
 class HttpError extends Error {
-  constructor(status, message) { super(message); this.status = status; }
+  constructor(status, message, extra = {}) { super(message); this.status = status; this.extra = extra; }
 }
 
 /** Версия строки: по ней ловим одновременные правки (если строку уже изменили, вернём 409). */
@@ -30,7 +30,7 @@ function writeAt(store, table, date, cells, today) {
 const publicUser = (u) => ({name: u.name, role: u.role, roleLabel: ROLE_LABELS[u.role], canEdit: canEdit(u.role)});
 
 export function handleApi(req, deps) {
-  const {store, secret, now = () => Date.now(), afterChange = () => {}} = deps;
+  const {store, secret, now = () => Date.now(), afterChange = () => {}, getRev = () => "", bumpRev = () => {}} = deps;
   const {method, path, body = {}, token} = req;
   try {
     // --- без входа ---
@@ -45,6 +45,8 @@ export function handleApi(req, deps) {
     // --- нужен вход ---
     const session = readToken(token, secret, now());
     if (!session) throw new HttpError(401, "Нужно войти");
+    // лёгкая проверка «есть ли новое»: без чтения таблицы (только подпись входа и счётчик версий)
+    if (path === "/api/ping") { const rv = getRev(); return {status: 200, body: {rev: rv, changed: body.rev !== rv}}; }
     const users = store.users();
     const me = users.find((u) => u.phone === session.sub);
     if (!me || me.role === "blocked" || !me.login || session.l !== store.loginMark(me.login)) throw new HttpError(401, "Нужно войти");
@@ -57,13 +59,34 @@ export function handleApi(req, deps) {
         .sort((a, b) => (a.date + a.time).localeCompare(b.date + b.time))
         .map((e) => ({...e, rev: rev(table[e.row - 1]),
           mine: Object.entries(e.roles).filter(([, names]) => names.some((n) => matchPhones(n, users).includes(me.phone))).map(([role]) => role)}));
-      return {status: 200, body: {today, me: publicUser(me), roles: headerRoles(table), events, staff: canEdit(me.role) ? store.staffNames() : undefined}};
+      // площадки: список из листа «Площадки» + все, что уже вписано в события
+      const venues = [...store.venues()];
+      for (const e of events) if (e.hall && !venues.some((v) => norm(v) === norm(e.hall))) venues.push(e.hall);
+      const editor = canEdit(me.role);
+      return {status: 200, body: {today, me: publicUser(me), roles: headerRoles(table), layout: layoutOf(table).v, rev: getRev(), events, venues,
+        staff: editor ? store.staffNames() : undefined, groups: editor ? store.groups() : undefined}};
+    }
+
+    if (path === "/api/venues" && ["POST", "DELETE"].includes(method)) {
+      if (!canEdit(me.role)) throw new HttpError(403, "Площадки могут менять только администратор и редактор.");
+      const name = String(body.name || "").split(/\s+/).filter(Boolean).join(" ");
+      if (!name) throw new HttpError(400, "Укажите название площадки");
+      if (name.length > 60) throw new HttpError(400, "Название слишком длинное");
+      if (method === "POST") store.addVenue(name);
+      else {
+        const busy = parseEvents(store.book.get(TABS.schedule), today).some((e) => norm(e.hall) === norm(name) && (e.dateEnd || e.date) >= today);
+        if (busy) throw new HttpError(409, "На этой площадке есть будущие события. Сначала перенесите их.");
+        store.removeVenue(name);
+      }
+      bumpRev();
+      return {status: 200, body: {ok: true, venues: store.venues()}};
     }
 
     if (["POST", "PUT", "DELETE"].includes(method) && path.startsWith("/api/events")) {
       if (!canEdit(me.role)) throw new HttpError(403, "Менять расписание могут только администратор и редактор.");
       const table = store.book.get(TABS.schedule);
       const roles = headerRoles(table);
+      const layout = layoutOf(table);
       const rowNo = Number(path.split("/")[3] || 0);
 
       if (method !== "POST") {
@@ -72,6 +95,7 @@ export function handleApi(req, deps) {
       }
       if (method === "DELETE") {
         store.book.remove(TABS.schedule, rowNo);
+        bumpRev();
         afterChange();
         return {status: 200, body: {ok: true}};
       }
@@ -84,7 +108,15 @@ export function handleApi(req, deps) {
         for (const n of names) if (!staff.has(n)) errors.push(`Нет такого сотрудника: ${n}`);
       }
       if (errors.length) throw new HttpError(400, errors.join(". "));
-      const cells = buildRow(event, roles, today);
+      // площадка занята в это время? Предупреждаем; если человек подтвердил (force) — сохраняем
+      if (!body.force && event.hall) {
+        const clash = findConflicts(parseEvents(table, today), {...event, row: method === "PUT" ? rowNo : -1});
+        if (clash.length) {
+          const c = clash[0];
+          throw new HttpError(409, `Площадка «${event.hall}» занята: ${c.title}${c.time ? ` (${c.time}${c.end ? "–" + c.end : ""})` : ""}`, {conflicts: clash});
+        }
+      }
+      const cells = buildRow(event, roles, today, layout);
 
       if (method === "POST") {
         writeAt(store, table, event.date, cells, today);
@@ -97,12 +129,13 @@ export function handleApi(req, deps) {
           store.book.set(TABS.schedule, rowNo, cells);
         }
       }
+      bumpRev();
       afterChange();
       return {status: 200, body: {ok: true}};
     }
     throw new HttpError(404, "Не найдено");
   } catch (e) {
-    if (e instanceof HttpError) return {status: e.status, body: {error: e.message}};
+    if (e instanceof HttpError) return {status: e.status, body: {error: e.message, ...e.extra}};
     console.error(String(e?.message || e));
     return {status: 500, body: {error: "Что-то пошло не так. Попробуйте ещё раз."}};
   }

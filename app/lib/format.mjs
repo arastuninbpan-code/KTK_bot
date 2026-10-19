@@ -19,6 +19,8 @@ export const dateShort = (iso) => { const p = parts(iso); return `${WD_SHORT[p.w
 
 export const roleText = (role) => String(role || "").replace(/\s*\/\s*/g, " / ");
 export const timeText = (t) => String(t || "").split(/,\s*/).filter(Boolean).join(" и ");
+/** «11:00–12:30» (начало–окончание); без окончания — только начало. */
+export const timeRange = (r) => { const s = timeText(r && r.time); return s && r.end ? `${s}–${r.end}` : s; };
 
 /**
  * Блок одной смены: жирное название, дата · время, зал, роль.
@@ -29,8 +31,8 @@ export function shiftBlock(r, opts = {}) {
   const lines = [strike ? `<b><s>${esc(r.event)}</s></b>` : `<b>${esc(r.event)}</b>`];
   const when = [];
   if (withDate) when.push(`🗓 ${dateShort(r.date)}`);
-  if (old && old.time !== r.time) when.push(`⏰ ${old.time ? `<s>${timeText(old.time)}</s> → ` : ""}<b>${timeText(r.time) || "время уточняется"}</b>`);
-  else if (r.time) when.push(`⏰ ${timeText(r.time)}`);
+  if (old && timeRange(old) !== timeRange(r)) when.push(`⏰ ${timeRange(old) ? `<s>${timeRange(old)}</s> → ` : ""}<b>${timeRange(r) || "время уточняется"}</b>`);
+  else if (r.time) when.push(`⏰ ${timeRange(r)}`);
   if (when.length) lines.push(when.join(" · "));
   if (old && old.hall !== r.hall) lines.push(`📍 ${old.hall ? `<s>${esc(cap(old.hall))}</s> → ` : ""}<b>${esc(cap(r.hall)) || "уточняется"}</b>`);
   else if (r.hall) lines.push(`📍 ${esc(cap(r.hall))}`);
@@ -85,7 +87,7 @@ export function afishaText(rows, limit = 12) {
   let day = "";
   for (const {r, roles} of [...events.values()].slice(0, limit)) {
     if (r.date !== day) { day = r.date; out.push(`\n🗓 <b>${dateShort(r.date)}</b>`); }
-    const meta = [r.time && `⏰ ${timeText(r.time)}`, r.hall && `📍 ${esc(cap(r.hall))}`].filter(Boolean).join(" · ");
+    const meta = [r.time && `⏰ ${timeRange(r)}`, r.hall && `📍 ${esc(cap(r.hall))}`].filter(Boolean).join(" · ");
     out.push(`<b>${esc(r.event)}</b>${meta ? `\n${meta}` : ""}`);
     for (const [role, people] of roles) out.push(`👤 ${esc(roleText(role))}: ${people.map(esc).join(", ")}`);
     out.push("");

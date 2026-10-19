@@ -7,32 +7,51 @@
   const hh = (m) => { const t = new Date(now.getTime() + m * 60e3); return String(t.getUTCHours()).padStart(2, "0") + ":" + String(t.getUTCMinutes()).padStart(2, "0"); };
   const A = "Администратор/ Капельдинер", G = "Гардероб/ Уборщица", K = "Касса", M = "Монтировка", S = "Актеры, свет, звук";
   const STAFF = ["Иванова М.В.", "Кузнецова Е.Н.", "Морозова Н.М.", "Орлова А.В.", "Петрова Л.Н.", "Сидорова Л.Р."];
-  let seq = 10;
+  const GROUPS = [{name: "Актёры", members: ["Иванова М.В.", "Петрова Л.Н."]}, {name: "Техника", members: ["Кузнецова Е.Н.", "Орлова А.В."]}, {name: "Зал", members: ["Морозова Н.М.", "Сидорова Л.Р."]}];
+  let venues = ["Большая сцена", "Малая сцена", "Фойе"];
+  let seq = 10, rev = 1;
   const events = [
-    {row: 2, date: iso(0), dateEnd: "", time: hh(40), title: "Спектакль «Игра в солдатики»", hall: "большая сцена", roles: {[A]: ["Петрова Л.Н."], [G]: ["Сидорова Л.Р."], [K]: ["Орлова А.В."]}},
-    {row: 3, date: iso(1), dateEnd: "", time: "11:00, 13:00", title: "Спектакль «Бука»", hall: "малая сцена", roles: {[A]: ["Иванова М.В."], [G]: ["Морозова Н.М."]}},
-    {row: 4, date: iso(3), dateEnd: "", time: "15:00", title: "Экскурсия по театру", hall: "", roles: {[A]: ["Кузнецова Е.Н."]}},
-    {row: 5, date: iso(6), dateEnd: "", time: "11:00", title: "Спектакль «Мери Поппинс»", hall: "большая сцена", roles: {[A]: ["Иванова М.В.", "Сидорова Л.Р."], [G]: ["Морозова Н.М."], [K]: ["Орлова А.В."], [M]: ["Кузнецова Е.Н."]}},
-    {row: 6, date: iso(8), dateEnd: iso(12), time: "", title: "Фестиваль в Барнауле", hall: "", roles: {}},
+    {row: 2, date: iso(0), dateEnd: "", time: hh(40), end: hh(160), title: "Спектакль «Игра в солдатики»", hall: "Большая сцена", roles: {[A]: ["Петрова Л.Н."], [G]: ["Сидорова Л.Р."], [K]: ["Орлова А.В."]}},
+    {row: 3, date: iso(0), dateEnd: "", time: hh(100), end: hh(150), title: "Репетиция хора", hall: "Малая сцена", roles: {[S]: ["Иванова М.В."]}},
+    {row: 4, date: iso(1), dateEnd: "", time: "11:00", end: "12:30", title: "Спектакль «Бука»", hall: "Малая сцена", roles: {[A]: ["Иванова М.В."], [G]: ["Морозова Н.М."]}},
+    {row: 5, date: iso(1), dateEnd: "", time: "13:00", end: "14:30", title: "Спектакль «Бука»", hall: "Малая сцена", roles: {[A]: ["Иванова М.В."]}},
+    {row: 6, date: iso(3), dateEnd: "", time: "15:00", end: "16:00", title: "Экскурсия по театру", hall: "Фойе", roles: {[A]: ["Кузнецова Е.Н."]}},
+    {row: 7, date: iso(6), dateEnd: "", time: "11:00", end: "13:00", title: "Спектакль «Мери Поппинс»", hall: "Большая сцена", roles: {[A]: ["Иванова М.В.", "Сидорова Л.Р."], [G]: ["Морозова Н.М."], [K]: ["Орлова А.В."], [M]: ["Кузнецова Е.Н."]}},
+    {row: 8, date: iso(8), dateEnd: iso(12), time: "", end: "", title: "Фестиваль в Барнауле", hall: "", roles: {}},
   ].map((e) => ({...e, rev: "d" + e.row}));
   const users = {"ADMIN": {name: "Иванова М.В.", role: "admin", roleLabel: "Админ", canEdit: true}, "READER": {name: "Петрова Л.Н.", role: "reader", roleLabel: "Читатель", canEdit: false}};
+  const key = (s) => String(s || "").toLowerCase().split(/\s+/).filter(Boolean).join(" ");
+  const toMin = (t) => { const m = /^(\d{1,2}):(\d{2})$/.exec(t || ""); return m ? +m[1] * 60 + +m[2] : null; };
+  const slots = (e) => { const s = String(e.time || "").split(/,\s*/).map(toMin).filter((x) => x !== null); if (e.dateEnd || !s.length) return [[0, 1440]]; const en = s.length === 1 ? toMin(e.end) : null; return s.map((a) => [a, en !== null && en > a ? en : a + 120]); };
+  const clashes = (c) => c.hall ? events.filter((e) => e.row !== c.row && key(e.hall) === key(c.hall) && e.date <= (c.dateEnd || c.date) && c.date <= (e.dateEnd || e.date) && slots(e).some(([a, b]) => slots(c).some(([x, y]) => a < y && x < b))) : [];
   const view = (u) => events.slice().sort((a, b) => (a.date + a.time).localeCompare(b.date + b.time)).map((e) => ({...e, mine: Object.entries(e.roles).filter(([, n]) => n.includes(u.name)).map(([r]) => r)}));
   window.KTK_DEMO = {
     call(method, path, body, token) {
-      if (method === "POST" && path === "/api/login") return users[String(body.login).toUpperCase()] ? {status: 200, data: {token: "demo:" + String(body.login).toUpperCase(), user: users[String(body.login).toUpperCase()]}} : {status: 401, data: {error: "В демо-режиме логины: ADMIN (админ) и READER (читатель)"}};
+      if (method === "POST" && path === "/api/login") { const k = String(body.login).toUpperCase(); return users[k] ? {status: 200, data: {token: "demo:" + k, user: users[k]}} : {status: 401, data: {error: "В демо-режиме логины: ADMIN (админ) и READER (читатель)"}}; }
       const u = users[String(token).replace("demo:", "")];
       if (!u) return {status: 401, data: {error: "Нужно войти"}};
-      if (method === "GET") return {status: 200, data: {today: iso(0), me: u, roles: [A, G, K, M, S], events: view(u), staff: u.canEdit ? STAFF : undefined}};
+      if (path === "/api/ping") return {status: 200, data: {rev: String(rev), changed: (body || {}).rev !== String(rev)}};
+      if (method === "GET") return {status: 200, data: {today: iso(0), me: u, roles: [A, G, K, M, S], layout: 2, rev: String(rev), events: view(u), venues, staff: u.canEdit ? STAFF : undefined, groups: u.canEdit ? GROUPS : undefined}};
       if (!u.canEdit) return {status: 403, data: {error: "Менять расписание могут только администратор и редактор."}};
+      if (path === "/api/venues") {
+        const name = String(body.name || "").trim();
+        if (method === "POST") { if (!venues.some((v) => key(v) === key(name))) venues.push(name); }
+        else { if (events.some((e) => key(e.hall) === key(name))) return {status: 409, data: {error: "На этой площадке есть будущие события. Сначала перенесите их."}}; venues = venues.filter((v) => key(v) !== key(name)); }
+        rev++; return {status: 200, data: {ok: true, venues}};
+      }
       const row = Number(path.split("/")[3] || 0);
-      if (method === "DELETE") { events.splice(events.findIndex((e) => e.row === row), 1); return {status: 200, data: {ok: true}}; }
+      if (method === "DELETE") { events.splice(events.findIndex((e) => e.row === row), 1); rev++; return {status: 200, data: {ok: true}}; }
       if (!body.event.title) return {status: 400, data: {error: "Укажите название"}};
+      const clash = body.force ? [] : clashes({...body.event, row: method === "PUT" ? row : -1});
+      if (clash.length) return {status: 409, data: {error: `Площадка «${body.event.hall}» занята: ${clash[0].title} (${clash[0].time}${clash[0].end ? "–" + clash[0].end : ""})`, conflicts: clash}};
       const ev = {...body.event, rev: "d" + Math.random()};
       if (method === "POST") events.push({...ev, row: ++seq});
       else Object.assign(events.find((e) => e.row === row), ev);
+      rev++;
       return {status: 200, data: {ok: true}};
     },
   };
   localStorage.removeItem("ktk_token");
+  localStorage.removeItem("ktk_cache");
   document.title = "Расписание театра · демо";
 })();
