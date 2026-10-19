@@ -36,6 +36,17 @@ export default {
       }
     }
 
+    // ВКонтакте (Callback API): адрес /vk/<PATH_SECRET>. Подтверждение адреса отдаём сразу, остальное передаём скрипту и отвечаем «ok».
+    if (url.pathname === "/vk/" + env.PATH_SECRET) {
+      if (request.method !== "POST") return new Response("ok");
+      const raw = await request.text();
+      let update = {};
+      try { update = JSON.parse(raw); } catch (e) { return new Response("ok"); }
+      if (update.type === "confirmation") return new Response(env.VK_CONFIRM || "");
+      ctx.waitUntil(fetch(env.GAS_URL + (env.GAS_URL.includes("?") ? "&" : "?") + "vk=1", {method: "POST", headers: {"Content-Type": "application/json"}, body: raw, redirect: "follow"}));
+      return new Response("ok");
+    }
+
     if (request.method !== "POST" || url.pathname !== "/" + env.PATH_SECRET) return new Response("ok");
     const body = await request.text();
     ctx.waitUntil(fetch(env.GAS_URL, {

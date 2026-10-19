@@ -104,16 +104,44 @@ export const HELP = [
 ].join("\n");
 
 export const msgWelcome = (name) => `✈️ <b>Готово, ${esc(name)}!</b>\nТеперь я буду присылать уведомления о ваших сменах.\n\n${HELP}`;
-export const msgAskPhone = "💬 <b>Здравствуйте!</b>\nЧтобы получать уведомления о сменах, поделитесь номером телефона (кнопка ниже) или пришлите свой логин, который выдал администратор.";
+export const msgAskPhone = "💬 <b>Здравствуйте!</b>\nЧтобы получать уведомления о сменах, поделитесь номером телефона (кнопка ниже, если она есть) или просто напишите сообщением свой номер либо логин, который выдал администратор.";
 export const msgUnknownPhone = "💬 <b>Этого номера нет в списке сотрудников.</b>\nОбратитесь к администратору, чтобы вас добавили. Если у вас есть логин, просто пришлите его сюда.";
 export const msgStopped = "💬 <b>Уведомления отключены.</b>\nЧтобы включить снова, напишите /start.";
-export const msgConnected = (name) => `💬 <b>${esc(name)}</b>, вы подключены.\n\n${HELP}`;
+export const msgConnected = (name, canPost = false) => `💬 <b>${esc(name)}</b>, вы подключены.\n\n${HELP}${canPost ? "\n/post — опубликовать афишу недели" : ""}`;
 export const msgBlocked = "💬 <b>Доступ закрыт.</b>\nОбратитесь к администратору.";
 export const msgLogin = (login) => `🔑 <b>Ваш логин</b>
 
 <code>${esc(login)}</code>
 
 Введите его в приложении. Логин постоянный: его выдаёт и может изменить администратор.`;
+
+// ---------- публикация афиши (в группу ВКонтакте и/или Telegram-канал) ----------
+/**
+ * Афиша на неделю для открытой публикации: события по дням, время, площадка. Без имён сотрудников.
+ * events — результат parseEvents; простой текст (подходит и стене ВК, и каналу Telegram).
+ */
+export function publicAfishaText(events, today, days = 7) {
+  const last = new Date(Date.parse(today + "T00:00:00Z") + (days - 1) * 86400000).toISOString().slice(0, 10);
+  const list = events.filter((e) => e.date <= last && (e.dateEnd || e.date) >= today).sort((a, b) => (a.date + a.time).localeCompare(b.date + b.time));
+  if (!list.length) return "";
+  const head = `🎭 Афиша на неделю: ${dateShort(today).split(", ")[1]} — ${dateShort(last).split(", ")[1]}`;
+  const out = [head];
+  let day = "";
+  for (const e of list) {
+    const key = e.date < today ? today : e.date;
+    if (key !== day) { day = key; out.push(`\n🗓 ${dateLong(key)}`); }
+    const when = e.time ? `${timeRange(e)} · ` : "";
+    const range = e.dateEnd ? ` (${dateShort(e.date).split(", ")[1]} — ${dateShort(e.dateEnd).split(", ")[1]})` : "";
+    out.push(`${when}${e.title}${range}${e.hall ? `\n📍 ${cap(e.hall)}` : ""}`);
+  }
+  return out.join("\n").trim();
+}
+
+export const msgPostNoRights = "💬 <b>Публиковать могут только администратор и редактор.</b>";
+export const msgPostEmpty = "💬 <b>На ближайшую неделю событий нет:</b> публиковать нечего.";
+export const msgPostNotConfigured = "💬 <b>Публикация пока не настроена.</b>\nНужны: для ВКонтакте — VK_TOKEN и VK_GROUP_ID, для Telegram-канала — TG_CHANNEL (в свойствах скрипта).";
+export const msgPostPreview = (text, targets) => `💬 <b>Так будет выглядеть афиша</b>\n\n${esc(text)}\n\n—\nКуда: ${esc(targets.join(", "))}. Чтобы опубликовать, отправьте /post да`;
+export const msgPostResult = (lines) => `💬 <b>Публикация</b>\n\n${lines.map(esc).join("\n")}`;
 
 /** Кнопка под сообщением: «Открыть в приложении». Если адрес приложения не задан — без кнопки. */
 export const appButton = (url) => (url ? {button: {text: "Открыть в приложении", url}} : undefined);

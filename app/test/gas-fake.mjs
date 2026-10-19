@@ -81,7 +81,7 @@ export function loadGas({tabs, props = {}, now = Date.now()}) {
     CacheService: {getScriptCache: () => ({get: (k) => cache.get(k) ?? null, put: (k, v) => cache.set(k, v)})},
     LockService: {getScriptLock: () => ({waitLock() {}, releaseLock() {}})},
     ContentService: {MimeType: {JSON: "json"}, createTextOutput: (t) => ({t, setMimeType() { return this; }, getContent() { return this.t; }})},
-    UrlFetchApp: {fetch: (url, opts) => { fetches.push({url, ...opts, body: opts?.payload ? JSON.parse(opts.payload) : undefined}); return respond(ctx.__fetchStatus || 200, "{\"ok\":true}"); }},
+    UrlFetchApp: {fetch: (url, opts) => { fetches.push({url, ...opts, body: typeof opts?.payload === "string" ? JSON.parse(opts.payload) : opts?.payload}); const custom = ctx.__fetchReply && ctx.__fetchReply(url); return respond(ctx.__fetchStatus || 200, custom || "{\"ok\":true}"); }},
     ScriptApp: {getProjectTriggers: () => triggers.slice(), deleteTrigger: (t) => triggers.splice(triggers.indexOf(t), 1),
       newTrigger: (fn) => { const t = {fn}; const chain = {forSpreadsheet: () => chain, onChange: () => chain, onEdit: () => chain, timeBased: () => chain, everyMinutes: () => chain, create: () => { triggers.push(t); return t; }}; return chain; }},
     Utilities: {
@@ -97,5 +97,5 @@ export function loadGas({tabs, props = {}, now = Date.now()}) {
   ctx.Utilities.newBlob = (v) => { const buf = typeof v === "string" ? Buffer.from(v) : unsigned(v); return {getBytes: () => signed(buf), getDataAsString: () => buf.toString()}; };
   vm.createContext(ctx);
   vm.runInContext(readFileSync(join(fileURLToPath(new URL(".", import.meta.url)), "..", "..", "apps_script_bot", "Code.gs"), "utf8"), ctx);
-  return {ctx, ss, properties, fetches, triggers, advance: (ms) => { clock += ms; }, setFetchStatus: (s) => { ctx.__fetchStatus = s; }, run: (code) => vm.runInContext(code, ctx)};
+  return {ctx, ss, properties, fetches, triggers, advance: (ms) => { clock += ms; }, setFetchStatus: (s) => { ctx.__fetchStatus = s; }, setFetchReply: (fn) => { ctx.__fetchReply = fn; }, run: (code) => vm.runInContext(code, ctx)};
 }

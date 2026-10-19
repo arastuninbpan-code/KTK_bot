@@ -104,7 +104,49 @@ function tgSend_(chatId, text, options) {
   });
 }
 
-const SENDERS = {telegram: {name: "telegram", send: tgSend_}};
+// ---------- ВКонтакте ----------
+const VK_V = "5.199";
+
+function vkCall_(method, params) {
+  const r = UrlFetchApp.fetch("https://api.vk.com/method/" + method, {method: "post", payload: Object.assign({access_token: prop_("VK_TOKEN"), v: VK_V}, params), muteHttpExceptions: true});
+  let data = {};
+  try { data = JSON.parse(r.getContentText()); } catch (e) { throw new Error("VK: непонятный ответ (HTTP " + r.getResponseCode() + ")"); }
+  if (data.error) {
+    if (VK_CANT_WRITE.indexOf(data.error.error_code) >= 0) throw new Gone(); // человек запретил сообщения от сообщества
+    throw new Error("VK " + data.error.error_code + ": " + String(data.error.error_msg).slice(0, 160)); // без токена в тексте
+  }
+  return data.response;
+}
+
+function vkSend_(peerId, text, options) {
+  const pieces = chunkText(htmlToPlain(text));
+  pieces.forEach((piece, i) => {
+    const params = {user_id: peerId, random_id: Math.floor(Math.random() * 2147483647), message: piece, dont_parse_links: 1};
+    if (i === pieces.length - 1) { const kb = vkKeyboard(options); if (kb) params.keyboard = kb; }
+    vkCall_("messages.send", params);
+  });
+}
+
+/** Пост на стену группы от имени сообщества. */
+function vkWallPost_(text) {
+  vkCall_("wall.post", {owner_id: "-" + String(prop_("VK_GROUP_ID")).replace(/\D/g, ""), from_group: 1, message: text});
+}
+
+const SENDERS = {telegram: {name: "telegram", send: tgSend_}, vk: {name: "vk", send: vkSend_}};
+
+/** Куда умеем публиковать афишу: стена группы ВК и/или Telegram-канал (если заданы свойства скрипта). */
+function publishers_() {
+  const vk = Boolean(prop_("VK_TOKEN") && prop_("VK_GROUP_ID")), tgc = prop_("TG_CHANNEL");
+  return {
+    targets: () => [vk ? "ВКонтакте" : "", tgc ? "Telegram-канал" : ""].filter(Boolean),
+    post: (text) => {
+      const lines = [];
+      if (vk) { try { vkWallPost_(text); lines.push("✅ ВКонтакте: опубликовано"); } catch (e) { lines.push("⚠️ ВКонтакте: " + String(e.message || e).slice(0, 200)); } }
+      if (tgc) { try { tgSend_(tgc, esc(text)); lines.push("✅ Telegram-канал: опубликовано"); } catch (e) { lines.push("⚠️ Telegram-канал: " + (e instanceof Gone ? "бот не добавлен в канал администратором" : String(e.message || e).slice(0, 200))); } }
+      return lines;
+    },
+  };
+}
 
 // ---------- цикл: сверка с таблицей, уведомления, напоминания ----------
 const runCycle_ = () => runCycle({store: store_(), senders: SENDERS, now: Date.now(), appUrl: prop_("APP_URL") || "", log: console});
@@ -164,7 +206,7 @@ function doGet() {
 /** Сюда приходят: (1) сообщения Telegram (через посредника, с ?secret=), (2) запросы приложения (JSON с полем path). */
 function doPost(e) {
   try {
-    if (e && e.parameter && e.parameter.secret) return telegramUpdate_(e);
+    if (e && e.parameter && e.parameter.secret) return e.parameter.vk ? vkUpdate_(e) : telegramUpdate_(e);
     const req = JSON.parse(e.postData.contents);
     if (!req || typeof req.path !== "string" || req.path.indexOf("/api/") !== 0) return json_({error: "Не найдено"});
     return json_(apiCall_(req));
@@ -194,7 +236,23 @@ function telegramUpdate_(e) {
   if (cache.get("u" + update.update_id)) return ok_(); // Telegram может прислать то же сообщение повторно
   cache.put("u" + update.update_id, "1", 21600);
   const ev = telegramEvent(update);
-  if (ev) withLock_(() => handleMessage({store: store_(), channel: SENDERS.telegram, ev, appUrl: prop_("APP_URL") || "", now: Date.now()}));
+  if (ev) withLock_(() => handleMessage({store: store_(), channel: SENDERS.telegram, ev, appUrl: prop_("APP_URL") || "", now: Date.now(), publishers: publishers_()}));
+  return ok_();
+}
+
+/** Сообщения ВКонтакте (Callback API через посредника). Подтверждение адреса отдаёт посредник; здесь на случай прямого обращения. */
+function vkUpdate_(e) {
+  if (e.parameter.secret !== prop_("WEBHOOK_SECRET")) return ok_();
+  const update = JSON.parse(e.postData.contents);
+  if (update.type === "confirmation") return ContentService.createTextOutput(prop_("VK_CONFIRM") || "");
+  if (prop_("VK_SECRET") && update.secret !== prop_("VK_SECRET")) return ok_();
+  const ev = vkEvent(update);
+  if (!ev) return ok_();
+  const cache = CacheService.getScriptCache();
+  const dedupe = "v" + (ev.eventId || ev.chatId + ":" + ev.text);
+  if (cache.get(dedupe)) return ok_(); // ВК повторяет событие, если ответ задержался
+  cache.put(dedupe, "1", 21600);
+  withLock_(() => handleMessage({store: store_(), channel: SENDERS.vk, ev, appUrl: prop_("APP_URL") || "", now: Date.now(), publishers: publishers_()}));
   return ok_();
 }
 

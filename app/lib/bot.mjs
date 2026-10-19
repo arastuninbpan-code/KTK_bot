@@ -1,14 +1,15 @@
 // Диалог с сотрудником (одинаков для любого мессенджера) и рассылка уведомлений. Синхронный код.
-import {looksLikePhone, matchPhones, normPhone, parseGrid, planCycle, todayIso} from "./core.mjs";
-import {afishaText, appButton, msgAskPhone, msgBlocked, msgChange, msgConnected, msgLogin, msgReminder, msgStopped, msgUnknownPhone, msgWelcome, shiftsText} from "./format.mjs";
+import {looksLikePhone, matchPhones, normPhone, parseEvents, parseGrid, planCycle, todayIso} from "./core.mjs";
+import {afishaText, appButton, msgAskPhone, msgBlocked, msgChange, msgConnected, msgLogin, msgPostEmpty, msgPostNoRights, msgPostNotConfigured, msgPostPreview, msgPostResult, msgReminder, msgStopped, msgUnknownPhone, msgWelcome, publicAfishaText, shiftsText} from "./format.mjs";
 import {Gone} from "./telegram.mjs";
-import {normLogin, TABS} from "./store.mjs";
+import {canEdit, normLogin, TABS} from "./store.mjs";
 
 /**
  * channel: {name, send(chatId, text, options)}; options: "contact" | "remove" | {button: {text, url}}
  * ev: {chatId, text, phone}
+ * publishers: {targets(): [названия мест], post(text): [строки-итоги]} — публикация афиши в группу ВК / канал Telegram (необязательно)
  */
-export function handleMessage({store, channel, ev, appUrl = "", now = Date.now()}) {
+export function handleMessage({store, channel, ev, appUrl = "", now = Date.now(), publishers = null}) {
   const chat = ev.chatId;
   const text = String(ev.text || "").trim();
   let phone = ev.phone ? normPhone(ev.phone) : null;
@@ -33,7 +34,8 @@ export function handleMessage({store, channel, ev, appUrl = "", now = Date.now()
   if (!user) return channel.send(chat, msgAskPhone, "contact");
   if (user.role === "blocked") return channel.send(chat, msgBlocked);
 
-  const cmd = (text.split(/\s+/)[0] || "").toLowerCase().split("@")[0];
+  const [first = "", ...rest] = text.split(/\s+/);
+  const cmd = first.toLowerCase().split("@")[0];
   const today = todayIso(now);
   if (cmd === "/shifts") {
     const rows = parseGrid(store.book.get(TABS.schedule), today).filter((r) => r.date >= today && r.person && matchPhones(r.person, users).includes(user.phone));
@@ -47,12 +49,23 @@ export function handleMessage({store, channel, ev, appUrl = "", now = Date.now()
     const fresh = store.users().find((x) => x.phone === user.phone);
     return channel.send(chat, msgLogin(fresh.login), {...btn, copy: {text: "📋 Скопировать логин", value: fresh.login}});
   }
+  if (cmd === "/post") {
+    if (!canEdit(user.role)) return channel.send(chat, msgPostNoRights);
+    const targets = publishers ? publishers.targets() : [];
+    if (!targets.length) return channel.send(chat, msgPostNotConfigured);
+    const text = publicAfishaText(parseEvents(store.book.get(TABS.schedule), today), today);
+    if (!text) return channel.send(chat, msgPostEmpty);
+    if (!/^(да|yes|ok)$/i.test(text0(rest))) return channel.send(chat, msgPostPreview(text, targets)); // сначала показываем, что уйдёт
+    return channel.send(chat, msgPostResult(publishers.post(text)));
+  }
   if (cmd === "/stop") {
     store.unbind(channel.name, chat);
     return channel.send(chat, msgStopped, "remove");
   }
-  return channel.send(chat, msgConnected(user.name), btn);
+  return channel.send(chat, msgConnected(user.name, canEdit(user.role) && Boolean(publishers && publishers.targets().length)), btn);
 }
+
+const text0 = (words) => String(words[0] || "").trim();
 
 /** Сверяет расписание с прошлой версией, рассылает уведомления и напоминания. senders: {telegram: {send}, ...} */
 export function runCycle({store, senders, now = Date.now(), appUrl = "", log = console}) {

@@ -155,3 +155,96 @@ test("группы: галочки в таблице -> состав групп;
   assert.match(row[4][3], /^[A-Z][A-Z0-9]{5}$/);
   assert.deepEqual([row[1][4], row[2][4], row[2][5]], ["TRUE", "TRUE", "TRUE"]);
 });
+
+// ---------- ВКонтакте ----------
+const VKPROPS = {VK_TOKEN: "VKTOKEN", VK_GROUP_ID: "club123", VK_SECRET: "vksecret", VK_CONFIRM: "abc123", TG_CHANNEL: "@teatr"};
+const GV = (extra = {}) => loadGas({now: NOW, tabs: {"Расписание": SCHEDULE, "Сотрудники": STAFF},
+  props: {SHEET_ID: "x", TELEGRAM_BOT_TOKEN: "TOKEN", WEBHOOK_SECRET: "hook", APP_URL: "https://app.test", ...VKPROPS, ...extra}});
+const vk = (g, update, secret = "hook") => g.run(`doPost(${JSON.stringify({parameter: {secret, vk: "1"}, postData: {contents: JSON.stringify(update)}})}).getContent()`);
+const vkMsg = (id, text, extra = {}) => ({type: "message_new", event_id: "e" + Math.random(), secret: "vksecret", object: {message: {peer_id: id, from_id: id, text, ...extra}}});
+const vkSent = (g, id) => g.fetches.filter((f) => f.url.endsWith("/messages.send") && String(f.body.user_id) === String(id));
+
+test("ВК: подтверждение адреса, чужой секрет игнорируется, беседы и эхо пропускаются", () => {
+  const g = GV();
+  assert.equal(vk(g, {type: "confirmation", group_id: 123}), "abc123");
+  assert.equal(vk(g, vkMsg(5, "/start"), "не тот"), "ok");
+  assert.equal(vk(g, {...vkMsg(5, "/start"), secret: "левый"}), "ok");
+  assert.equal(vk(g, vkMsg(5, "/start", {peer_id: 2000000001})), "ok"); // беседа
+  assert.equal(vk(g, vkMsg(5, "/start", {out: 1})), "ok");
+  assert.equal(g.fetches.length, 0);
+});
+
+test("ВК: человек пишет логин -> подключается, получает простой текст с кнопкой-ссылкой; повтор события не дублирует", () => {
+  const g = GV();
+  g.run("store_().ensureLogins()");
+  const login = g.run("store_().users()[1].login"); // Петрова
+  const ev = vkMsg(7, login.toLowerCase());
+  assert.equal(vk(g, ev), "ok");
+  const hello = vkSent(g, 7).at(-1).body;
+  assert.match(hello.message, /^✈️ Готово, Петрова Л\.Н\.!/);
+  assert.ok(!/[<>]/.test(hello.message), "никакой HTML-разметки в ВК");
+  assert.equal(hello.v, "5.199");
+  assert.equal(hello.access_token, "VKTOKEN");
+  assert.equal(g.ss.getSheetByName("Подписчики").getDataRange().getDisplayValues()[1].join("|"), "vk|7|9000000002|Петрова Л.Н.");
+  const n = g.fetches.length;
+  vk(g, ev); // тот же event_id
+  assert.equal(g.fetches.length, n);
+  vk(g, vkMsg(7, "/shifts"));
+  const sh = vkSent(g, 7).at(-1).body;
+  assert.match(sh.message, /Ваши ближайшие смены/);
+  assert.deepEqual(JSON.parse(sh.keyboard), {inline: true, buttons: [[{action: {type: "open_link", link: "https://app.test", label: "Открыть в приложении"}}]]});
+});
+
+test("ВК: уведомление о смене уходит и в Telegram, и в ВК, перенос показан зачёркнутым временем; запретил сообщения — отвязывается", () => {
+  const g = GV();
+  tg(g, msg(5, "", {user_id: 5, phone_number: "9000000001"}));
+  vk(g, vkMsg(8, "+7 900 000 00 01"));
+  g.run("everyMinute()");
+  g.ss.getSheetByName("Расписание").put(2, 1, "04.10\n12.00 и 14.00");
+  g.run("onSheetChange()");
+  assert.match(sentTo(g, 5).at(-1).body.text, /<s>11:00 и 13:00<\/s>/);
+  const v = vkSent(g, 8).at(-1).body.message;
+  assert.match(v, /Смена изменена/);
+  assert.ok(v.includes("1̶") && !v.includes("<s>"), "в ВК зачёркнуто значками");
+  g.setFetchReply((url) => (url.endsWith("/messages.send") ? JSON.stringify({error: {error_code: 901, error_msg: "Can't send messages for users without permission"}}) : null));
+  g.ss.getSheetByName("Расписание").put(2, 1, "04.10\n15.00");
+  g.run("onSheetChange()");
+  const subs = g.ss.getSheetByName("Подписчики").getDataRange().getDisplayValues().slice(1).filter((r) => r[0] && r[1]);
+  assert.deepEqual(subs.map((r) => r[0]), ["telegram"]);
+});
+
+test("публикация афиши: сначала предпросмотр без имён, «/post да» — на стену ВК и в Telegram-канал; читателю нельзя", () => {
+  const g = GV();
+  tg(g, msg(5, "", {user_id: 5, phone_number: "9000000001"})); // Иванова — Админ
+  tg(g, msg(6, "", {user_id: 6, phone_number: "9000000002"})); // Петрова — Читатель
+  tg(g, msg(6, "/post"));
+  assert.match(sentTo(g, 6).at(-1).body.text, /только администратор и редактор/);
+  const before = g.fetches.length;
+  tg(g, msg(5, "/post"));
+  const preview = sentTo(g, 5).at(-1).body.text;
+  assert.match(preview, /Так будет выглядеть афиша[\s\S]*🎭 Афиша на неделю[\s\S]*Спектакль «Бука»[\s\S]*📍 Малая сцена[\s\S]*Куда: ВКонтакте, Telegram-канал[\s\S]*\/post да/);
+  assert.ok(!/Иванова|Морозова/.test(preview.split("—")[0].split("Так будет выглядеть афиша")[1]), "имён сотрудников в афише нет");
+  assert.equal(g.fetches.length, before + 1); // только сам предпросмотр
+  tg(g, msg(5, "/post да"));
+  const wall = g.fetches.find((f) => f.url.endsWith("/wall.post"));
+  assert.equal(wall.body.owner_id, "-123");
+  assert.equal(wall.body.from_group, 1);
+  assert.match(wall.body.message, /🎭 Афиша на неделю/);
+  const chan = g.fetches.find((f) => f.url.endsWith("/sendMessage") && f.body.chat_id === "@teatr");
+  assert.match(chan.body.text, /Спектакль «Бука»/);
+  assert.match(sentTo(g, 5).at(-1).body.text, /✅ ВКонтакте: опубликовано\n✅ Telegram-канал: опубликовано/);
+});
+
+test("публикация: не настроено -> понятное сообщение; ошибка ВК показана без токена", () => {
+  const g = GV({VK_TOKEN: "", VK_GROUP_ID: "", TG_CHANNEL: ""});
+  tg(g, msg(5, "", {user_id: 5, phone_number: "9000000001"}));
+  tg(g, msg(5, "/post"));
+  assert.match(sentTo(g, 5).at(-1).body.text, /Публикация пока не настроена/);
+  const h = GV();
+  tg(h, msg(5, "", {user_id: 5, phone_number: "9000000001"}));
+  h.setFetchReply((url) => (url.endsWith("/wall.post") ? JSON.stringify({error: {error_code: 15, error_msg: "Access denied: no access to call this method"}}) : null));
+  tg(h, msg(5, "/post да"));
+  const res = sentTo(h, 5).at(-1).body.text;
+  assert.match(res, /⚠️ ВКонтакте: VK 15: Access denied/);
+  assert.ok(!res.includes("VKTOKEN"));
+});

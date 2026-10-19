@@ -5,7 +5,7 @@ import {fileURLToPath} from "node:url";
 import {join} from "node:path";
 
 const here = fileURLToPath(new URL(".", import.meta.url));
-const MODULES = ["platform", "core", "format", "telegram", "store", "auth", "api", "bot"];
+const MODULES = ["platform", "core", "format", "telegram", "vk", "store", "auth", "api", "bot"];
 const OUT = join(here, "..", "apps_script_bot", "Code.gs");
 
 export function bundle() {
@@ -15,6 +15,7 @@ export function bundle() {
  * ФАЙЛ СОБИРАЕТСЯ АВТОМАТИЧЕСКИ из app/lib и app/gas/shell.gs — руками не править (node app/build-gas.mjs).
  *
  * Свойства скрипта: SHEET_ID, TELEGRAM_BOT_TOKEN, RELAY_URL (или WEBAPP_URL), APP_URL (адрес приложения для кнопки в боте).
+ * ВКонтакте (необязательно): VK_TOKEN, VK_GROUP_ID, VK_SECRET, VK_CONFIRM. Публикация афиши: VK_TOKEN + VK_GROUP_ID и/или TG_CHANNEL.
  * Установка: setup() → «Начать развертывание → Веб-приложение» → setWebhook() → styleSheets().
  */
 `];
