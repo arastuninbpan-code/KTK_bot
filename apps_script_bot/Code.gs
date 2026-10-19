@@ -1681,7 +1681,7 @@ function groupMonths_(sheet, fresh) {
   });
 }
 
-const STYLE_VERSION_ = "3"; // поднимайте, когда меняется оформление: таблица перестроится сама при ближайшем срабатывании таймера
+const STYLE_VERSION_ = "4"; // поднимайте, когда меняется оформление: таблица перестроится сама при ближайшем срабатывании таймера
 
 /** После обновления кода один раз оформляет таблицу сама (то же, что ручной запуск styleSheets). */
 function autoStyle_(p) {
@@ -1786,7 +1786,15 @@ function styleStaff_(sheet) {
   const checkbox = SpreadsheetApp.newDataValidation().requireCheckbox().build();
   sheet.getRange(2, accessCol, rows, 1).setDataValidation(checkbox).setHorizontalAlignment("center");
   sheet.setColumnWidth(accessCol, 80);
-  sheet.getRange(2, commentCol, rows, 1).setWrap(true).setVerticalAlignment("top");
+  // комментарий — обычный текст: галочек здесь быть не должно (они могли «приехать» от соседней колонки при вставке)
+  const commentRange = sheet.getRange(2, commentCol, rows, 1);
+  commentRange.clearDataValidations();
+  const cv = sheet.getLastRow() > 1 ? sheet.getRange(2, commentCol, sheet.getLastRow() - 1, 1) : null;
+  if (cv) {
+    const vals = cv.getValues().map(([v]) => [(v === true || v === false || /^(true|false)$/i.test(String(v).trim())) ? "" : v]);
+    cv.setNumberFormat("@").setValues(vals);
+  }
+  commentRange.setWrap(true).setVerticalAlignment("top").setHorizontalAlignment("left");
   sheet.setColumnWidth(commentCol, 320);
 
   // группы: остальные колонки с названием в шапке; в ячейках галочки «входит в группу»
