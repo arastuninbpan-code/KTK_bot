@@ -82,7 +82,7 @@ export function loadGas({tabs, props = {}, now = Date.now()}) {
     LockService: {getScriptLock: () => ({waitLock() {}, releaseLock() {}})},
     ContentService: {MimeType: {JSON: "json"}, createTextOutput: (t) => ({t, setMimeType() { return this; }, getContent() { return this.t; }})},
     UrlFetchApp: {fetch: (url, opts) => { fetches.push({url, ...opts, body: typeof opts?.payload === "string" ? JSON.parse(opts.payload) : opts?.payload}); const custom = ctx.__fetchReply && ctx.__fetchReply(url); return respond(ctx.__fetchStatus || 200, custom || "{\"ok\":true}"); }},
-    ScriptApp: {getProjectTriggers: () => triggers.slice(), deleteTrigger: (t) => triggers.splice(triggers.indexOf(t), 1),
+    ScriptApp: {getProjectTriggers: () => triggers.slice(), deleteTrigger: (...a) => { if (a.length !== 1) throw new Error("Параметры не соответствуют сигнатуре метода ScriptApp.deleteTrigger"); triggers.splice(triggers.indexOf(a[0]), 1); },
       newTrigger: (fn) => { const t = {fn}; const chain = {forSpreadsheet: () => chain, onChange: () => chain, onEdit: () => chain, timeBased: () => chain, everyMinutes: () => chain, create: () => { triggers.push(t); return t; }}; return chain; }},
     Utilities: {
       DigestAlgorithm: {SHA_256: "sha256"}, Charset: {UTF_8: "utf8"},

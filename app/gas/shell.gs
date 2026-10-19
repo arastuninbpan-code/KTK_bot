@@ -261,7 +261,7 @@ function setup() {
   const p = PropertiesService.getScriptProperties();
   if (!p.getProperty("WEBHOOK_SECRET")) p.setProperty("WEBHOOK_SECRET", Utilities.getUuid().replace(/-/g, ""));
   secret_();
-  ScriptApp.getProjectTriggers().forEach(ScriptApp.deleteTrigger);
+  ScriptApp.getProjectTriggers().forEach((t) => ScriptApp.deleteTrigger(t)); // не forEach(deleteTrigger): тот передаёт лишние параметры
   const ss = SpreadsheetApp.openById(prop_("SHEET_ID"));
   ScriptApp.newTrigger("onSheetChange").forSpreadsheet(ss).onChange().create();
   ScriptApp.newTrigger("onSheetChange").forSpreadsheet(ss).onEdit().create();

@@ -96,6 +96,7 @@ test("быстрая сверка: если за время паузы была 
 test("setup создаёт таймеры и секреты; setWebhook показывает только адрес сайта; заблокировавший бота отвязывается", () => {
   const g = G();
   g.run("setup()");
+  g.run("setup()"); // повторный запуск: старые таймеры удаляются, новые не дублируются
   assert.deepEqual(g.triggers.map((t) => t.fn), ["onSheetChange", "onSheetChange", "everyMinute"]);
   assert.ok(g.properties.SESSION_SECRET.length >= 64);
   g.properties.RELAY_URL = "https://relay.example.workers.dev/секретное-слово";
