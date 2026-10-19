@@ -8,5 +8,5 @@ export function telegramEvent(update) {
   const m = update.message;
   if (!m || !m.chat || m.chat.type !== "private") return null;
   const own = m.contact && m.from && m.contact.user_id === m.from.id;
-  return {chatId: m.chat.id, text: m.text || "", phone: own ? m.contact.phone_number : null};
+  return {chatId: m.chat.id, text: m.text || "", phone: own ? m.contact.phone_number : null, date: m.date || 0};
 }

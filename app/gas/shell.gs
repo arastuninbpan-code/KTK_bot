@@ -82,6 +82,9 @@ class GasBook {
 const store_ = () => new Store(new GasBook(), {secret: secret_()});
 
 // ---------- Telegram ----------
+let netMs_ = 0; // сколько миллисекунд ушло на обращения к Telegram/ВК за текущий запуск (для журнала скорости)
+const fetchTimed_ = (url, opts) => { const t = Date.now(); try { return UrlFetchApp.fetch(url, opts); } finally { netMs_ += Date.now() - t; } };
+
 function tgSend_(chatId, text, options) {
   const pieces = chunkText(text);
   pieces.forEach((piece, i) => {
@@ -96,7 +99,7 @@ function tgSend_(chatId, text, options) {
         body.reply_markup = {inline_keyboard: rows};
       }
     }
-    const r = UrlFetchApp.fetch("https://api.telegram.org/bot" + prop_("TELEGRAM_BOT_TOKEN") + "/sendMessage",
+    const r = fetchTimed_("https://api.telegram.org/bot" + prop_("TELEGRAM_BOT_TOKEN") + "/sendMessage",
       {method: "post", contentType: "application/json", payload: JSON.stringify(body), muteHttpExceptions: true});
     const code = r.getResponseCode();
     if (code === 403) throw new Gone(); // бот заблокирован пользователем
@@ -110,7 +113,7 @@ const VK_V = "5.199";
 function vkCall_(method, params) {
   const payload = Object.assign({access_token: prop_("VK_TOKEN"), v: VK_V}, params);
   Object.keys(payload).forEach((k) => { payload[k] = String(payload[k]); }); // всё строками: числа с плавающей точкой ВК отклоняет (random_id not int64)
-  const r = UrlFetchApp.fetch("https://api.vk.com/method/" + method, {method: "post", payload, muteHttpExceptions: true});
+  const r = fetchTimed_("https://api.vk.com/method/" + method, {method: "post", payload, muteHttpExceptions: true});
   let data = {};
   try { data = JSON.parse(r.getContentText()); } catch (e) { throw new Error("VK: непонятный ответ (HTTP " + r.getResponseCode() + ")"); }
   if (data.error) {
@@ -162,7 +165,7 @@ function withLock_(fn) {
 // «Версия данных»: приложение раз в несколько секунд спрашивает, не изменилось ли что-то (дёшево: таблицу при этом не читаем)
 const getRev_ = () => prop_("DATA_REV") || "0";
 const bumpRev_ = () => PropertiesService.getScriptProperties().setProperty("DATA_REV", String(Date.now()));
-const SYNC_DELAY_MS = 5000; // сколько ждём тишины после правки таблицы, чтобы не рассылать недописанное
+const SYNC_DELAY_MS = 2000; // сколько ждём тишины после правки таблицы, чтобы не рассылать недописанное
 
 /** Таймер раз в минуту: страховка (если быстрая сверка не сработала) и проверка напоминаний раз в ~5 минут. */
 function everyMinute() {
@@ -238,11 +241,23 @@ function telegramUpdate_(e) {
   if (cache.get("u" + update.update_id)) return ok_(); // Telegram может прислать то же сообщение повторно
   cache.put("u" + update.update_id, "1", 21600);
   const ev = telegramEvent(update);
-  if (ev) withLock_(() => handleMessage({store: store_(), channel: SENDERS.telegram, ev, appUrl: prop_("APP_URL") || "", now: Date.now(), publishers: publishers_()}));
+  if (ev) {
+    const t0 = Date.now();
+    netMs_ = 0;
+    withLock_(() => handleMessage({store: store_(), channel: SENDERS.telegram, ev, appUrl: prop_("APP_URL") || "", now: Date.now(), publishers: publishers_()}));
+    diag_("TG " + speed_(ev, t0));
+  }
   return ok_();
 }
 
 /** Сообщения ВКонтакте (Callback API через посредника). Подтверждение адреса отдаёт посредник; здесь на случай прямого обращения. */
+/** Строка про скорость: сколько секунд сообщение шло до скрипта и сколько скрипт его обрабатывал (без текста сообщения: там может быть логин). */
+function speed_(ev, t0) {
+  const lag = ev.date ? Math.max(0, Math.round(t0 / 1000 - ev.date)) + " с" : "?";
+  const cmd = (/^\/\w+/.exec(ev.text || "") || ["текст"])[0];
+  return cmd + ": доставка до скрипта " + lag + ", обработка " + (Date.now() - t0) + " мс, из них отправка в мессенджер " + netMs_ + " мс";
+}
+
 /** Короткий журнал для диагностики: лист «_лог» в таблице (время | сообщение). Секреты и токены сюда не пишем. */
 function diag_(text) {
   try {
@@ -266,8 +281,10 @@ function vkUpdate_(e) {
     const dedupe = "v" + (ev.eventId || ev.chatId + ":" + ev.text);
     if (cache.get(dedupe)) { diag_("VK: повтор того же события, пропущено"); return ok_(); } // ВК повторяет событие, если ответ задержался
     cache.put(dedupe, "1", 21600);
+    const t0 = Date.now();
+    netMs_ = 0;
     withLock_(() => handleMessage({store: store_(), channel: SENDERS.vk, ev, appUrl: prop_("APP_URL") || "", now: Date.now(), publishers: publishers_()}));
-    diag_("VK: сообщение от " + ev.chatId + " обработано, ответ отправлен");
+    diag_("VK: сообщение от " + ev.chatId + " обработано, ответ отправлен. " + speed_(ev, t0));
   } catch (err) {
     diag_("VK: ОШИБКА — " + (err && err.message ? err.message : (err && err.constructor && err.constructor.name) || err));
   }
