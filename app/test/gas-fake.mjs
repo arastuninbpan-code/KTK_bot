@@ -30,6 +30,7 @@ class Range {
     else for (let i = g.length - 1; i >= 0; i--) if (g[i].from <= to && g[i].to >= this.r) { g.splice(i, 1); break; }
     return this;
   }
+  clear() { this.#each((r, c) => { if (this.#grid()[r - 1]) this.#grid()[r - 1][c - 1] = ""; }); this.sheet.styleLog.push(["clear", this.r, this.c]); return this; }
   breakApart() { this.sheet.styleLog.push(["breakApart"]); return this; }
 }
 for (const m of ["setNumberFormat", "setBackground", "setFontColor", "setFontWeight", "setHorizontalAlignment", "setVerticalAlignment", "setWrap", "setBorder", "setFontSize", "setFontFamily"]) {

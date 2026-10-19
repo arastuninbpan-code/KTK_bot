@@ -5,7 +5,7 @@ import {fileURLToPath} from "node:url";
 import {join} from "node:path";
 
 const here = fileURLToPath(new URL(".", import.meta.url));
-const MODULES = ["platform", "core", "format", "telegram", "vk", "store", "auth", "api", "bot"];
+const MODULES = ["platform", "core", "format", "telegram", "vk", "layout", "store", "auth", "api", "bot"];
 const OUT = join(here, "..", "apps_script_bot", "Code.gs");
 
 export function bundle() {

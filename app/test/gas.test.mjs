@@ -8,7 +8,7 @@ const SCHEDULE = [HEAD,
   ["04.10\n11.00 и 13.00", "Спектакль «Бука»\n(малая сцена)", "Иванова М.В.", "Морозова Н.М.", "", "", ""],
   ["10.10", "Сказки из старого чемодана", "Петрова Л.Н.", "", "", "", ""]];
 const G = () => loadGas({now: NOW, tabs: {"Расписание": SCHEDULE, "Сотрудники": STAFF},
-  props: {SHEET_ID: "x", STYLE_VER: "4", TELEGRAM_BOT_TOKEN: "TOKEN", WEBHOOK_SECRET: "hook", APP_URL: "https://app.test"}});
+  props: {SHEET_ID: "x", STYLE_VER: "5", TELEGRAM_BOT_TOKEN: "TOKEN", WEBHOOK_SECRET: "hook", APP_URL: "https://app.test"}});
 
 const tg = (g, update) => g.run(`doPost(${JSON.stringify({parameter: {secret: "hook"}, postData: {contents: JSON.stringify(update)}})}).getContent()`);
 const msg = (id, text, contact) => ({update_id: Math.floor(Math.random() * 1e9), message: {chat: {id, type: "private"}, from: {id}, text, contact}});
@@ -161,7 +161,7 @@ test("группы: галочки в таблице -> состав групп;
 // ---------- ВКонтакте ----------
 const VKPROPS = {VK_TOKEN: "VKTOKEN", VK_GROUP_ID: "club123", VK_SECRET: "vksecret", VK_CONFIRM: "abc123", TG_CHANNEL: "@teatr"};
 const GV = (extra = {}) => loadGas({now: NOW, tabs: {"Расписание": SCHEDULE, "Сотрудники": STAFF},
-  props: {SHEET_ID: "x", STYLE_VER: "4", TELEGRAM_BOT_TOKEN: "TOKEN", WEBHOOK_SECRET: "hook", APP_URL: "https://app.test", ...VKPROPS, ...extra}});
+  props: {SHEET_ID: "x", STYLE_VER: "5", TELEGRAM_BOT_TOKEN: "TOKEN", WEBHOOK_SECRET: "hook", APP_URL: "https://app.test", ...VKPROPS, ...extra}});
 const vk = (g, update, secret = "hook") => g.run(`doPost(${JSON.stringify({parameter: {secret, vk: "1"}, postData: {contents: JSON.stringify(update)}})}).getContent()`);
 const vkMsg = (id, text, extra = {}) => ({type: "message_new", event_id: "e" + Math.random(), secret: "vksecret", object: {message: {peer_id: id, from_id: id, text, ...extra}}});
 const vkSent = (g, id) => g.fetches.filter((f) => f.url.endsWith("/messages.send") && String(f.body.user_id) === String(id));
@@ -358,7 +358,7 @@ test("после обновления таблица оформляется са
   const g = G();
   delete g.properties.STYLE_VER;
   g.run("everyMinute()"); // как после выкладки новой версии
-  assert.equal(g.properties.STYLE_VER, "4");
+  assert.equal(g.properties.STYLE_VER, "5");
   const staff = g.ss.getSheetByName("Сотрудники");
   assert.deepEqual(staff.getDataRange().getDisplayValues()[0].slice(4, 6), ["Доступ", "Комментарий"]);
   assert.deepEqual(g.ss.sheets.filter((x) => !x.hidden).map((x) => x.name).sort(), ["Площадки", "Расписание", "Сотрудники"]);
@@ -383,4 +383,52 @@ test("колонка «Комментарий»: без галочек, случ
   g.run("styleSheets()");
   const c = staff.getDataRange().getDisplayValues().map((r) => r[5]);
   assert.deepEqual(c.slice(1, 4), ["", "", "Хочу к вам"]);
+});
+
+test("месяцы идут по порядку без повторов: перепутанные события сортируются, дублирующиеся шапки убираются", () => {
+  const g = G();
+  g.run("styleSheets()");
+  const sch = g.ss.getSheetByName("Расписание");
+  // как на скриншоте: сентябрьское событие вписали после октябрьских, а потом октябрьское — ещё раз
+  let row = sch.getLastRow() + 1;
+  sch.put(row, 1, "05.09"); sch.put(row, 4, "Сентябрьское"); row++;
+  sch.put(row, 1, "19.10"); sch.put(row, 4, "Позднее октябрьское");
+  g.run("onSheetChange()");
+  g.run("everyMinute()");
+  const col = sch.getDataRange().getDisplayValues().map((r) => r[0]);
+  const heads = col.filter((x) => /^[А-ЯЁ]+ \d{4}$/.test(x));
+  assert.deepEqual(heads, ["СЕНТЯБРЬ 2026", "ОКТЯБРЬ 2026"]);
+  assert.ok(col.indexOf("05.09") < col.indexOf("ОКТЯБРЬ 2026"));
+  assert.ok(col.indexOf("19.10") > col.indexOf("10.10"));
+  g.run("everyMinute()");
+  assert.deepEqual(sch.getDataRange().getDisplayValues().map((r) => r[0]), col, "повторный проход ничего не меняет");
+});
+
+test("колонки переставили: система находит их по названиям, появляется красная кнопка; «Да, вернуть» возвращает исходный вид", () => {
+  const g = G();
+  g.run("styleSheets()");
+  const staff = g.ss.getSheetByName("Сотрудники");
+  const swap = (a, b) => { staff.cells.forEach((row) => { while (row.length < 8) row.push(""); [row[a], row[b]] = [row[b], row[a]]; }); };
+  swap(1, 2); // «Телефон» и «Роль» поменялись местами
+  assert.equal(g.run("store_().users().find((u) => u.name === 'Иванова М.В.').role"), "admin"); // читается как раньше
+  assert.equal(g.run("store_().users().find((u) => u.name === 'Иванова М.В.').phone"), "9000000001");
+  g.run("onSheetChange()");
+  g.run("everyMinute()");
+  const head = staff.getDataRange().getDisplayValues()[0];
+  const at = head.findIndex((x) => x.startsWith("↺"));
+  assert.ok(at > 0, "красная кнопка появилась в шапке");
+  assert.ok(staff.styleLog.some((l) => l[0] === "setBackground" && l[2] === "#F04E4A"));
+  // запись идёт в правильную колонку, а не в соседнюю
+  g.run("store_().addAccessRequest('9001112233', 'Хочу в команду')");
+  const rows = staff.getDataRange().getDisplayValues();
+  const req = rows.find((r) => r[0] === "ЗАЯВКА");
+  assert.ok(req.includes("9001112233") && req.some((x) => /Хочу в команду/.test(x)));
+  assert.equal(req[head.indexOf("Телефон")], "9001112233");
+  // нажали «Да, вернуть»
+  g.run(`onSheetChange({value: "✔ Да, вернуть", range: {getRow: () => 1, getValue: () => "✔ Да, вернуть", getSheet: () => SpreadsheetApp.openById("x").getSheetByName("Сотрудники")}})`);
+  const back = staff.getDataRange().getDisplayValues();
+  assert.deepEqual(back[0].slice(0, 6), ["ФИО", "Телефон", "Роль", "Логин", "Доступ", "Комментарий"]);
+  assert.ok(!back[0].some((x) => x.startsWith("↺")), "кнопка исчезла");
+  assert.equal(back[1][1].replace(/\D/g, "").slice(-10), "9000000001");
+  assert.equal(back[1][2], "Админ");
 });

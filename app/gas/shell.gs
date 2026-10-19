@@ -36,6 +36,7 @@ function secret_() {
 // ---------- кэш листов ----------
 // Чтение листа из таблицы — самое медленное место (около 0,4 с на лист). Часто нужные листы держим в кэше Google и
 // сбрасываем при любой правке: скриптом (GasBook), на сайте (тоже через GasBook) и руками (onSheetChange).
+const PLAN_KIND_ = {[TABS.staff]: "staff", [TABS.schedule]: "schedule"};
 const CACHED_TABS_ = [TABS.schedule, TABS.staff, TABS.venues, TABS.chats, TABS.requests];
 const CACHE_TTL_ = 600; // запас: даже если сброс почему-то не сработал, через 10 минут данные обновятся
 const CACHE_PART_ = 30000; // значение в кэше Google ограничено 100 КБ, режем на куски
@@ -69,14 +70,14 @@ const dropAllCaches_ = () => CacheService.getScriptCache().removeAll(CACHED_TABS
 
 // ---------- книга: тот же интерфейс, что у MemoryBook в тестах ----------
 class GasBook {
-  constructor() { this.memo = {}; this.opened = null; } // memo: лист читаем один раз за запрос
+  constructor() { this.memo = {}; this.opened = null; this.plans = {}; } // memo: лист читаем один раз за запрос
   get ss() { return this.opened || (this.opened = SpreadsheetApp.openById(prop_("SHEET_ID"))); } // таблицу открываем только когда без неё не обойтись
   sheet(tab) {
     const s = this.ss.getSheetByName(tab);
     if (!s) throw new Error("Нет листа «" + tab + "»");
     return s;
   }
-  touch(tab) { this.memo = {}; cacheDrop_(tab); } // после любой записи в лист
+  touch(tab) { this.memo = {}; this.plans = {}; cacheDrop_(tab); } // после любой записи в лист
   has(tab) {
     if (CACHED_TABS_.indexOf(tab) >= 0 && CacheService.getScriptCache().get("T:" + tab)) return true;
     return this.ss.getSheetByName(tab) !== null;
@@ -90,23 +91,43 @@ class GasBook {
   }
   /** Одна ячейка текстом (остальные в строке, например галочки групп, не трогаем). */
   setCell(tab, row, col, value) {
-    this.sheet(tab).getRange(row, col).setNumberFormat("@").setValue(String(value));
+    const at = physicalCol(this.plan(tab), col - 1);
+    if (at < 0) return; // такой колонки в таблице нет
+    this.sheet(tab).getRange(row, at + 1).setNumberFormat("@").setValue(String(value));
     this.touch(tab);
+  }
+  /** Как читать колонки листа: людей и расписание находим по названиям в шапке, поэтому колонки можно двигать. */
+  plan(tab) {
+    if (!(tab in this.plans)) { this.get(tab); }
+    return this.plans[tab] || null;
   }
   get(tab) {
     if (this.memo[tab]) return this.memo[tab];
     const cached = CACHED_TABS_.indexOf(tab) >= 0;
-    if (cached) { const hit = cacheRead_(tab); if (hit) return (this.memo[tab] = hit); }
-    const s = this.sheet(tab);
-    const rows = s.getLastRow() === 0 ? [] : s.getRange(1, 1, s.getLastRow(), Math.max(1, s.getLastColumn())).getDisplayValues();
-    if (cached) cacheWrite_(tab, rows);
-    return (this.memo[tab] = rows);
+    let rows = cached ? cacheRead_(tab) : null;
+    if (!rows) {
+      const s = this.sheet(tab);
+      rows = s.getLastRow() === 0 ? [] : s.getRange(1, 1, s.getLastRow(), Math.max(1, s.getLastColumn())).getDisplayValues();
+      if (cached) cacheWrite_(tab, rows);
+    }
+    const kind = PLAN_KIND_[tab];
+    const plan = kind && rows.length ? columnPlan(kind, rows[0]) : null;
+    this.plans[tab] = plan;
+    return (this.memo[tab] = virtualize(rows, plan));
   }
   set(tab, row, values) {
     const s = this.sheet(tab);
-    const width = Math.max(values.length, s.getLastColumn());
-    const padded = values.map(String);
-    while (padded.length < width) padded.push("");
+    const plan = this.plan(tab);
+    let padded;
+    if (plan && !plan.identity) { // значения идут в канонической последовательности, раскладываем по настоящим колонкам
+      padded = Array(Math.max(s.getLastColumn(), plan.perm.length)).fill("");
+      values.forEach((v, j) => { const at = physicalCol(plan, j); if (at >= 0) padded[at] = String(v); });
+    } else {
+      const width = Math.max(values.length, s.getLastColumn());
+      padded = values.map(String);
+      while (padded.length < width) padded.push("");
+    }
+    const width = padded.length;
     s.getRange(row, 1, 1, width).setNumberFormat("@").setValues([padded]); // текстом: «04.10» не превращается в дату
     this.touch(tab);
   }
@@ -223,7 +244,7 @@ function everyMinute() {
   const last = Number(p.getProperty("last_cycle") || 0);
   const dueDirty = dirty && now - dirty >= 15000;
   autoStyle_(p);
-  if (p.getProperty("regroup")) { p.deleteProperty("regroup"); try { tidySchedule_(); tidyStaff_(); } catch (err) { console.error("Таблица: " + String(err && err.message ? err.message : err)); } }
+  if (p.getProperty("regroup")) { p.deleteProperty("regroup"); try { tidySchedule_(); tidyStaff_(); syncRestoreButtons_(); } catch (err) { console.error("Таблица: " + String(err && err.message ? err.message : err)); } }
   if (!dueDirty && now - last < 4 * 60e3 + 30e3) return;
   withLock_(() => {
     if (dueDirty) p.deleteProperty("dirty");
@@ -236,7 +257,8 @@ function everyMinute() {
  * Срабатывает при любой правке таблицы руками. Отмечает «версия данных изменилась» (приложение подхватит за секунды),
  * ждёт ~5 секунд тишины и сразу рассылает уведомления, не дожидаясь минутного таймера.
  */
-function onSheetChange() {
+function onSheetChange(e) {
+  if (e && e.range && handleRestoreClick_(e)) return;
   dropAllCaches_(); // таблицу правили руками: кэшированные листы устарели
   const p = PropertiesService.getScriptProperties();
   p.setProperty("regroup", "1"); // шапки месяцев и сворачивание поправит ближайший минутный таймер
@@ -248,6 +270,7 @@ function onSheetChange() {
   withLock_(() => {
     p.deleteProperty("dirty");
     p.setProperty("last_cycle", String(Date.now()));
+    try { syncRestoreButtons_(); } catch (err) { console.error("Кнопка возврата вида: " + String(err && err.message ? err.message : err)); }
     runCycle_();
   });
 }
@@ -457,7 +480,7 @@ function styleHeader_(sheet, cols) {
 /** Шапки месяцев («СЕНТЯБРЬ 2026»), заголовки колонок, чередование строк. */
 function styleSchedule_(sheet) {
   const today = todayIso(Date.now());
-  ensureMonthHeaders_(sheet);
+  fixMonths_(sheet);
 
   // 2) оформление
   const lastRow = Math.max(2, sheet.getLastRow());
@@ -494,6 +517,70 @@ function styleSchedule_(sheet) {
     .setBackground(C.light).setRanges([range]).build();
   sheet.setConditionalFormatRules([banding]);
   groupMonths_(sheet, true);
+}
+
+const monthTitle_ = (date) => MONTHS_UP[+date.slice(5, 7) - 1] + " " + date.slice(0, 4);
+const dateOfRow_ = (cell, today) => { const m = String(cell).match(/^\s*(\d{1,2}\.\d{2}(?:\.\d{2,4})?)/); return m ? parseDate(m[1], today) : null; };
+const monthRowTitle_ = (row) => { const f = row.filter((c) => String(c).trim() !== ""); return f.length === 1 && MONTH_ROW_RE.test(String(f[0]).trim()) ? String(f[0]).trim() : null; };
+
+/**
+ * Месяцы должны идти друг за другом без повторов: у каждого события шапка именно его месяца, шапки по порядку.
+ * Если это не так (событие вписали не на своё место, дату поменяли, шапка задублировалась), лист пересобирается:
+ * события сортируются по дате (внутри одной даты порядок сохраняется), старые шапки убираются, ставятся новые.
+ */
+function monthsDisordered_(rows, today) {
+  let current = "";
+  let lastDate = "";
+  const seen = {};
+  for (let r = 1; r < rows.length; r++) {
+    const t = monthRowTitle_(rows[r]);
+    if (t) { if (seen[t]) return true; seen[t] = true; current = t; continue; }
+    const d = dateOfRow_(rows[r][0], today);
+    if (!d) continue;
+    if (d < lastDate || monthTitle_(d) !== current) return true;
+    lastDate = d;
+  }
+  return false;
+}
+
+function rebuildMonths_(sheet) {
+  const today = todayIso(Date.now());
+  const lastRow = sheet.getLastRow();
+  const cols = Math.max(2, sheet.getLastColumn());
+  const data = sheet.getRange(1, 1, lastRow, cols).getValues();
+  const body = [];
+  let key = "0000-00-00";
+  data.slice(1).forEach((row) => {
+    if (monthRowTitle_(row) !== null) return; // старые шапки убираем, новые поставим сами
+    if (row.every((c) => String(c).trim() === "")) return; // пустые строки внутри не нужны
+    const d = dateOfRow_(row[0], today);
+    if (d) key = d; // строка без понятной даты остаётся рядом с предыдущей
+    body.push({row, key, n: body.length});
+  });
+  body.sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : a.n - b.n));
+  const out = [];
+  let title = "";
+  body.forEach((b) => {
+    const t = b.key === "0000-00-00" ? "" : monthTitle_(b.key);
+    if (t && t !== title) { out.push([t].concat(Array(cols - 1).fill(""))); title = t; }
+    out.push(b.row);
+  });
+  const range = sheet.getRange(2, 1, Math.max(lastRow - 1, 1), cols);
+  for (let r = 2; r <= lastRow; r++) { const d = sheet.getRowGroupDepth(r); if (d > 0) sheet.getRange(r, 1, 1, 1).shiftRowGroupDepth(-d); }
+  sheet.getDataRange().breakApart();
+  range.clear();
+  if (out.length) sheet.getRange(2, 1, out.length, cols).setNumberFormat("@").setValues(out);
+  console.log("Месяцы пересобраны по порядку (строк: " + out.length + ").");
+}
+
+/** Приводит месяцы в порядок: пересборка, если они перепутаны, иначе только недостающие шапки. */
+function fixMonths_(sheet) {
+  if (sheet.getLastRow() < 2) return 0;
+  const rows = sheet.getRange(1, 1, sheet.getLastRow(), Math.max(2, sheet.getLastColumn())).getDisplayValues();
+  const plan = columnPlan("schedule", rows[0]);
+  if (plan && plan.perm[0] !== 0) return 0; // колонку «Дата» переставили: порядок наводить не будем, пока не вернут вид
+  if (monthsDisordered_(rows, todayIso(Date.now()))) { rebuildMonths_(sheet); return 1; }
+  return ensureMonthHeaders_(sheet);
 }
 
 /** Шапка месяца перед первым событием каждого месяца, если её нет (снизу вверх, чтобы номера строк не съезжали). Возвращает, сколько добавлено. */
@@ -548,7 +635,7 @@ function groupMonths_(sheet, fresh) {
   });
 }
 
-const STYLE_VERSION_ = "4"; // поднимайте, когда меняется оформление: таблица перестроится сама при ближайшем срабатывании таймера
+const STYLE_VERSION_ = "5"; // поднимайте, когда меняется оформление: таблица перестроится сама при ближайшем срабатывании таймера
 
 /** После обновления кода один раз оформляет таблицу сама (то же, что ручной запуск styleSheets). */
 function autoStyle_(p) {
@@ -568,18 +655,94 @@ function tidyStaff_() {
   const p = PropertiesService.getScriptProperties();
   const data = sheet.getRange(1, 1, sheet.getLastRow(), Math.max(sheet.getLastColumn(), 6)).getDisplayValues();
   const head = data[0].map((x) => String(x).trim());
+  const plan = columnPlan("staff", head);
   const sig = head.join("|");
-  const accessIdx = head.findIndex((x, i) => i >= 4 && /^доступ$/i.test(x));
-  if (accessIdx < 0 || p.getProperty("STAFF_HEAD") !== sig) { styleStaff_(sheet); p.setProperty("STAFF_HEAD", sig); }
+  const accessIdx = head.findIndex((x) => /^доступ$/i.test(x));
+  const canonical = !plan || !plan.modified; // колонки на своих местах: оформляем целиком; двигали — оформляем только то, что можно по названиям
+  if (canonical && (accessIdx < 0 || p.getProperty("STAFF_HEAD") !== sig)) { styleStaff_(sheet); p.setProperty("STAFF_HEAD", sig); return tidyStaff_(); }
+  if (!canonical && p.getProperty("STAFF_HEAD") !== sig) { // колонки переставили: новым колонкам-группам всё равно нужны галочки
+    const fixed = plan.perm.slice(0, 4 + (accessIdx >= 0 ? 1 : 0));
+    const rest = head.map((x, i) => ({x, i})).filter((c) => c.x && fixed.indexOf(c.i) < 0 && !/^комментарий$/i.test(c.x) && !c.x.startsWith(RESTORE_MARK));
+    const rows = Math.max(sheet.getMaxRows() - 1, 1);
+    rest.forEach((c) => sheet.getRange(2, c.i + 1, rows, 1).setDataValidation(SpreadsheetApp.newDataValidation().requireCheckbox().build()).setHorizontalAlignment("center"));
+    p.setProperty("STAFF_HEAD", sig);
+  }
   if (accessIdx < 0) return;
+  const roleIdx = plan ? plan.perm[2] : 2;
+  const nameIdx = plan ? plan.perm[0] : 0;
   let changed = false;
   for (let r = 2; r <= data.length; r++) {
-    const name = String(data[r - 1][0]).trim();
+    const name = String(data[r - 1][nameIdx]).trim();
     if (!name) continue;
-    if (String(data[r - 1][2]).trim() === "") { sheet.getRange(r, 3).setNumberFormat("@").setValue("Читатель"); changed = true; }
+    if (String(data[r - 1][roleIdx]).trim() === "") { sheet.getRange(r, roleIdx + 1).setNumberFormat("@").setValue("Читатель"); changed = true; }
     if (!/^заявка/i.test(name) && String(data[r - 1][accessIdx]).trim() === "") { sheet.getRange(r, accessIdx + 1).setValue(true); changed = true; }
   }
   if (changed) { dropAllCaches_(); bumpRev_(); }
+}
+
+// ---------- «Вернуть исходный вид»: если колонки переставили, система подстраивается (ищет их по названиям), а в шапке появляется красная кнопка ----------
+/** Ставит или убирает красную кнопку в шапке «Сотрудников» и «Расписания». */
+function syncRestoreButtons_() {
+  const ss = SpreadsheetApp.openById(prop_("SHEET_ID"));
+  Object.keys(PLAN_KIND_).forEach((tab) => {
+    const sheet = ss.getSheetByName(tab);
+    if (!sheet || sheet.getLastColumn() < 1) return;
+    const head = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getDisplayValues()[0].map((x) => String(x).trim());
+    const plan = columnPlan(PLAN_KIND_[tab], head);
+    const btn = head.findIndex((x) => x.startsWith(RESTORE_MARK));
+    let lastIdx = -1;
+    head.forEach((x, i) => { if (x && !x.startsWith(RESTORE_MARK)) lastIdx = i; });
+    if (plan && plan.modified) {
+      if (btn === lastIdx + 1) return; // уже на месте
+      if (btn >= 0) sheet.getRange(1, btn + 1).clear();
+      const cell = sheet.getRange(1, lastIdx + 2);
+      cell.setNumberFormat("@").setValue(RESTORE_LABEL)
+        .setDataValidation(SpreadsheetApp.newDataValidation().requireValueInList([RESTORE_LABEL, RESTORE_CONFIRM], true).setAllowInvalid(false).build())
+        .setBackground(C.coral).setFontColor(C.white).setFontWeight("bold").setHorizontalAlignment("center").setVerticalAlignment("middle").setWrap(true);
+      sheet.setColumnWidth(lastIdx + 2, 200);
+    } else if (btn >= 0) {
+      sheet.getRange(1, btn + 1).clear();
+    }
+  });
+}
+
+/** Возвращает колонки в исходный порядок (данные переезжают вместе с колонками), заново оформляет лист и убирает кнопку. */
+function restoreLayout_(sheet, kind) {
+  const lastRow = sheet.getLastRow();
+  const lastCol = sheet.getLastColumn();
+  if (lastRow < 1 || lastCol < 1) return false;
+  const data = sheet.getRange(1, 1, lastRow, lastCol).getValues();
+  const plan = columnPlan(kind, data[0].map(String));
+  if (!plan) return false;
+  const filled = (r) => r.filter((c) => String(c).trim() !== "");
+  const out = data.map((r, i) => {
+    if (i === 0) return plan.labels.slice();
+    const f = filled(r);
+    if (f.length === 1 && MONTH_ROW_RE.test(String(f[0]).trim())) return plan.perm.map((_, j) => (j === 0 ? String(f[0]).trim() : "")); // шапка месяца остаётся шапкой
+    return plan.perm.map((p) => (p >= 0 ? r[p] : ""));
+  });
+  sheet.getDataRange().breakApart();
+  sheet.getRange(1, 1, lastRow, lastCol).clear();
+  plan.perm.forEach((_, j) => { if (!out.some((r, i) => i > 0 && typeof r[j] === "boolean")) sheet.getRange(1, j + 1, lastRow, 1).setNumberFormat("@"); });
+  sheet.getRange(1, 1, out.length, plan.perm.length).setValues(out);
+  if (kind === "staff") styleStaff_(sheet); else styleSchedule_(sheet);
+  dropAllCaches_();
+  bumpRev_();
+  return true;
+}
+
+/** Нажали в красной кнопке «Да, вернуть»: восстанавливаем лист. Возвращает true, если это было нажатие кнопки. */
+function handleRestoreClick_(e) {
+  try {
+    const range = e && e.range;
+    if (!range || range.getRow() !== 1) return false;
+    if (String(e.value === undefined ? range.getValue() : e.value) !== RESTORE_CONFIRM) return false;
+    const sheet = range.getSheet();
+    const kind = PLAN_KIND_[sheet.getName()];
+    if (!kind) return false;
+    withLock_(() => { restoreLayout_(sheet, kind); syncRestoreButtons_(); });
+    return true;
+  } catch (err) { console.error("Возврат вида: " + String(err && err.message ? err.message : err)); return false; }
 }
 
 /** Следит за порядком в «Расписании»: шапки месяцев и сворачивание. Вызывается таймером после изменений. */
@@ -587,17 +750,12 @@ function tidySchedule_() {
   const ss = SpreadsheetApp.openById(prop_("SHEET_ID"));
   const sheet = ss.getSheetByName(TABS.schedule);
   if (!sheet) return;
-  const added = ensureMonthHeaders_(sheet);
-  if (added) {
-    const cols = Math.max(2, sheet.getLastColumn());
-    const col = sheet.getRange(1, 1, sheet.getLastRow(), 1).getDisplayValues();
-    for (let r = 2; r <= col.length; r++) {
-      if (!MONTH_ROW_RE.test(String(col[r - 1][0]).trim())) continue;
-      sheet.getRange(r, 1, 1, cols).merge().setBackground(C.navy).setFontColor(C.white).setFontWeight("bold").setHorizontalAlignment("center").setVerticalAlignment("middle").setFontSize(13);
-      sheet.setRowHeight(r, 38);
-    }
+  const added = fixMonths_(sheet);
+  if (added) { // добавили шапки или пересобрали порядок: оформляем лист заново, приложению сообщаем об изменении
+    styleSchedule_(sheet);
     dropAllCaches_();
     bumpRev_();
+    return;
   }
   groupMonths_(sheet, false);
 }
