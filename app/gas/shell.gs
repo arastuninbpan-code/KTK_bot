@@ -108,7 +108,9 @@ function tgSend_(chatId, text, options) {
 const VK_V = "5.199";
 
 function vkCall_(method, params) {
-  const r = UrlFetchApp.fetch("https://api.vk.com/method/" + method, {method: "post", payload: Object.assign({access_token: prop_("VK_TOKEN"), v: VK_V}, params), muteHttpExceptions: true});
+  const payload = Object.assign({access_token: prop_("VK_TOKEN"), v: VK_V}, params);
+  Object.keys(payload).forEach((k) => { payload[k] = String(payload[k]); }); // всё строками: числа с плавающей точкой ВК отклоняет (random_id not int64)
+  const r = UrlFetchApp.fetch("https://api.vk.com/method/" + method, {method: "post", payload, muteHttpExceptions: true});
   let data = {};
   try { data = JSON.parse(r.getContentText()); } catch (e) { throw new Error("VK: непонятный ответ (HTTP " + r.getResponseCode() + ")"); }
   if (data.error) {
@@ -121,7 +123,7 @@ function vkCall_(method, params) {
 function vkSend_(peerId, text, options) {
   const pieces = chunkText(htmlToPlain(text));
   pieces.forEach((piece, i) => {
-    const params = {user_id: peerId, random_id: Math.floor(Math.random() * 2147483647), message: piece, dont_parse_links: 1};
+    const params = {user_id: peerId, random_id: Math.floor(Date.now() * 1000 + Math.random() * 1000), message: piece, dont_parse_links: 1};
     if (i === pieces.length - 1) { const kb = vkKeyboard(options); if (kb) params.keyboard = kb; }
     vkCall_("messages.send", params);
   });

@@ -186,6 +186,8 @@ test("ВК: человек пишет логин -> подключается, п
   assert.ok(!/[<>]/.test(hello.message), "никакой HTML-разметки в ВК");
   assert.equal(hello.v, "5.199");
   assert.equal(hello.access_token, "VKTOKEN");
+  for (const [k, v] of Object.entries(hello)) assert.equal(typeof v, "string", `параметр ${k} должен уходить строкой`);
+  assert.match(hello.random_id, /^\d{13,16}$/); // целое int64: без точки и порядка
   assert.equal(g.ss.getSheetByName("Подписчики").getDataRange().getDisplayValues()[1].join("|"), "vk|7|9000000002|Петрова Л.Н.");
   const n = g.fetches.length;
   vk(g, ev); // тот же event_id
@@ -229,7 +231,7 @@ test("публикация афиши: сначала предпросмотр �
   tg(g, msg(5, "/post да"));
   const wall = g.fetches.find((f) => f.url.endsWith("/wall.post"));
   assert.equal(wall.body.owner_id, "-123");
-  assert.equal(wall.body.from_group, 1);
+  assert.equal(wall.body.from_group, "1");
   assert.match(wall.body.message, /🎭 Афиша на неделю/);
   const chan = g.fetches.find((f) => f.url.endsWith("/sendMessage") && f.body.chat_id === "@teatr");
   assert.match(chan.body.text, /Спектакль «Бука»/);
