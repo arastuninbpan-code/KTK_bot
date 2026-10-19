@@ -242,17 +242,19 @@ function telegramUpdate_(e) {
 
 /** Сообщения ВКонтакте (Callback API через посредника). Подтверждение адреса отдаёт посредник; здесь на случай прямого обращения. */
 function vkUpdate_(e) {
-  if (e.parameter.secret !== prop_("WEBHOOK_SECRET")) return ok_();
+  if (e.parameter.secret !== prop_("WEBHOOK_SECRET")) { console.log("VK: пропущено, secret в адресе воркера (GAS_URL) не совпадает с WEBHOOK_SECRET"); return ok_(); }
   const update = JSON.parse(e.postData.contents);
+  console.log("VK: пришло событие " + update.type);
   if (update.type === "confirmation") return ContentService.createTextOutput(prop_("VK_CONFIRM") || "");
-  if (prop_("VK_SECRET") && update.secret !== prop_("VK_SECRET")) return ok_();
+  if (prop_("VK_SECRET") && update.secret !== prop_("VK_SECRET")) { console.log("VK: пропущено, секретный ключ Callback API не совпал с VK_SECRET"); return ok_(); }
   const ev = vkEvent(update);
-  if (!ev) return ok_();
+  if (!ev) { console.log("VK: пропущено, это не личное сообщение человека"); return ok_(); }
   const cache = CacheService.getScriptCache();
   const dedupe = "v" + (ev.eventId || ev.chatId + ":" + ev.text);
-  if (cache.get(dedupe)) return ok_(); // ВК повторяет событие, если ответ задержался
+  if (cache.get(dedupe)) { console.log("VK: повтор того же события, пропущено"); return ok_(); } // ВК повторяет событие, если ответ задержался
   cache.put(dedupe, "1", 21600);
   withLock_(() => handleMessage({store: store_(), channel: SENDERS.vk, ev, appUrl: prop_("APP_URL") || "", now: Date.now(), publishers: publishers_()}));
+  console.log("VK: сообщение от " + ev.chatId + " обработано, ответ отправлен");
   return ok_();
 }
 
