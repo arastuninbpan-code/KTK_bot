@@ -28,54 +28,96 @@ function secret_() {
   return s;
 }
 
+// ---------- кэш листов ----------
+// Чтение листа из таблицы — самое медленное место (около 0,4 с на лист). Часто нужные листы держим в кэше Google и
+// сбрасываем при любой правке: скриптом (GasBook), на сайте (тоже через GasBook) и руками (onSheetChange).
+const CACHED_TABS_ = [TABS.schedule, TABS.staff, TABS.venues, TABS.chats];
+const CACHE_TTL_ = 600; // запас: даже если сброс почему-то не сработал, через 10 минут данные обновятся
+const CACHE_PART_ = 30000; // значение в кэше Google ограничено 100 КБ, режем на куски
+
+function cacheRead_(tab) {
+  const c = CacheService.getScriptCache();
+  const token = c.get("T:" + tab);
+  if (!token) return null;
+  const n = Number(token.split(":")[0]);
+  const keys = [];
+  for (let i = 0; i < n; i++) keys.push("T:" + tab + ":" + token + ":" + i);
+  const got = c.getAll(keys);
+  let json = "";
+  for (const k of keys) { if (got[k] == null) return null; json += got[k]; }
+  try { return JSON.parse(json); } catch (e) { return null; }
+}
+
+function cacheWrite_(tab, rows) {
+  const json = JSON.stringify(rows);
+  const n = Math.max(1, Math.ceil(json.length / CACHE_PART_));
+  const token = n + ":" + Utilities.getUuid().slice(0, 8);
+  const parts = {};
+  for (let i = 0; i < n; i++) parts["T:" + tab + ":" + token + ":" + i] = json.slice(i * CACHE_PART_, (i + 1) * CACHE_PART_);
+  const c = CacheService.getScriptCache();
+  c.putAll(parts, CACHE_TTL_);
+  c.put("T:" + tab, token, CACHE_TTL_);
+}
+
+const cacheDrop_ = (tab) => CacheService.getScriptCache().remove("T:" + tab);
+const dropAllCaches_ = () => CacheService.getScriptCache().removeAll(CACHED_TABS_.map((t) => "T:" + t));
+
 // ---------- книга: тот же интерфейс, что у MemoryBook в тестах ----------
 class GasBook {
-  constructor() { this.ss = SpreadsheetApp.openById(prop_("SHEET_ID")); this.memo = {}; } // memo: лист читаем один раз за запрос (это самое медленное место)
+  constructor() { this.memo = {}; this.opened = null; } // memo: лист читаем один раз за запрос
+  get ss() { return this.opened || (this.opened = SpreadsheetApp.openById(prop_("SHEET_ID"))); } // таблицу открываем только когда без неё не обойтись
   sheet(tab) {
     const s = this.ss.getSheetByName(tab);
     if (!s) throw new Error("Нет листа «" + tab + "»");
     return s;
   }
+  touch(tab) { this.memo = {}; cacheDrop_(tab); } // после любой записи в лист
+  has(tab) {
+    if (CACHED_TABS_.indexOf(tab) >= 0 && CacheService.getScriptCache().get("T:" + tab)) return true;
+    return this.ss.getSheetByName(tab) !== null;
+  }
   ensure(tab, header) {
-    this.memo = {};
-    if (this.ss.getSheetByName(tab)) return;
+    if (this.has(tab)) return;
     const s = this.ss.insertSheet(tab);
     if (header) s.getRange(1, 1, 1, header.length).setNumberFormat("@").setValues([header.map(String)]);
+    this.touch(tab);
   }
-  has(tab) { return this.ss.getSheetByName(tab) !== null; }
   /** Одна ячейка текстом (остальные в строке, например галочки групп, не трогаем). */
   setCell(tab, row, col, value) {
-    this.memo = {};
     this.sheet(tab).getRange(row, col).setNumberFormat("@").setValue(String(value));
+    this.touch(tab);
   }
   get(tab) {
     if (this.memo[tab]) return this.memo[tab];
+    const cached = CACHED_TABS_.indexOf(tab) >= 0;
+    if (cached) { const hit = cacheRead_(tab); if (hit) return (this.memo[tab] = hit); }
     const s = this.sheet(tab);
     const rows = s.getLastRow() === 0 ? [] : s.getRange(1, 1, s.getLastRow(), Math.max(1, s.getLastColumn())).getDisplayValues();
+    if (cached) cacheWrite_(tab, rows);
     return (this.memo[tab] = rows);
   }
   set(tab, row, values) {
-    this.memo = {};
     const s = this.sheet(tab);
     const width = Math.max(values.length, s.getLastColumn());
     const padded = values.map(String);
     while (padded.length < width) padded.push("");
     s.getRange(row, 1, 1, width).setNumberFormat("@").setValues([padded]); // текстом: «04.10» не превращается в дату
+    this.touch(tab);
   }
   append(tab, values) { this.set(tab, this.sheet(tab).getLastRow() + 1, values); }
   insert(tab, beforeRow) {
-    this.memo = {};
     const s = this.sheet(tab);
     if (beforeRow > s.getMaxRows()) s.insertRowsAfter(s.getMaxRows(), 1);
     else s.insertRowBefore(beforeRow);
+    this.touch(tab);
   }
-  remove(tab, row) { this.memo = {}; this.sheet(tab).deleteRow(row); }
-  clearRow(tab, row) { this.memo = {}; const s = this.sheet(tab); s.getRange(row, 1, 1, s.getMaxColumns()).clearContent(); }
+  remove(tab, row) { this.sheet(tab).deleteRow(row); this.touch(tab); }
+  clearRow(tab, row) { const s = this.sheet(tab); s.getRange(row, 1, 1, s.getMaxColumns()).clearContent(); this.touch(tab); }
   replaceColumnA(tab, values) {
-    this.memo = {};
     const s = this.sheet(tab);
     s.clear();
     if (values.length) s.getRange(1, 1, values.length, 1).setNumberFormat("@").setValues(values.map((v) => [String(v)]));
+    this.touch(tab);
   }
 }
 
@@ -187,6 +229,7 @@ function everyMinute() {
  * ждёт ~5 секунд тишины и сразу рассылает уведомления, не дожидаясь минутного таймера.
  */
 function onSheetChange() {
+  dropAllCaches_(); // таблицу правили руками: кэшированные листы устарели
   const p = PropertiesService.getScriptProperties();
   const mark = String(Date.now());
   p.setProperty("dirty", mark);
@@ -346,6 +389,7 @@ const MONTH_ROW_RE = /^[А-ЯЁ]+ \d{4}$/;
 const ROLE_LIST = ["Админ", "Редактор", "Читатель", "Заблокирован"];
 
 function styleSheets() {
+  dropAllCaches_();
   const ss = SpreadsheetApp.openById(prop_("SHEET_ID"));
   migrateSchedule();
   const book = new GasBook();
@@ -356,6 +400,7 @@ function styleSheets() {
   styleVenues_(ss.getSheetByName(TABS.venues));
   const chats = ss.getSheetByName(TABS.chats);
   if (chats) styleHeader_(chats, 4);
+  dropAllCaches_();
   console.log("Таблица оформлена.");
 }
 

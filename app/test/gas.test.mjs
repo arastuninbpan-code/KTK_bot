@@ -269,3 +269,51 @@ test("ВК: журнал диагностики пишется в лист «_л
   assert.match(log[5], /от 10 обработано/);
   assert.ok(!log.join(" ").includes("VKTOKEN"));
 });
+
+// ---------- кэш листов ----------
+const reads = (g, name) => g.ss.getSheetByName(name).reads || 0;
+
+test("кэш: повторные команды не читают листы заново; ответы те же", () => {
+  const g = G();
+  tg(g, msg(5, "", {user_id: 5, phone_number: "9000000001"}));
+  tg(g, msg(5, "/shifts"));
+  const before = ["Расписание", "Сотрудники", "Подписчики"].map((n) => reads(g, n));
+  tg(g, msg(5, "/shifts"));
+  tg(g, msg(5, "/schedule"));
+  assert.deepEqual(["Расписание", "Сотрудники", "Подписчики"].map((n) => reads(g, n)), before, "листы взяты из кэша");
+  assert.match(sentTo(g, 5).at(-1).body.text, /Афиша/);
+});
+
+test("кэш: подписка, логин, правка таблицы руками и правка на сайте сразу видны (кэш сбрасывается)", () => {
+  const g = G();
+  tg(g, msg(5, "", {user_id: 5, phone_number: "9000000001"}));
+  tg(g, msg(5, "/shifts")); // кэш заполнен
+  // подписался второй человек: его строка в «Подписчиках» видна сразу
+  tg(g, msg(6, "", {user_id: 6, phone_number: "9000000002"}));
+  assert.equal(g.run("store_().chats().length"), 2);
+  tg(g, msg(6, "/stop"));
+  assert.equal(g.run("store_().chats().length"), 1);
+  // логин выдан и виден сразу
+  tg(g, msg(5, "/login"));
+  assert.match(sentTo(g, 5).at(-1).body.text, /<code>[A-Z][A-Z0-9]{5}<\/code>/);
+  // правка таблицы руками: после onSheetChange бот видит новое
+  g.ss.getSheetByName("Расписание").put(2, 1, "04.10\n15.00");
+  g.run("onSheetChange()");
+  tg(g, msg(5, "/shifts"));
+  assert.match(sentTo(g, 5).at(-1).body.text, /⏰ 15:00/);
+  // правка на сайте: событие сразу в расписании у следующего запроса
+  g.run("store_().ensureLogins()");
+  const login = api(g, {method: "POST", path: "/api/login", body: {login: g.run("store_().users()[0].login")}});
+  api(g, {method: "POST", path: "/api/events", token: login.token, body: {event: {date: "2026-10-12", time: "10:00", title: "Новое", roles: {}}}});
+  const sched = api(g, {method: "GET", path: "/api/schedule", token: login.token});
+  assert.ok(sched.events.some((e) => e.title === "Новое"));
+});
+
+test("кэш: большой лист режется на куски и читается целиком", () => {
+  const g = G();
+  const rows = Array.from({length: 600}, (_, i) => ["Событие номер " + i + " — " + "я".repeat(120), "x"]);
+  g.run(`cacheWrite_("Площадки", ${JSON.stringify(rows)})`);
+  assert.equal(JSON.stringify(g.run('cacheRead_("Площадки")')), JSON.stringify(rows)); // (массивы из изолированной среды сравниваем как текст)
+  g.run('cacheDrop_("Площадки")');
+  assert.equal(g.run('cacheRead_("Площадки")'), null);
+});

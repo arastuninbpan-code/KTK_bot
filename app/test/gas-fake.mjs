@@ -14,7 +14,7 @@ class Range {
   constructor(sheet, r, c, nr, nc) { Object.assign(this, {sheet, r, c, nr, nc}); }
   #grid() { return this.sheet.cells; }
   #each(fn) { for (let i = 0; i < this.nr; i++) for (let j = 0; j < this.nc; j++) fn(this.r + i, this.c + j, i, j); }
-  getDisplayValues() { const out = []; this.#each((r, c, i, j) => { (out[i] ||= [])[j] = String(this.#grid()[r - 1]?.[c - 1] ?? ""); }); return out; }
+  getDisplayValues() { this.sheet.reads = (this.sheet.reads || 0) + 1; const out = []; this.#each((r, c, i, j) => { (out[i] ||= [])[j] = String(this.#grid()[r - 1]?.[c - 1] ?? ""); }); return out; }
   getValues() { return this.getDisplayValues(); }
   getValue() { return this.getDisplayValues()[0][0]; }
   setValues(vals) { this.#each((r, c, i, j) => { this.sheet.put(r, c, vals[i][j]); }); this.sheet.styleLog.push(["setValues", this.r]); return this; }
@@ -79,7 +79,7 @@ export function loadGas({tabs, props = {}, now = Date.now()}) {
     console, Date: class extends Date { constructor(...a) { a.length ? super(...a) : super(clock); } static now() { return clock; } },
     SpreadsheetApp: {openById: () => ss, newConditionalFormatRule: () => builder("cf"), newDataValidation: () => builder("dv"), BorderStyle: {SOLID: "SOLID"}},
     PropertiesService: {getScriptProperties: () => ({getProperty: (k) => properties[k] ?? null, setProperty: (k, v) => { properties[k] = String(v); }, deleteProperty: (k) => { delete properties[k]; }})},
-    CacheService: {getScriptCache: () => ({get: (k) => cache.get(k) ?? null, put: (k, v) => cache.set(k, v)})},
+    CacheService: {getScriptCache: () => ({get: (k) => cache.get(k) ?? null, put: (k, v) => { cache.set(k, v); }, remove: (k) => { cache.delete(k); }, removeAll: (ks) => { ks.forEach((k) => cache.delete(k)); }, getAll: (ks) => Object.fromEntries(ks.filter((k) => cache.has(k)).map((k) => [k, cache.get(k)])), putAll: (o) => { for (const [k, v] of Object.entries(o)) cache.set(k, v); }})},
     LockService: {getScriptLock: () => ({waitLock() {}, releaseLock() {}})},
     ContentService: {MimeType: {JSON: "json"}, createTextOutput: (t) => ({t, setMimeType() { return this; }, getContent() { return this.t; }})},
     UrlFetchApp: {fetch: (url, opts) => { fetches.push({url, ...opts, body: typeof opts?.payload === "string" ? JSON.parse(opts.payload) : opts?.payload}); const custom = ctx.__fetchReply && ctx.__fetchReply(url); return respond(ctx.__fetchStatus || 200, custom || "{\"ok\":true}"); }},
