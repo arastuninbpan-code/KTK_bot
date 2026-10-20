@@ -8,7 +8,7 @@ const SCHEDULE = [HEAD,
   ["04.10\n11.00 и 13.00", "Спектакль «Бука»\n(малая сцена)", "Иванова М.В.", "Морозова Н.М.", "", "", ""],
   ["10.10", "Сказки из старого чемодана", "Петрова Л.Н.", "", "", "", ""]];
 const G = () => loadGas({now: NOW, tabs: {"Расписание": SCHEDULE, "Сотрудники": STAFF},
-  props: {SHEET_ID: "x", STYLE_VER: "9", TELEGRAM_BOT_TOKEN: "TOKEN", WEBHOOK_SECRET: "hook", APP_URL: "https://app.test"}});
+  props: {SHEET_ID: "x", STYLE_VER: "10", TELEGRAM_BOT_TOKEN: "TOKEN", WEBHOOK_SECRET: "hook", APP_URL: "https://app.test"}});
 
 const tg = (g, update) => g.run(`doPost(${JSON.stringify({parameter: {secret: "hook"}, postData: {contents: JSON.stringify(update)}})}).getContent()`);
 const msg = (id, text, contact) => ({update_id: Math.floor(Math.random() * 1e9), message: {chat: {id, type: "private"}, from: {id}, text, contact}});
@@ -164,7 +164,7 @@ test("группы: галочки в таблице -> состав групп;
 // ---------- ВКонтакте ----------
 const VKPROPS = {VK_TOKEN: "VKTOKEN", VK_GROUP_ID: "club123", VK_SECRET: "vksecret", VK_CONFIRM: "abc123", TG_CHANNEL: "@teatr"};
 const GV = (extra = {}) => loadGas({now: NOW, tabs: {"Расписание": SCHEDULE, "Сотрудники": STAFF},
-  props: {SHEET_ID: "x", STYLE_VER: "9", TELEGRAM_BOT_TOKEN: "TOKEN", WEBHOOK_SECRET: "hook", APP_URL: "https://app.test", ...VKPROPS, ...extra}});
+  props: {SHEET_ID: "x", STYLE_VER: "10", TELEGRAM_BOT_TOKEN: "TOKEN", WEBHOOK_SECRET: "hook", APP_URL: "https://app.test", ...VKPROPS, ...extra}});
 const vk = (g, update, secret = "hook") => g.run(`doPost(${JSON.stringify({parameter: {secret, vk: "1"}, postData: {contents: JSON.stringify(update)}})}).getContent()`);
 const vkMsg = (id, text, extra = {}) => ({type: "message_new", event_id: "e" + Math.random(), secret: "vksecret", object: {message: {peer_id: id, from_id: id, text, ...extra}}});
 const vkSent = (g, id) => g.fetches.filter((f) => f.url.endsWith("/messages.send") && String(f.body.user_id) === String(id));
@@ -364,7 +364,7 @@ test("после обновления таблица оформляется са
   const g = G();
   delete g.properties.STYLE_VER;
   g.run("everyMinute()"); // как после выкладки новой версии
-  assert.equal(g.properties.STYLE_VER, "9");
+  assert.equal(g.properties.STYLE_VER, "10");
   const staff = g.ss.getSheetByName("Сотрудники");
   assert.deepEqual(staff.getDataRange().getDisplayValues()[0].slice(4, 6), ["Доступ", "Комментарий"]);
   assert.deepEqual(g.ss.sheets.filter((x) => !x.hidden).map((x) => x.name).sort(), ["Площадки", "Расписание", "Сотрудники"]);
@@ -494,7 +494,7 @@ test("«Сотрудники» как в жизни: тысяча строк-з�
 });
 
 test("заявка из ВК: в «ФИО» имя из профиля, роль «Заявка»; поставили «Доступ» — это уже обычный сотрудник", () => {
-  const g = GV({STYLE_VER: "9"});
+  const g = GV({STYLE_VER: "10"});
   g.run("styleSheets()");
   g.setFetchReply((url) => (/users\.get/.test(url) ? JSON.stringify({response: [{first_name: "Анна", last_name: "Смирнова"}]}) : ""));
   vk(g, vkMsg(77, "89112223344"));
@@ -537,4 +537,26 @@ test("добавили событие в будущем месяце: просв
   assert.equal(c[d1 + 1], "СЕНТЯБРЬ 2026");
   g.run("everyMinute()"); g.run("onSheetChange()"); g.run("everyMinute()");
   assert.deepEqual(idx(), c, "повторные проходы ничего не меняют");
+});
+
+test("в «Расписании» люди выбираются из выпадающих списков, а в списках — все сотрудники с доступом и только они", () => {
+  const g = G();
+  g.run("styleSheets()");
+  const list = () => g.ss.getSheetByName("_люди").getDataRange().getDisplayValues().slice(1).map((r) => r[0]);
+  assert.deepEqual(list(), ["Иванова М.В.", "Морозова Н.М.", "Петрова Л.Н.", "Сидорова Л.Р."], "заблокированная Орлова в списке не нужна");
+  const sch = g.ss.getSheetByName("Расписание");
+  const dv = sch.styleLog.filter((l) => l[0] === "validation" && l[1].calls.some((c) => c[0] === "requireValueInRange"));
+  assert.ok(dv.length >= 6, "список площадок + все колонки с людьми");
+  // новый сотрудник: список обновляется сразу после правки таблицы
+  const staff = g.ss.getSheetByName("Сотрудники");
+  const nr = staff.getLastRow() + 1;
+  staff.put(nr, 1, "Новиков И.А."); staff.put(nr, 2, "9000000099");
+  g.run(`onSheetChange({range: {getSheet: () => SpreadsheetApp.openById("x").getSheetByName("Сотрудники"), getRow: () => ${nr}, getValue: () => "x"}, value: "x"})`);
+  assert.ok(list().includes("Новиков И.А."));
+  // доступ сняли — из списка уходит
+  const accessCol = staff.getDataRange().getDisplayValues()[0].indexOf("Доступ") + 1;
+  const before = sch.styleLog.length;
+  staff.put(2, accessCol, "FALSE");
+  g.run(`onSheetChange({range: {getSheet: () => SpreadsheetApp.openById("x").getSheetByName("Сотрудники"), getRow: () => 2, getValue: () => "FALSE"}, value: "FALSE"})`);
+  assert.ok(!list().includes("Иванова М.В.") || g.properties.OWNER_PHONE, "снятый доступ убирает из списка (кроме владельца)");
 });

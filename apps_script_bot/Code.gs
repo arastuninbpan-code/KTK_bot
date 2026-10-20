@@ -700,7 +700,7 @@ function occupancyRows(events, today) {
 // ===== lib/store.mjs =====
 // Хранилище поверх таблицы: сотрудники и роли, чаты, снимок расписания, коды входа, блокировка.
 
-const TABS = {schedule: "Расписание", staff: "Сотрудники", venues: "Площадки", chats: "Подписчики", requests: "_заявки", state: "_служебное", lock: "_замок"};
+const TABS = {schedule: "Расписание", staff: "Сотрудники", venues: "Площадки", chats: "Подписчики", requests: "_заявки", people: "_люди", state: "_служебное", lock: "_замок"};
 const REQUESTS_HEADER = ["Канал", "ID чата", "Телефон"];
 const VENUES_HEADER = ["Площадка", "Заметка"];
 const CHECKED_RE = /^(true|да|yes|1|✓|✔|x|х)$/i; // галочка в таблице: TRUE / ✓ / «да»
@@ -1587,7 +1587,7 @@ function everyMinute() {
   autoStyle_(p);
   const todayStr = todayIso(Date.now());
   if (p.getProperty("months_day") !== todayStr) { p.setProperty("months_day", todayStr); p.setProperty("regroup", "1"); } // новый день: месяц мог стать прошедшим, перекладываем вниз
-  if (p.getProperty("regroup")) { p.deleteProperty("regroup"); try { tidySchedule_(); tidyStaff_(); syncRestoreButtons_(); renderOccupancy_(); } catch (err) { diag_("Таблица: ОШИБКА — " + String(err && err.message ? err.message : err)); } }
+  if (p.getProperty("regroup")) { p.deleteProperty("regroup"); try { tidyStaff_(); renderPeopleList_(); tidySchedule_(); syncRestoreButtons_(); renderOccupancy_(); } catch (err) { diag_("Таблица: ОШИБКА — " + String(err && err.message ? err.message : err)); } }
   if (!dueDirty && now - last < 4 * 60e3 + 30e3) return;
   withLock_(() => {
     if (dueDirty) p.deleteProperty("dirty");
@@ -1614,7 +1614,8 @@ function onSheetChange(e) {
     p.deleteProperty("dirty");
     p.setProperty("last_cycle", String(Date.now()));
     try { // правка в «Сотрудниках» (новая колонка-группа, новый человек): оформляем сразу, не дожидаясь таймера
-      if (e && e.range && e.range.getSheet().getName() === TABS.staff) { tidyStaff_(); p.deleteProperty("regroup"); }
+      if (e && e.range && e.range.getSheet().getName() === TABS.staff) { tidyStaff_(); renderPeopleList_(); p.deleteProperty("regroup"); }
+      if (e && e.range && e.range.getSheet().getName() === TABS.schedule && e.range.getRow() === 1) applyPeopleValidation_(e.range.getSheet()); // добавили новую роль-колонку: сразу список
       syncRestoreButtons_();
       if (e && e.range) { const nm = e.range.getSheet().getName(); if (nm === TABS.schedule || nm === TABS.venues) renderOccupancy_(); } // занятость площадок обновляем сразу
     } catch (err) { diag_("Таблица: ОШИБКА — " + String(err && err.message ? err.message : err)); }
@@ -1782,8 +1783,9 @@ function styleSheets() {
   const book = new GasBook();
   book.ensure(TABS.venues, VENUES_HEADER);
   seedVenues_(book);
-  styleSchedule_(ss.getSheetByName(TABS.schedule));
   styleStaff_(ss.getSheetByName(TABS.staff));
+  renderPeopleList_();
+  styleSchedule_(ss.getSheetByName(TABS.schedule));
   styleVenues_(ss.getSheetByName(TABS.venues));
   const chats = ss.getSheetByName(TABS.chats);
   if (chats) styleHeader_(chats, 4);
@@ -1874,6 +1876,7 @@ function styleSchedule_(sheet) {
     .setBackground(C.light).setRanges([range]).build();
   sheet.setConditionalFormatRules([banding]);
   groupMonths_(sheet, true);
+  applyPeopleValidation_(sheet);
 }
 
 const monthTitle_ = monthTitleOf;
@@ -2022,7 +2025,7 @@ function groupMonths_(sheet, fresh) {
   });
 }
 
-const STYLE_VERSION_ = "9"; // поднимайте, когда меняется оформление: таблица перестроится сама при ближайшем срабатывании таймера
+const STYLE_VERSION_ = "10"; // поднимайте, когда меняется оформление: таблица перестроится сама при ближайшем срабатывании таймера
 
 /** После обновления кода один раз оформляет таблицу сама (то же, что ручной запуск styleSheets). */
 function autoStyle_(p) {
@@ -2177,6 +2180,7 @@ function tidySchedule_() {
     return;
   }
   groupMonths_(sheet, false);
+  applyPeopleValidation_(sheet);
 }
 
 /** Видны только три листа: «Сотрудники», «Расписание», «Площадки». Остальные служебные прячем (они работают, как раньше). */
@@ -2262,6 +2266,36 @@ function styleStaff_(sheet) {
   const request = SpreadsheetApp.newConditionalFormatRule().whenFormulaSatisfied('=OR(REGEXMATCH($A2,"^(?i)заявка"),REGEXMATCH($C2,"^(?i)заявка"))').setBackground("#FFF2B3").setRanges([whole]).build();
   const off = SpreadsheetApp.newConditionalFormatRule().whenFormulaSatisfied("=AND($A2<>\"\",$" + A(accessCol) + "2=FALSE)").setBackground("#FBE0DF").setFontColor("#8A8A8A").setRanges([whole]).build();
   sheet.setConditionalFormatRules(rules.concat([request, off]));
+}
+
+/**
+ * Скрытый лист «_люди»: актуальный список сотрудников с доступом (по алфавиту). Из него берутся выпадающие списки в «Расписании»,
+ * поэтому в списках всегда все сотрудники и только они. Обновляется при любой правке «Сотрудников».
+ */
+function renderPeopleList_() {
+  const names = store_().staffNames();
+  const book = new GasBook();
+  book.ensure(TABS.people, ["Сотрудники"]);
+  const sh = book.sheet(TABS.people);
+  const old = sh.getLastRow();
+  const cur = old > 1 ? sh.getRange(2, 1, old - 1, 1).getDisplayValues().map((r) => r[0]) : [];
+  if (JSON.stringify(cur) === JSON.stringify(names)) return false;
+  if (old > 1) sh.getRange(2, 1, old - 1, 1).clearContent();
+  if (names.length) sh.getRange(2, 1, names.length, 1).setNumberFormat("@").setValues(names.map((n) => [n]));
+  return true;
+}
+
+/** Колонки с людьми в «Расписании» (всё правее «Площадки») — выпадающие списки сотрудников. Вписать другое можно, но клетка получит отметку. */
+function applyPeopleValidation_(sheet) {
+  const people = sheet.getParent().getSheetByName(TABS.people);
+  if (!people || sheet.getLastColumn() < 1) return;
+  const head = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getDisplayValues()[0];
+  if (layoutOf([head]).v !== 2) return;
+  const plan = columnPlan("schedule", head);
+  if (!plan) return;
+  const rule = SpreadsheetApp.newDataValidation().requireValueInRange(people.getRange("A2:A1000"), true).setAllowInvalid(true).build();
+  const rows = Math.max(sheet.getMaxRows() - 1, 1);
+  plan.perm.slice(5).forEach((col) => sheet.getRange(2, col + 1, rows, 1).setDataValidation(rule));
 }
 
 const OCC_COL_ = 4; // таблица занятости лежит в листе «Площадки» правее названий: колонки D–H

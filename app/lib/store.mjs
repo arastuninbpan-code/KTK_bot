@@ -2,7 +2,7 @@
 import {normPhone, phonesIn} from "./core.mjs";
 import {platform} from "./platform.mjs";
 
-export const TABS = {schedule: "Расписание", staff: "Сотрудники", venues: "Площадки", chats: "Подписчики", requests: "_заявки", state: "_служебное", lock: "_замок"};
+export const TABS = {schedule: "Расписание", staff: "Сотрудники", venues: "Площадки", chats: "Подписчики", requests: "_заявки", people: "_люди", state: "_служебное", lock: "_замок"};
 export const REQUESTS_HEADER = ["Канал", "ID чата", "Телефон"];
 export const VENUES_HEADER = ["Площадка", "Заметка"];
 const CHECKED_RE = /^(true|да|yes|1|✓|✔|x|х)$/i; // галочка в таблице: TRUE / ✓ / «да»
