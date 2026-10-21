@@ -118,3 +118,22 @@ test("«Доступ открыт» приходит каждый раз, ког
     assert.equal(granted(), n, `открытие №${n}`);
   }
 });
+
+test("подключённый чат не «угоняется» чужим номером: заявка не заводится, а старый мусор-«заявка» в подписчиках чистится", () => {
+  const {book, store, ch, say, last} = make();
+  say(7, "", {phone: "9000000002"}); // чат 7 подключён к Петровой
+  say(7, "89009998877"); // тот же чат шлёт номер, которого нет в таблице
+  assert.match(last(7).text, /уже подключён: Петрова Л\.Н\./);
+  assert.equal(store.requests().length, 0, "заявки нет");
+  assert.equal(book.get(TABS.staff).length, STAFF.length, "строк в «Сотрудниках» не прибавилось");
+  assert.deepEqual(store.chats().map((c) => [c.chatId, c.phone]), [["7", "9000000002"]]);
+  // хвост от старых заявок: чат привязан к строке «ЗАЯВКА» — при проходе отвязывается
+  store.bind("vk", "55", "9209120551", "ЗАЯВКА");
+  runCycle({store, senders: {telegram: ch}, now: NOW});
+  assert.ok(!store.chats().some((c) => c.chatId === "55"));
+  // заявка чата, который уже у другого сотрудника, при одобрении ничего не перепривязывает
+  store.addRequest("telegram", "7", "9000000001"); // Иванова «одобрена» (есть в таблице), но чат 7 уже принадлежит Петровой
+  runCycle({store, senders: {telegram: ch}, now: NOW});
+  assert.deepEqual(store.chats().map((c) => [c.chatId, c.phone]), [["7", "9000000002"]]);
+  assert.equal(store.requests().length, 0);
+});

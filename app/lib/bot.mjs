@@ -1,6 +1,6 @@
 // Диалог с сотрудником (одинаков для любого мессенджера) и рассылка уведомлений. Синхронный код.
 import {looksLikePhone, matchPhones, normPhone, parseEvents, parseGrid, planCycle, todayIso} from "./core.mjs";
-import {afishaText, appButton, msgAskPhone, msgBlocked, msgChange, msgConnected, msgAccessGranted, msgCommentSaved, msgLogin, msgPostEmpty, msgPostNoRights, msgPostNotConfigured, msgPostPreview, msgPostResult, msgReminder, msgRequestSent, msgStopped, msgWelcome, publicAfishaText, shiftsText} from "./format.mjs";
+import {afishaText, appButton, msgAlreadyConnected, msgAskPhone, msgBlocked, msgChange, msgConnected, msgAccessGranted, msgCommentSaved, msgLogin, msgPostEmpty, msgPostNoRights, msgPostNotConfigured, msgPostPreview, msgPostResult, msgReminder, msgRequestSent, msgStopped, msgWelcome, publicAfishaText, shiftsText} from "./format.mjs";
 import {Gone} from "./telegram.mjs";
 import {canEdit, normLogin, TABS} from "./store.mjs";
 
@@ -40,6 +40,10 @@ export function handleMessage({store, channel, ev, appUrl = "", now = Date.now()
 
   if (phone) {
     const u = users.find((x) => x.phone === phone);
+    // чат уже подключён к действующему сотруднику, а человек шлёт чужой номер: заявку не заводим (иначе она потом «переехала» бы на этот чат и сбила подключение)
+    const bound = store.chats().find((c) => c.channel === channel.name && c.chatId === String(chat));
+    const boundUser = bound ? users.find((x) => x.phone === bound.phone && x.role !== "blocked") : null;
+    if (!u && boundUser) return channel.send(chat, msgAlreadyConnected(boundUser.name));
     if (!u) return askAccess(phone);
     if (u.role === "blocked") {
       if (!u.pending) return channel.send(chat, msgBlocked);
@@ -99,11 +103,14 @@ const text0 = (words) => String(words[0] || "").trim();
 export function runCycle({store, senders, now = Date.now(), appUrl = "", log = console}) {
   store.ensureOwner();
   store.ensureLogins();
+  for (const c of store.chats().filter((x) => /^заявка/i.test(x.name || ""))) store.unbind(c.channel, c.chatId); // старый мусор: чаты, привязанные к «заявке»
   // администратор открыл доступ тем, кто оставил заявку: подключаем их чат и пишем «доступ открыт»
   const welcomed = new Set(); // кому «доступ открыт» уже отправили в этом проходе
   for (const rq of store.requests()) {
     const u = store.activeUsers().find((x) => x.phone === rq.phone);
     if (!u) continue;
+    const cur = store.chats().find((c) => c.channel === rq.channel && c.chatId === rq.chatId);
+    if (cur && cur.phone !== u.phone && store.activeUsers().some((x) => x.phone === cur.phone)) { store.removeRequest(rq.channel, rq.chatId); continue; } // чат уже у другого сотрудника — его подключение не трогаем
     welcomed.add(u.phone);
     store.bind(rq.channel, rq.chatId, u.phone, u.name);
     store.removeRequest(rq.channel, rq.chatId);

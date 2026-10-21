@@ -276,7 +276,7 @@ export class Store {
   chats() {
     this.book.ensure(TABS.chats, SUBS_HEADER);
     return this.book.get(TABS.chats).slice(1)
-      .map((r, i) => ({row: i + 2, channel: String(r[0] || ""), chatId: String(r[1] || ""), phone: normPhone(r[2] || "")}))
+      .map((r, i) => ({row: i + 2, channel: String(r[0] || ""), chatId: String(r[1] || ""), phone: normPhone(r[2] || ""), name: String(r[3] || "")}))
       .filter((c) => c.channel && c.chatId);
   }
 
