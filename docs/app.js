@@ -5,7 +5,7 @@ const WD = ["Вс", "Пн", "Вт", "Ср", "Чт", "Пт", "Сб"];
 // цвета меток разделов (Администратор, Гардероб, Касса…): по порядку колонок таблицы, из палитры
 const TAG_COLORS = [["#0A96DC", "#fff"], ["#F2961E", "#fff"], ["#F04E4A", "#fff"], ["#F4C79A", "#1B3560"], ["#1B3560", "#fff"], ["#D4F1FC", "#1B3560"]];
 
-const state = {token: localStorage.getItem("ktk_token") || "", me: null, events: [], roles: [], staff: [], venues: [], venueColors: {}, palette: [], groups: [], layout: 2, rev: "", today: "", day: "", calMonth: "", tab: "all", ready: false, offline: false, savedAt: 0};
+const state = {token: localStorage.getItem("ktk_token") || "", me: null, events: [], roles: [], staff: [], venues: [], venueColors: {}, palette: [], groups: [], layout: 2, rev: "", today: "", day: "", calMonth: "", tab: "all", ready: false, offline: false, savedAt: 0, unavailable: {}};
 const root = document.getElementById("root");
 
 // ---------- разметка без innerHTML ----------
@@ -261,7 +261,9 @@ function eventCard(e) {
   const roles = Object.entries(e.roles).filter(([r]) => state.tab !== "mine" || e.mine.includes(r));
   const list = h("ul", {class: "roles"}, roles.map(([role, names]) => h("li", {class: e.mine.includes(role) ? "me" : ""}, tag(role), h("div", {class: "n"}, names.join(", ")))));
   const urgent = isSoon(e);
-  return h("button", {class: "ev" + (e.mine.length ? " mine" : "") + (urgent ? " urgent" : ""), onclick: () => (canEdit ? actionSheet(e) : eventDetails(e)), "aria-label": `${canEdit ? "Изменить" : "Открыть"}: ${e.title}`},
+  const hex = e.hall ? hexOfHall(e.hall) : "";
+  const outline = hex && !urgent ? `border-color:${hex};box-shadow:3px 3px 0 ${hex}` : ""; // обводка цвета площадки
+  return h("button", {class: "ev" + (e.mine.length ? " mine" : "") + (urgent ? " urgent" : ""), style: outline, onclick: () => (canEdit ? actionSheet(e) : eventDetails(e)), "aria-label": `${canEdit ? "Изменить" : "Открыть"}: ${e.title}`},
     time,
     h("div", {}, h("h3", {}, e.title), range, hall, roles.length ? list : null),
     canEdit ? h("span", {class: "edit-hint"}, icon("pencil")) : (e.mine.length ? h("span", {class: "pill mine-tag"}, "вы") : null),
@@ -455,18 +457,68 @@ function offlineBar() {
 }
 function setOffline(on) { if (state.offline !== on) { state.offline = on; render(); } }
 
-/** «Синхронизация» с мессенджерами: уже подключён — галочка, нет — кнопка-ссылка с логином (бот сам привяжет аккаунт). */
-function connectBar() {
+// ---------- профиль: соцсети и «когда я не могу работать» ----------
+/** Нажали на аватар: кто я, какие соцсети подключены и календарь, где отмечаются дни, когда работать не получится. */
+function profileSheet() {
   const me = state.me, cfg = window.KTK || {};
   const channels = me.channels || [];
-  const chip = (key, label, url) => {
+  let off = new Set(me.off || []);
+  const orig = new Set(me.off || []);
+  const thisYM = state.today.slice(0, 7);
+  let ym = thisYM;
+  const social = (key, label, url) => {
     const on = channels.includes(key);
-    if (on) return h("span", {class: "conn on"}, icon("check"), label + " подключён");
-    if (!url || !me.login) return null;
-    return h("a", {class: "conn", href: url + encodeURIComponent(me.login), target: "_blank", rel: "noopener"}, icon("plane"), "Подключить " + label);
+    return h("div", {class: "drow"}, h("span", {}, label),
+      on ? h("b", {class: "okchip"}, icon("check"), "подключён")
+        : (url && me.login ? h("a", {class: "link", href: url + encodeURIComponent(me.login), target: "_blank", rel: "noopener"}, "не подключён · подключить") : h("b", {class: "muted"}, "не подключён")));
   };
-  const chips = [chip("telegram", "Telegram", cfg.BOT_URL ? cfg.BOT_URL + "?start=" : ""), chip("vk", "ВК", cfg.VK_URL ? cfg.VK_URL + "?ref=" : "")].filter(Boolean);
-  return chips.length ? h("div", {class: "connbar"}, ...chips) : null;
+  const calBox = h("div", {class: "offcal"});
+  const info = h("div", {class: "hint-line"});
+  const save = h("button", {class: "btn"}, "Сохранить");
+  const dirty = () => off.size !== orig.size || [...off].some((d) => !orig.has(d));
+  const paint = () => {
+    const first = ym + "-01";
+    const dow = (new Date(first + "T00:00:00Z").getUTCDay() + 6) % 7;
+    const dim = new Date(Date.UTC(+ym.slice(0, 4), +ym.slice(5, 7), 0)).getUTCDate();
+    const start = addDays(first, -dow), weeks = Math.ceil((dow + dim) / 7);
+    const mine = state.events.filter((e) => e.mine && e.mine.length);
+    const cells = [];
+    for (let d = start; d <= addDays(start, weeks * 7 - 1); d = addDays(d, 1)) {
+      const outM = d.slice(0, 7) !== ym, past = d < state.today;
+      const shift = mine.some((e) => onDay(e, d));
+      cells.push(h("button", {class: "calday" + (outM ? " out" : "") + (past ? " dis" : "") + (off.has(d) ? " off" : "") + (d === state.today ? " today" : ""), disabled: past || outM, "aria-pressed": String(off.has(d)),
+        "aria-label": `${dayTitle(d)}${off.has(d) ? ", не могу работать" : ""}${shift ? ", у вас смена" : ""}`,
+        onclick: () => { if (off.has(d)) off.delete(d); else off.add(d); paint(); }},
+        h("b", {}, String(dateParts(d).d)), h("span", {class: "dots"}, shift ? h("i", {style: "background:#0A96DC"}) : null)));
+    }
+    calBox.replaceChildren(
+      h("div", {class: "calhead"},
+        h("button", {class: "cal-nav", "aria-label": "Предыдущий месяц", disabled: ym <= thisYM, onclick: () => { ym = monthShift(ym, -1); paint(); }}, "‹"),
+        h("div", {class: "caltitle"}, h("b", {}, `${MONTH_NAMES[+ym.slice(5, 7) - 1]} ${ym.slice(0, 4)}`)),
+        h("button", {class: "cal-nav", "aria-label": "Следующий месяц", disabled: ym >= monthShift(thisYM, 12), onclick: () => { ym = monthShift(ym, 1); paint(); }}, "›")),
+      h("div", {class: "calwd"}, ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"].map((x, i) => h("span", {class: i > 4 ? "we" : ""}, x))),
+      h("div", {class: "calgrid"}, ...cells));
+    const n = [...off].filter((d) => d >= state.today).length;
+    info.textContent = n ? `Отмечено дней: ${n}. На эти дни вас нельзя будет назначить на событие.` : "Нажимайте на даты, когда не можете работать. Синий кружок — день, когда у вас уже есть смена.";
+    save.disabled = !dirty();
+  };
+  save.addEventListener("click", async () => {
+    save.disabled = true;
+    try {
+      const r = await api("POST", "/api/off", {add: [...off].filter((d) => !orig.has(d)), remove: [...orig].filter((d) => !off.has(d))});
+      state.me.off = r.off;
+      close(); toast("Сохранено: отмеченные дни учтутся при составлении расписания", {plane: true}); load();
+    } catch (e) { toast(e.message, {bad: true}); save.disabled = false; }
+  });
+  const {close} = overlay(sheet(
+    h("div", {class: "profhead"}, h("img", {class: "avatar big", src: "avatar.webp", alt: ""}), h("div", {}, h("h2", {}, me.name), h("span", {class: "badge " + me.role}, me.roleLabel))),
+    h("div", {class: "dmeta"},
+      me.login ? h("div", {class: "drow"}, h("span", {}, "Ваш логин"), h("b", {class: "mono"}, me.login)) : null,
+      social("telegram", "Telegram", cfg.BOT_URL ? cfg.BOT_URL + "?start=" : ""),
+      social("vk", "ВКонтакте", cfg.VK_URL ? cfg.VK_URL + "?ref=" : "")),
+    h("div", {class: "field"}, h("span", {}, "Когда я не могу работать"), calBox, info),
+    h("div", {class: "actions"}, h("button", {class: "btn light", onclick: () => close()}, "Закрыть"), save)));
+  paint();
 }
 
 function appView() {
@@ -477,13 +529,14 @@ function appView() {
   return h("main", {class: "app"},
     h("div", {class: "top"},
       h("div", {class: "bar"},
-        h("img", {class: "avatar", src: "avatar.webp", alt: ""}),
-        h("div", {class: "who"}, h("b", {}, state.me.name), h("span", {class: "badge " + state.me.role}, state.me.roleLabel)),
+        h("button", {class: "whobtn", "aria-label": "Мой профиль", onclick: () => profileSheet()},
+          h("img", {class: "avatar", src: "avatar.webp", alt: ""}),
+          h("div", {class: "who"}, h("b", {}, state.me.name), h("span", {class: "badge " + state.me.role}, state.me.roleLabel))),
         h("button", {class: "icon-btn", "aria-label": "Обновить", onclick: () => load(true)}, icon("refresh")),
         h("button", {class: "icon-btn", "aria-label": "Выйти", onclick: () => confirmDialog("Выйти?", "Чтобы войти снова, понадобится ваш логин.", "Выйти", logout)}, icon("exit"))),
       h("div", {class: "tabs", role: "tablist"},
         [["all", "Расписание"], ["mine", "Мои смены"], ["venues", "Площадки"]].map(([t, label]) => h("button", {class: "tab", role: "tab", "aria-selected": String(state.tab === t), onclick: () => { state.tab = t; render(); window.scrollTo(0, 0); }}, label)))),
-    offlineBar(), connectBar(), old, body,
+    offlineBar(), old, body,
     canEdit && state.tab !== "venues" ? h("button", {class: "fab", "aria-label": "Добавить событие", onclick: () => editor(null)}, icon("plus")) : null);
 }
 
@@ -503,7 +556,7 @@ async function load(manual = false) {
   loading = true;
   try {
     const d = await api("GET", "/api/schedule");
-    const next = {me: d.me, events: d.events, roles: d.roles, staff: d.staff || [], venues: d.venues || [], venueColors: d.venueColors || {}, palette: d.palette || [], groups: d.groups || [], layout: d.layout || 2, rev: d.rev || "", today: d.today};
+    const next = {me: d.me, events: d.events, roles: d.roles, staff: d.staff || [], venues: d.venues || [], venueColors: d.venueColors || {}, palette: d.palette || [], unavailable: d.unavailable || {}, groups: d.groups || [], layout: d.layout || 2, rev: d.rev || "", today: d.today};
     Object.assign(state, next, {ready: true, offline: false, savedAt: Date.now()});
     try { localStorage.setItem("ktk_cache", JSON.stringify({...next, savedAt: state.savedAt})); } catch (_) {}
     render();
@@ -547,12 +600,16 @@ function editor(e) {
       h("button", {class: "chip add", onclick: () => addVenueSheet((name) => { draft.hall = name; paint(); })}, "+ новая"));
     const clash = conflictsFor({...draft, time: [draft.time, ...draft.extra].filter(Boolean).join(", ")});
     const warn = clash.length ? h("div", {class: "warn"}, icon("alert"), h("span", {}, `Площадка занята: ${clash.map((c) => `${c.title} (${timeLabel(c)})`).join("; ")}`)) : null;
+    const origNames = new Set(e ? Object.values(e.roles || {}).flat() : []);
+    const dDays = eventDays(draft);
+    const badPeople = [...new Set(Object.values(draft.roles).flat())].filter((n) => !origNames.has(n) && blockedDays(n, dDays).length);
+    const warnOff = badPeople.length ? h("div", {class: "warn"}, icon("alert"), h("span", {}, `Не могут работать в эти дни: ${badPeople.map((n) => `${n} (${blockedDays(n, dDays).map(shortDate).join(", ")})`).join("; ")}. Уберите их или смените дату.`)) : null;
     const roleBlocks = state.roles.map((role) => {
       const names = draft.roles[role] || [];
       return h("div", {class: "roleblock"}, tag(role),
         h("div", {class: "chips"},
           ...names.map((n) => h("button", {class: "chip person", "aria-label": `Убрать ${n}`, onclick: () => { draft.roles[role] = names.filter((x) => x !== n); if (!draft.roles[role].length) delete draft.roles[role]; paint(); }}, n + " ×")),
-          h("button", {class: "chip add", onclick: () => picker(role, names, (sel) => { if (sel.length) draft.roles[role] = sel; else delete draft.roles[role]; paint(); })}, "+ добавить")));
+          h("button", {class: "chip add", onclick: () => picker(role, names, (sel) => { if (sel.length) draft.roles[role] = sel; else delete draft.roles[role]; paint(); }, {row: draft.row, date: draft.date, dateEnd: draft.dateEnd, time: [draft.time, ...draft.extra].filter(Boolean).join(", "), end: draft.end})}, "+ добавить")));
     });
     const save = h("button", {class: "btn"}, draft.row ? "Сохранить" : "Создать");
     const doSave = async (force) => {
@@ -579,27 +636,47 @@ function editor(e) {
         h("label", {class: "field", style: "flex:1"}, h("span", {}, "Окончание"), end)),
       draft.extra.length ? h("div", {class: "hint-line"}, "Ещё время в таблице: " + draft.extra.join(", ")) : null,
       h("div", {class: "field"}, h("span", {}, "Площадка"), hallChips, warn),
-      h("div", {class: "field"}, h("span", {}, "Кто занят"), ...roleBlocks),
+      h("div", {class: "field"}, h("span", {}, "Кто занят"), ...roleBlocks, warnOff),
       err,
       h("div", {class: "actions"}, h("button", {class: "btn light", onclick: () => close()}, "Отмена"), save)));
   };
   paint();
 }
 
-function picker(role, selected, onDone) {
+/** Дни события (не больше двух месяцев подряд). */
+const eventDays = (d) => { const out = []; if (!d.date) return out; for (let x = d.date, i = 0; x <= (d.dateEnd || d.date) && i < 62; x = addDays(x, 1), i++) out.push(x); return out; };
+/** Дни, на которые человек отметил «не могу», в пределах события. */
+const blockedDays = (name, days) => ((state.unavailable || {})[name] || []).filter((x) => days.includes(x));
+/** В других событиях в то же время (если у обоих указано время). */
+function busyWith(name, cand) {
+  if (!cand.time) return [];
+  return state.events.filter((e) => e.row !== cand.row && e.time && rangesMeet(e, cand) && slotsMeet(e, cand) && Object.values(e.roles || {}).some((names) => names.includes(name)));
+}
+
+function picker(role, selected, onDone, ctx = {}) {
   let sel = [...selected];
+  const days = eventDays(ctx);
+  const cand = {row: ctx.row, date: ctx.date, dateEnd: ctx.dateEnd, time: ctx.time, end: ctx.end};
   const list = h("div", {});
   const groups = h("div", {class: "chips groups"});
   const search = h("input", {class: "input search", placeholder: "Поиск сотрудника", oninput: () => fill()});
   const fill = () => {
     const q = search.value.toLowerCase();
     const names = state.staff.filter((n) => n.toLowerCase().includes(q));
-    list.replaceChildren(...names.map((n) => h("button", {class: "pick" + (sel.includes(n) ? " on" : ""), onclick: () => { sel = sel.includes(n) ? sel.filter((x) => x !== n) : [...sel, n]; fill(); }},
-      h("span", {class: "box"}, sel.includes(n) ? icon("check") : null), n)), ...(names.length ? [] : [h("div", {class: "empty"}, "Никого не нашли")]));
+    list.replaceChildren(...names.map((n) => {
+      const off = blockedDays(n, days);
+      const locked = off.length && !sel.includes(n); // отметил «не могу» — выбрать нельзя (а если уже стоял на событии, можно только снять)
+      const busy = locked ? [] : busyWith(n, cand);
+      const note = off.length ? "не может: " + off.map((d) => shortDate(d)).join(", ") : busy.length ? "уже занят(а): " + busy.map((e) => `${e.title}, ${timeLabel(e)}`).join("; ") : "";
+      return h("button", {class: "pick" + (sel.includes(n) ? " on" : "") + (locked ? " off" : "") + (busy.length ? " warnp" : ""), disabled: locked, "aria-disabled": String(Boolean(locked)),
+        onclick: () => { sel = sel.includes(n) ? sel.filter((x) => x !== n) : [...sel, n]; fill(); }},
+        h("span", {class: "box"}, sel.includes(n) ? icon("check") : null), h("span", {class: "pn"}, n, note ? h("small", {}, note) : null));
+    }), ...(names.length ? [] : [h("div", {class: "empty"}, "Никого не нашли")]));
     // группы из таблицы: одно нажатие добавляет всех, ещё одно — убирает
     groups.replaceChildren(...state.groups.filter((g) => g.members.length).map((g) => {
-      const all = g.members.every((n) => sel.includes(n));
-      return h("button", {class: "chip group" + (all ? " on" : ""), onclick: () => { sel = all ? sel.filter((n) => !g.members.includes(n)) : [...new Set([...sel, ...g.members])]; fill(); }}, icon("group"), `${g.name} · ${g.members.length}`);
+      const free = g.members.filter((n) => sel.includes(n) || !blockedDays(n, days).length);
+      const all = free.length > 0 && free.every((n) => sel.includes(n));
+      return h("button", {class: "chip group" + (all ? " on" : ""), onclick: () => { sel = all ? sel.filter((n) => !g.members.includes(n)) : [...new Set([...sel, ...g.members.filter((n) => sel.includes(n) || !blockedDays(n, days).length)])]; fill(); }}, icon("group"), `${g.name} · ${g.members.length}`);
     }));
   };
   const {close} = overlay(sheet(h("h2", {}, roleText(role)), state.groups.some((g) => g.members.length) ? h("div", {class: "field"}, h("span", {}, "Группы"), groups) : null, search, list,
@@ -627,3 +704,6 @@ window.addEventListener("focus", poll);
 window.addEventListener("online", () => { if (state.token) load(); });
 window.addEventListener("offline", () => { if (state.token && state.ready) setOffline(true); });
 if ("serviceWorker" in navigator && !window.KTK_DEMO && /^https?:$/.test(location.protocol)) navigator.serviceWorker.register("sw.js").catch(() => {}); // страница открывается и без интернета
+// масштаб страницы отключён: щипок (на iOS — «жестовые» события) блокируем здесь, двойное касание — в стилях (touch-action: manipulation), чтобы быстрые нажатия по кнопкам не терялись
+["gesturestart", "gesturechange", "gestureend"].forEach((t) => document.addEventListener(t, (e) => e.preventDefault()));
+document.addEventListener("touchmove", (e) => { if (e.touches && e.touches.length > 1 && e.cancelable) e.preventDefault(); }, {passive: false});

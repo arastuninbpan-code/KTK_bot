@@ -10,6 +10,7 @@
   const GROUPS = [{name: "Актёры", members: ["Иванова М.В.", "Петрова Л.Н."]}, {name: "Техника", members: ["Кузнецова Е.Н.", "Орлова А.В."]}, {name: "Зал", members: ["Морозова Н.М.", "Сидорова Л.Р."]}];
   let venues = ["Большая сцена", "Малая сцена", "Фойе"];
   const PALETTE = [{name: "Красный", hex: "#E5484D"}, {name: "Оранжевый", hex: "#F2961E"}, {name: "Жёлтый", hex: "#E8C21A"}, {name: "Зелёный", hex: "#3DB16B"}, {name: "Бирюзовый", hex: "#1BA8A0"}, {name: "Голубой", hex: "#0A96DC"}, {name: "Синий", hex: "#3B5BDB"}, {name: "Фиолетовый", hex: "#8E5BD0"}, {name: "Розовый", hex: "#E0509A"}, {name: "Серый", hex: "#7A8699"}];
+  const offDates = {"Петрова Л.Н.": [iso(1), iso(2)]};
   const venueColors = {"Большая сцена": "#E5484D", "Малая сцена": "#0A96DC", "Фойе": "#3DB16B"};
   const hexByName = (n) => (PALETTE.find((c) => c.name === n) || {}).hex;
   let seq = 10, rev = 1;
@@ -34,7 +35,13 @@
       const u = users[String(token).replace("demo:", "")];
       if (!u) return {status: 401, data: {error: "Нужно войти"}};
       if (path === "/api/ping") return {status: 200, data: {rev: String(rev), changed: (body || {}).rev !== String(rev)}};
-      if (method === "GET") return {status: 200, data: {today: iso(0), me: u, roles: [A, G, K, M, S], layout: 2, rev: String(rev), events: view(u), venues, venueColors, palette: PALETTE, staff: u.canEdit ? STAFF : undefined, groups: u.canEdit ? GROUPS : undefined}};
+      if (method === "GET") return {status: 200, data: {today: iso(0), me: {...u, off: offDates[u.name] || []}, unavailable: u.canEdit ? offDates : undefined, roles: [A, G, K, M, S], layout: 2, rev: String(rev), events: view(u), venues, venueColors, palette: PALETTE, staff: u.canEdit ? STAFF : undefined, groups: u.canEdit ? GROUPS : undefined}};
+      if (path === "/api/off" && method === "POST") {
+        const cur = new Set(offDates[u.name] || []);
+        (body.add || []).forEach((d) => cur.add(d)); (body.remove || []).forEach((d) => cur.delete(d));
+        offDates[u.name] = [...cur].sort(); rev++;
+        return {status: 200, data: {ok: true, off: offDates[u.name]}};
+      }
       if (!u.canEdit) return {status: 403, data: {error: "Менять расписание могут только администратор и редактор."}};
       if (path === "/api/venues") {
         const name = String(body.name || "").trim();

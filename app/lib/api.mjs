@@ -1,6 +1,6 @@
 // API приложения. Чистая функция: запрос -> {status, body}. Синхронный код, никакой привязки к платформе.
 import {makeToken, readToken} from "./auth.mjs";
-import {addDays, buildRow, findConflicts, headerRoles, layoutOf, matchPhones, norm, parseDate, parseEvents, todayIso, validateEvent} from "./core.mjs";
+import {addDays, buildRow, daysOf, findConflicts, headerRoles, layoutOf, matchPhones, norm, parseDate, parseEvents, todayIso, validateEvent} from "./core.mjs";
 import {platform} from "./platform.mjs";
 import {canEdit, colorName, ROLE_LABELS, TABS, VENUE_COLORS} from "./store.mjs";
 
@@ -27,8 +27,16 @@ function writeAt(store, table, date, cells, today) {
   else { store.book.insert(TABS.schedule, at); store.book.set(TABS.schedule, at, cells); }
 }
 
+/** {ФИО: [даты]}: кто и когда не может работать (только будущие даты) — для выбора людей на событие. */
+const unavailableMap = (store, today) => {
+  const out = {};
+  for (const [name, dates] of store.offByName()) { const list = [...dates].filter((d) => d >= today).sort(); if (list.length) out[name] = list; }
+  return out;
+};
+
 /** {название площадки: #цвет} — по ним приложение красит плашки событий. */
 const venueColorMap = (store) => Object.fromEntries(store.venueList().map((v) => [v.name, v.hex]));
+const ISO_RE = /^\d{4}-\d{2}-\d{2}$/;
 const publicUser = (u) => ({name: u.name, role: u.role, roleLabel: ROLE_LABELS[u.role], canEdit: canEdit(u.role)});
 /** Для кнопок «Подключить Telegram / ВК»: к каким каналам уже привязан человек и какой у него логин (он идёт в ссылку-подключение). */
 const connections = (store, me) => ({login: me.login, channels: [...new Set(store.chats().filter((c) => c.phone === me.phone).map((c) => c.channel))]});
@@ -67,8 +75,20 @@ export function handleApi(req, deps) {
       const venues = [...store.venues()];
       for (const e of events) if (e.hall && !venues.some((v) => norm(v) === norm(e.hall))) venues.push(e.hall);
       const editor = canEdit(me.role);
-      return {status: 200, body: {today, me: {...publicUser(me), ...connections(store, me)}, roles: headerRoles(table), layout: layoutOf(table).v, rev: getRev(), events, venues, venueColors: venueColorMap(store), palette: VENUE_COLORS,
-        staff: editor ? store.staffNames() : undefined, groups: editor ? store.groups() : undefined}};
+      return {status: 200, body: {today, me: {...publicUser(me), ...connections(store, me), off: store.offDates(me.phone).filter((d) => d >= today)}, roles: headerRoles(table), layout: layoutOf(table).v, rev: getRev(), events, venues, venueColors: venueColorMap(store), palette: VENUE_COLORS,
+        staff: editor ? store.staffNames() : undefined, groups: editor ? store.groups() : undefined,
+        unavailable: editor ? unavailableMap(store, today) : undefined}};
+    }
+
+    // --- «Не могу работать»: каждый отмечает свои даты ---
+    if (path === "/api/off" && method === "POST") {
+      const clean = (list) => [...new Set((Array.isArray(list) ? list : []).map(String).filter((d) => ISO_RE.test(d)))];
+      const add = clean(body.add).filter((d) => d >= today);
+      const remove = clean(body.remove);
+      if (add.length > 400 || remove.length > 400) throw new HttpError(400, "Слишком много дат за раз");
+      store.setOff(me.phone, me.name, add, remove);
+      bumpRev();
+      return {status: 200, body: {ok: true, off: store.offDates(me.phone).filter((d) => d >= today)}};
     }
 
     if (path === "/api/venues" && ["POST", "PUT", "DELETE"].includes(method)) {
@@ -115,6 +135,18 @@ export function handleApi(req, deps) {
       for (const [role, names] of Object.entries(event?.roles || {})) {
         if (!roles.includes(role)) errors.push(`Нет такой роли: ${role}`);
         for (const n of names) if (!staff.has(n)) errors.push(`Нет такого сотрудника: ${n}`);
+      }
+      // сотрудник отметил, что в эти дни не может: выбрать его нельзя (кроме тех, кто уже стоит на этом событии)
+      if (!errors.length) {
+        const old = method === "PUT" ? parseEvents(table, today).find((x) => x.row === rowNo) : null;
+        const already = new Set(Object.values(old?.roles || {}).flat());
+        const days = daysOf(event);
+        const off = store.offByName();
+        const names = [...new Set(Object.values(event.roles || {}).flat())].filter((n) => !already.has(n));
+        for (const n of names) {
+          const hit = days.filter((d) => off.get(n)?.has(d));
+          if (hit.length) errors.push(`${n} отметил(а), что не может работать ${hit.map((d) => d.slice(8, 10) + "." + d.slice(5, 7)).join(", ")}`);
+        }
       }
       if (errors.length) throw new HttpError(400, errors.join(". "));
       // площадка занята в это время? Предупреждаем; если человек подтвердил (force) — сохраняем

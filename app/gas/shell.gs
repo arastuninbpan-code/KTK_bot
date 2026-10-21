@@ -37,7 +37,7 @@ function secret_() {
 // Чтение листа из таблицы — самое медленное место (около 0,4 с на лист). Часто нужные листы держим в кэше Google и
 // сбрасываем при любой правке: скриптом (GasBook), на сайте (тоже через GasBook) и руками (onSheetChange).
 const PLAN_KIND_ = {[TABS.staff]: "staff", [TABS.schedule]: "schedule"};
-const CACHED_TABS_ = [TABS.schedule, TABS.staff, TABS.venues, TABS.chats, TABS.requests];
+const CACHED_TABS_ = [TABS.schedule, TABS.staff, TABS.venues, TABS.chats, TABS.requests, TABS.off];
 const CACHE_TTL_ = 600; // запас: даже если сброс почему-то не сработал, через 10 минут данные обновятся
 const CACHE_PART_ = 30000; // значение в кэше Google ограничено 100 КБ, режем на куски
 
@@ -578,12 +578,7 @@ function styleSchedule_(sheet) {
     sheet.setColumnWidth(2, 260);
     for (let c = 3; c <= cols; c++) sheet.setColumnWidth(c, 160);
   }
-  // чередование строк белый / светло-голубой (кроме шапок месяцев) — правилом, чтобы новые строки красились сами
-  const range = sheet.getRange(2, 1, Math.max(sheet.getMaxRows() - 1, 1), cols);
-  const banding = SpreadsheetApp.newConditionalFormatRule()
-    .whenFormulaSatisfied('=AND(ISEVEN(ROW()),$A2<>"",NOT(REGEXMATCH($A2,"^[А-ЯЁ]+ [0-9]{4}$")),LEFT($A2,1)<>"▼")')
-    .setBackground(C.light).setRanges([range]).build();
-  sheet.setConditionalFormatRules([banding]);
+  sheet.setConditionalFormatRules(scheduleRules_(sheet));
   groupMonths_(sheet, true);
   applyPeopleValidation_(sheet);
 }
@@ -681,6 +676,33 @@ function fixMonths_(sheet, force) {
   return ensureMonthHeaders_(sheet);
 }
 
+const colLetter_ = (n) => { let s = ""; while (n > 0) { const m = (n - 1) % 26; s = String.fromCharCode(65 + m) + s; n = Math.floor((n - 1) / 26); } return s; };
+/** Цвет текста на цветной ячейке: тёмный на светлых цветах, белый на тёмных. */
+const inkHex_ = (hex) => { const n = parseInt(String(hex).slice(1), 16); return 0.299 * (n >> 16) + 0.587 * ((n >> 8) & 255) + 0.114 * (n & 255) > 170 ? C.navy : C.white; };
+
+/**
+ * Правила окраски «Расписания»: выбранная площадка красится в свой цвет (правило выше всех), остальное — чередование строк белый / светло-голубой
+ * (кроме шапок месяцев). Правилами, чтобы новые строки красились сами.
+ */
+function scheduleRules_(sheet) {
+  const cols = Math.max(2, sheet.getLastColumn());
+  const rows = Math.max(sheet.getMaxRows() - 1, 1);
+  const banding = SpreadsheetApp.newConditionalFormatRule()
+    .whenFormulaSatisfied('=AND(ISEVEN(ROW()),$A2<>"",NOT(REGEXMATCH($A2,"^[А-ЯЁ]+ [0-9]{4}$")),LEFT($A2,1)<>"▼")')
+    .setBackground(C.light).setRanges([sheet.getRange(2, 1, rows, cols)]).build();
+  const head = sheet.getRange(1, 1, 1, cols).getDisplayValues()[0];
+  const out = [];
+  const plan = layoutOf([head]).v === 2 ? columnPlan("schedule", head) : null;
+  if (plan) {
+    const hall = sheet.getRange(2, plan.perm[4] + 1, rows, 1);
+    const letter = colLetter_(plan.perm[4] + 1);
+    store_().venueList().forEach((v) => out.push(SpreadsheetApp.newConditionalFormatRule()
+      .whenFormulaSatisfied('=LOWER(TRIM($' + letter + '2))=LOWER("' + v.name.replace(/"/g, '""') + '")')
+      .setBackground(v.hex).setFontColor(inkHex_(v.hex)).setBold(true).setRanges([hall]).build()));
+  }
+  return out.concat([banding]);
+}
+
 /** Шапка месяца перед первым событием каждого месяца, если её нет (снизу вверх, чтобы номера строк не съезжали). Возвращает, сколько добавлено. */
 function ensureMonthHeaders_(sheet) {
   const today = todayIso(Date.now());
@@ -734,7 +756,7 @@ function groupMonths_(sheet, fresh) {
   });
 }
 
-const STYLE_VERSION_ = "11"; // поднимайте, когда меняется оформление: таблица перестроится сама при ближайшем срабатывании таймера
+const STYLE_VERSION_ = "12"; // поднимайте, когда меняется оформление: таблица перестроится сама при ближайшем срабатывании таймера
 
 /** После обновления кода один раз оформляет таблицу сама (то же, что ручной запуск styleSheets). */
 function autoStyle_(p) {
@@ -1000,6 +1022,14 @@ function fillVenueColors_() {
   const list = store.venueList();
   const todo = list.filter((v) => v.auto);
   todo.forEach((v) => store.book.setCell(TABS.venues, v.row, 3, v.color));
+  // площадки поменялись (название или цвет): перекрашиваем столбец «Площадка» в «Расписании»
+  const sig = JSON.stringify(list.map((v) => [v.name, v.hex]));
+  const p = PropertiesService.getScriptProperties();
+  if (p.getProperty("VENUE_SIG") !== sig) {
+    const sch = SpreadsheetApp.openById(prop_("SHEET_ID")).getSheetByName(TABS.schedule);
+    if (sch) sch.setConditionalFormatRules(scheduleRules_(sch));
+    p.setProperty("VENUE_SIG", sig);
+  }
   return todo.length > 0;
 }
 
@@ -1078,5 +1108,8 @@ function styleVenues_(sheet) {
   const colors = sheet.getRange(2, 3, Math.max(sheet.getMaxRows() - 1, 1), 1);
   colors.setDataValidation(SpreadsheetApp.newDataValidation().requireValueInList(VENUE_COLORS.map((c) => c.name), true).setAllowInvalid(false).build())
     .setHorizontalAlignment("center").setVerticalAlignment("middle").setFontWeight("bold");
-  sheet.setConditionalFormatRules(VENUE_COLORS.map((c) => SpreadsheetApp.newConditionalFormatRule().whenTextEqualTo(c.name).setBackground(c.hex).setFontColor(C.white).setRanges([colors]).build()));
+  const names = sheet.getRange(2, 1, Math.max(sheet.getMaxRows() - 1, 1), 1);
+  sheet.setConditionalFormatRules([].concat(
+    VENUE_COLORS.map((c) => SpreadsheetApp.newConditionalFormatRule().whenTextEqualTo(c.name).setBackground(c.hex).setFontColor(inkHex_(c.hex)).setRanges([colors]).build()),
+    VENUE_COLORS.map((c) => SpreadsheetApp.newConditionalFormatRule().whenFormulaSatisfied('=AND($A2<>"",$C2="' + c.name + '")').setBackground(c.hex).setFontColor(inkHex_(c.hex)).setBold(true).setRanges([names]).build())));
 }

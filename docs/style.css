@@ -277,3 +277,28 @@ body.modal-open { overflow: hidden; }
 .note.offline { background: var(--cream); border-color: var(--orange); }
 .actions { flex-wrap: wrap; }
 .actions .btn { flex: 1 1 140px; min-width: 0; }
+
+/* без масштабирования: двойное касание не увеличивает страницу, поля ввода крупнее 16px (иначе iOS приближает при вводе) */
+html, body, button, a, input, .calday, .plaque { touch-action: manipulation; }
+input, select, textarea, .input, .code-input { font-size: 16px; }
+body { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
+
+/* профиль */
+.whobtn { display: flex; align-items: center; gap: 12px; flex: 1; min-width: 0; padding: 0; background: none; border: 0; text-align: left; color: inherit; }
+.profhead { display: flex; align-items: center; gap: 14px; margin: 4px 0 10px; }
+.profhead h2 { margin: 0 0 6px; font-size: 21px; }
+.avatar.big { width: 64px; height: 64px; }
+.okchip { display: inline-flex; align-items: center; gap: 6px; padding: 2px 10px; border-radius: 999px; background: #d9f5df; border: 2px solid var(--navy); font-size: 13px; }
+.okchip .ico { width: 15px; height: 15px; }
+.drow .muted { color: var(--muted); font-weight: 800; }
+.drow .link { margin: 0; font-weight: 800; text-align: right; }
+.mono { font-family: ui-monospace, "Roboto Mono", monospace; letter-spacing: .08em; }
+.offcal { padding: 10px 8px 8px; border: 2.5px solid var(--navy); border-radius: 18px; background: #fff; }
+.calday.off { background: var(--coral); color: #fff; border-color: var(--navy); }
+.calday.dis { opacity: .35; }
+.calday:disabled { cursor: default; }
+.pick.off { opacity: .5; background: #f1f3f8; }
+.pick.warnp { border-color: var(--orange); }
+.pick .pn { display: grid; gap: 2px; min-width: 0; }
+.pick .pn small { font-size: 12px; font-weight: 800; color: var(--coral); }
+.pick.warnp .pn small { color: #b86a00; }

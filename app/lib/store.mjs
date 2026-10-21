@@ -2,8 +2,9 @@
 import {normPhone, phonesIn} from "./core.mjs";
 import {platform} from "./platform.mjs";
 
-export const TABS = {schedule: "Расписание", staff: "Сотрудники", venues: "Площадки", chats: "Подписчики", requests: "_заявки", people: "_люди", state: "_служебное", lock: "_замок"};
+export const TABS = {schedule: "Расписание", staff: "Сотрудники", venues: "Площадки", chats: "Подписчики", requests: "_заявки", people: "_люди", off: "_недоступность", state: "_служебное", lock: "_замок"};
 export const REQUESTS_HEADER = ["Канал", "ID чата", "Телефон"];
+export const OFF_HEADER = ["Телефон", "ФИО", "Дата"];
 export const VENUES_HEADER = ["Площадка", "Заметка", "Цвет"];
 /** Цвета площадок: название (оно выбирается в таблице из списка) и цвет в приложении. */
 export const VENUE_COLORS = [
@@ -159,6 +160,38 @@ export class Store {
 
   removeRequest(channel, chatId) {
     for (const r of this.requests().filter((x) => x.channel === channel && x.chatId === String(chatId)).reverse()) this.book.clearRow(TABS.requests, r.row);
+  }
+
+  // --- «Не могу работать»: даты, которые сотрудник отметил в приложении (скрытый лист «_недоступность»: телефон | ФИО | дата) ---
+  offRows() {
+    if (!this.book.has(TABS.off)) return [];
+    return this.book.get(TABS.off).slice(1)
+      .map((r, i) => ({row: i + 2, phone: normPhone(r[0] || ""), name: String(r[1] || "").trim(), date: String(r[2] || "").trim()}))
+      .filter((r) => r.phone && /^\d{4}-\d{2}-\d{2}$/.test(r.date));
+  }
+
+  offDates(phone) { return [...new Set(this.offRows().filter((r) => r.phone === phone).map((r) => r.date))].sort(); }
+
+  /** {ФИО: Set(даты)} по текущим именам из «Сотрудников» (у одного человека может быть несколько номеров). */
+  offByName() {
+    const nameOf = new Map(this.users().map((u) => [u.phone, u.name]));
+    const out = new Map();
+    for (const r of this.offRows()) {
+      const name = nameOf.get(r.phone) || r.name;
+      if (!out.has(name)) out.set(name, new Set());
+      out.get(name).add(r.date);
+    }
+    return out;
+  }
+
+  /** Отмечает/снимает недоступные даты у одного человека (без дублей). */
+  setOff(phone, name, add = [], remove = []) {
+    this.book.ensure(TABS.off, OFF_HEADER);
+    const rows = this.offRows().filter((r) => r.phone === phone);
+    const have = new Set(rows.map((r) => r.date));
+    for (const date of [...new Set(add)]) if (!have.has(date)) this.book.append(TABS.off, [phone, name, date]);
+    const drop = new Set(remove);
+    for (const r of rows.filter((x) => drop.has(x.date)).sort((a, b) => b.row - a.row)) this.book.remove(TABS.off, r.row); // снизу вверх, чтобы номера строк не съезжали
   }
 
   // --- площадки: лист «Площадки» (название | заметка) ---

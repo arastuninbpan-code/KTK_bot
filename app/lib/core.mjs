@@ -177,7 +177,7 @@ export function parseEvents(table, today) {
 // ===== занятость площадок =====
 export const DEFAULT_MINUTES = 120; // если конец не указан, считаем, что событие идёт 2 часа
 const toMin = (t) => { const m = /^(\d{1,2}):(\d{2})$/.exec(t || ""); return m ? +m[1] * 60 + +m[2] : null; };
-const daysOf = (e) => { const out = []; for (let d = e.date; d <= (e.dateEnd || e.date); d = addDays(d, 1)) out.push(d); return out; };
+export const daysOf = (e) => { const out = []; for (let d = e.date; d <= (e.dateEnd || e.date); d = addDays(d, 1)) out.push(d); return out; };
 
 /** Интервалы занятости события внутри дня (минуты от полуночи). Без времени или многодневное — занято весь день. */
 export function slotsOf(e) {
