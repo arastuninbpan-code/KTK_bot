@@ -419,11 +419,45 @@ async function uploadPhoto(p) {
   return r.id;
 }
 const photoCache = new Map(); // номер -> data-ссылка (в памяти страницы)
+/** Фото неизменяемы (у каждого свой номер), поэтому после первой загрузки хранятся на телефоне и в следующий раз появляются сразу. */
 async function photoData(id) {
   if (photoCache.has(id)) return photoCache.get(id);
+  try {
+    if (window.caches) {
+      const hit = await (await caches.open("ktk-photos")).match("/photo/" + id);
+      if (hit) { const d = await hit.text(); photoCache.set(id, d); return d; }
+    }
+  } catch (_) { /* кеш недоступен — грузим с сервера */ }
   const r = await api("GET", "/api/photos", {id});
   photoCache.set(id, r.data);
+  try { if (window.caches) (await caches.open("ktk-photos")).put("/photo/" + id, new Response(r.data)); } catch (_) {}
   return r.data;
+}
+
+// ---------- переписка: что видели в прошлый раз, показываем сразу ----------
+const chatKey = (id) => "ktk_chat_" + id;
+function chatCacheRead(id) { try { const c = JSON.parse(localStorage.getItem(chatKey(id)) || "null"); return c && Array.isArray(c.items) ? c : null; } catch (_) { return null; } }
+function chatCacheWrite(id, items) {
+  try {
+    const clean = items.filter((m) => !m.failed && !String(m.id).startsWith("tmp")).slice(-80).map(({_prep, previews, pending, wasFailed, ...m}) => m);
+    localStorage.setItem(chatKey(id), JSON.stringify({items: clean, at: Date.now()}));
+    const idx = JSON.parse(localStorage.getItem("ktk_chat_idx") || "[]").filter((x) => x !== id); idx.push(id);
+    while (idx.length > 40) { try { localStorage.removeItem(chatKey(idx.shift())); } catch (_) {} } // старые переписки не копим
+    localStorage.setItem("ktk_chat_idx", JSON.stringify(idx));
+  } catch (_) { /* не поместилось — не страшно */ }
+}
+/** Фоном подгружаем переписки событий, где появились новые сообщения, чтобы при входе они уже были на телефоне. */
+let prefetching = false;
+async function prefetchChats() {
+  if (prefetching || offlineNow() || opsPending > 0) return;
+  prefetching = true;
+  try {
+    const todo = state.events.filter((e) => e.id && e.comments > 0 && upcoming(e) && ((chatCacheRead(e.id) || {items: []}).items.length !== e.comments)).slice(0, 6);
+    for (const e of todo) {
+      if (offlineNow() || opsPending > 0) break;
+      try { const r = await api("GET", "/api/comments", {event: e.id}); chatCacheWrite(e.id, r.items); for (const m of r.items.slice(-6)) for (const pid of m.photos || []) photoData(pid).catch(() => {}); } catch (_) { break; }
+    }
+  } finally { prefetching = false; }
 }
 /** Фото из переписки: пока грузится — серая заглушка; по нажатию открывается крупно. */
 function photoEl(id, preview) {
@@ -523,7 +557,8 @@ async function pumpChat() {
 /** Переписка по событию: как в мессенджере — пузыри, аватарки, вложения, поле ввода внизу. Писать и прикладывать файлы может любой сотрудник. */
 function chatSheet(e) {
   if (!e.id) return toast("Событие ещё готовится. Попробуйте через минуту.", {bad: true});
-  let items = [], lastTs = 0, attach = [];
+  const cached = chatCacheRead(e.id);
+  let items = cached ? cached.items.slice() : [], lastTs = items.reduce((a, m) => Math.max(a, m.ts), 0), attach = [], loaded = Boolean(cached);
   const msgs = h("div", {class: "msgs", role: "log", "aria-live": "polite"});
   const chips = h("div", {class: "attach-row"});
   const ta = h("textarea", {class: "input chat-input", rows: "1", placeholder: "Сообщение", "aria-label": "Сообщение",
@@ -553,7 +588,7 @@ function chatSheet(e) {
           files.length ? h("div", {class: "mfiles"}, ...files) : null,
           h("small", {class: "mtime"}, clockOf(m.ts) + status, m.canDelete && !m.failed ? h("button", {class: "mdel", "aria-label": "Удалить сообщение", onclick: (ev) => { ev.stopPropagation(); confirmDialog("Удалить сообщение?", "Оно пропадёт у всех.", "Удалить", () => del(m)); }}, "удалить") : null))));
     }
-    if (!items.length) nodes.push(h("div", {class: "empty small"}, h("div", {}, "Сообщений пока нет. Напишите первым: например, сможете ли вы быть на событии.")));
+    if (!items.length) nodes.push(h("div", {class: "empty small"}, h("div", {}, loaded ? "Сообщений пока нет. Напишите первым: например, сможете ли вы быть на событии." : "Загружаю переписку…")));
     msgs.replaceChildren(...nodes);
     if (toBottom || nearBottom) stick();
   };
@@ -565,7 +600,7 @@ function chatSheet(e) {
   };
   const poll = async () => {
     if (!document.body.contains(ov) || offlineNow()) return;
-    try { const r = await api("GET", "/api/comments", {event: e.id, since: lastTs}); if (merge(r.items)) paint(); } catch (_) { /* нет связи — следующий раз */ }
+    try { const r = await api("GET", "/api/comments", {event: e.id, since: lastTs}); if (merge(r.items)) { paint(); chatCacheWrite(e.id, items); } } catch (_) { /* нет связи — следующий раз */ }
   };
   const push = (m) => {
     chatQueue.push(async () => {
@@ -580,6 +615,7 @@ function chatSheet(e) {
         items = items.filter((x) => x === m || x.id !== m.id);
         lastTs = Math.max(lastTs, m.ts);
         e.comments = (e.comments || 0) + 1;
+        chatCacheWrite(e.id, items);
       } catch (err) { m.pending = false; m.failed = true; m.wasFailed = true; toast(err.message, {bad: true}); paint(); }
     });
     pumpChat();
@@ -596,7 +632,7 @@ function chatSheet(e) {
     items.push(m); paint(true); push(m);
   };
   const del = async (m) => {
-    items = items.filter((x) => x.id !== m.id); paint();
+    items = items.filter((x) => x.id !== m.id); paint(); chatCacheWrite(e.id, items);
     if (String(m.id).startsWith("tmp")) return;
     try { await api("DELETE", "/api/comments", {id: m.id}); e.comments = Math.max(0, (e.comments || 1) - 1); } catch (err) { toast(err.message, {bad: true}); poll(); }
   };
@@ -606,7 +642,15 @@ function chatSheet(e) {
   const {ov} = overlay(sh);
   ta.addEventListener("keydown", (ev) => { if (ev.key === "Enter" && (ev.ctrlKey || ev.metaKey)) { ev.preventDefault(); send(); } });
   paint();
-  api("GET", "/api/comments", {event: e.id}).then((r) => { merge(r.items); paint(true); }).catch((err) => { msgs.replaceChildren(h("div", {class: "empty small"}, err.message)); });
+  if (items.length) paint(true);
+  // сервер присылает полный список: убираем то, что удалили другие, а свои ещё не отправленные сообщения оставляем
+  api("GET", "/api/comments", {event: e.id}).then((r) => {
+    loaded = true;
+    const mine = items.filter((m) => m.pending || m.failed || String(m.id).startsWith("tmp"));
+    items = [...r.items, ...mine.filter((m) => !r.items.some((x) => x.id === m.id))].sort((a, b) => a.ts - b.ts);
+    lastTs = items.reduce((a, m) => Math.max(a, m.ts), 0);
+    chatCacheWrite(e.id, items); paint(true);
+  }).catch((err) => { loaded = true; if (!items.length) msgs.replaceChildren(h("div", {class: "empty small"}, offlineNow() ? "Нет интернета. Переписка появится, когда сеть вернётся." : err.message)); });
   const timer = setInterval(() => { if (!document.body.contains(ov)) clearInterval(timer); else poll(); }, 4000);
 }
 
@@ -858,7 +902,8 @@ async function load(manual = false, force = false) {
     const d = await api("GET", "/api/schedule");
     const next = {me: d.me, events: d.events, roles: d.roles, allRoles: d.allRoles || d.roles, staff: d.staff || [], venues: d.venues || [], venueColors: d.venueColors || {}, palette: d.palette || [], unavailable: d.unavailable || {}, groups: d.groups || [], layout: d.layout || 2, rev: d.rev || "", today: d.today};
     Object.assign(state, next, {ready: true, offline: false, savedAt: Date.now()});
-    if (d.avatarKey && d.avatarKey !== state.avatarKey) loadAvatars(d.avatarKey); // аватарки меняются редко: грузим только при смене ключа
+    if (d.avatarKey && d.avatarKey !== state.avatarKey) loadAvatars(d.avatarKey);
+    setTimeout(prefetchChats, 1500); // после показа расписания фоном подгружаем переписки // аватарки меняются редко: грузим только при смене ключа
     try { localStorage.setItem("ktk_cache", JSON.stringify({...next, savedAt: state.savedAt})); } catch (_) {}
     render();
     if (manual) toast("Обновлено");
