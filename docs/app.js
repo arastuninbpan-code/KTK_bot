@@ -867,7 +867,8 @@ function profileSheet() {
       social("vk", "ВКонтакте", cfg.VK_URL ? cfg.VK_URL + "?ref=" : "")),
     me.canEdit ? h("button", {class: "btn light report-btn", onclick: () => { close(); reportSheet(); }}, icon("chart"), "Сформировать отчёт") : null,
     h("div", {class: "field"}, h("span", {}, "Когда я не могу работать"), calBox, info),
-    h("div", {class: "actions"}, h("button", {class: "btn light", onclick: () => close()}, "Закрыть"), save)));
+    h("div", {class: "actions"}, h("button", {class: "btn light", onclick: () => close()}, "Закрыть"), save),
+    h("div", {class: "ver"}, `Приложение ${window.KTK_VERSION || "?"} · сервер ${state.serverVersion || "?"}`)));
   paint();
 }
 
@@ -966,7 +967,7 @@ async function load(manual = false, force = false) {
   try {
     const d = await api("GET", "/api/schedule");
     const next = {me: d.me, events: d.events, roles: d.roles, allRoles: d.allRoles || d.roles, staff: d.staff || [], venues: d.venues || [], venueColors: d.venueColors || {}, palette: d.palette || [], unavailable: d.unavailable || {}, groups: d.groups || [], layout: d.layout || 2, rev: d.rev || "", today: d.today};
-    Object.assign(state, next, {ready: true, offline: false, savedAt: Date.now()});
+    Object.assign(state, next, {ready: true, offline: false, savedAt: Date.now(), serverVersion: d.version || ""});
     if (d.avatarKey && d.avatarKey !== state.avatarKey) loadAvatars(d.avatarKey);
     setTimeout(prefetchChats, 1500); // после показа расписания фоном подгружаем переписки // аватарки меняются редко: грузим только при смене ключа
     try { localStorage.setItem("ktk_cache", JSON.stringify({...next, savedAt: state.savedAt})); } catch (_) {}

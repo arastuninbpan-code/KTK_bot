@@ -12,3 +12,7 @@
   Cache-Control: no-cache
 /*.webp
   Cache-Control: public, max-age=604800
+/version.js
+  Cache-Control: no-cache
+/demo.js
+  Cache-Control: no-cache

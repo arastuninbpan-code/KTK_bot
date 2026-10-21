@@ -408,3 +408,4 @@ table.rep tfoot td { font-weight: 900; background: var(--light); border-top: 2.5
 
 .report-btn { margin-top: 14px; }
 .rep-dates .input { min-width: 0; padding-left: 8px; padding-right: 6px; }
+.ver { margin-top: 14px; text-align: center; font-size: 11px; color: var(--muted); opacity: .6; }
