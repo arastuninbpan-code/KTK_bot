@@ -380,7 +380,7 @@ function venuesBody(canEdit) {
       "aria-label": `${dayTitle(d)}${list.length ? ", событий: " + list.length : ""}`,
       onclick: () => { state.day = d; if (out) state.calMonth = d.slice(0, 7); render(); }},
       h("b", {}, String(dateParts(d).d)),
-      h("span", {class: "dots"}, colors.slice(0, 4).map((c) => h("i", {style: `background:${c}`})), colors.length > 4 ? h("em", {}, "+") : null)));
+      h("span", {class: "dots"}, (colors.length > 3 ? colors.slice(0, 2) : colors).map((c) => h("i", {style: `background:${c}`})), colors.length > 3 ? h("em", {}, "+") : null))); // всегда одна строка (максимум три значка), чтобы ячейки не росли
   }
   const grid = h("div", {class: "calgrid"}, ...cells);
 
