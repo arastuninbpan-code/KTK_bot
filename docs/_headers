@@ -1,0 +1,14 @@
+# Заголовки для Cloudflare Pages (GitHub Pages этот файл просто игнорирует):
+# сами страницы и настройки всегда свежие, чтобы обновления доходили сразу; картинки можно кешировать надолго.
+/index.html
+  Cache-Control: no-cache
+/app.js
+  Cache-Control: no-cache
+/style.css
+  Cache-Control: no-cache
+/config.js
+  Cache-Control: no-cache
+/sw.js
+  Cache-Control: no-cache
+/*.webp
+  Cache-Control: public, max-age=604800
