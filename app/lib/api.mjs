@@ -1,8 +1,8 @@
 // API приложения. Чистая функция: запрос -> {status, body}. Синхронный код, никакой привязки к платформе.
 import {makeToken, readToken} from "./auth.mjs";
-import {buildRow, findConflicts, headerRoles, layoutOf, matchPhones, norm, parseDate, parseEvents, todayIso, validateEvent} from "./core.mjs";
+import {addDays, buildRow, findConflicts, headerRoles, layoutOf, matchPhones, norm, parseDate, parseEvents, todayIso, validateEvent} from "./core.mjs";
 import {platform} from "./platform.mjs";
-import {canEdit, ROLE_LABELS, TABS} from "./store.mjs";
+import {canEdit, colorName, ROLE_LABELS, TABS, VENUE_COLORS} from "./store.mjs";
 
 class HttpError extends Error {
   constructor(status, message, extra = {}) { super(message); this.status = status; this.extra = extra; }
@@ -27,6 +27,8 @@ function writeAt(store, table, date, cells, today) {
   else { store.book.insert(TABS.schedule, at); store.book.set(TABS.schedule, at, cells); }
 }
 
+/** {название площадки: #цвет} — по ним приложение красит плашки событий. */
+const venueColorMap = (store) => Object.fromEntries(store.venueList().map((v) => [v.name, v.hex]));
 const publicUser = (u) => ({name: u.name, role: u.role, roleLabel: ROLE_LABELS[u.role], canEdit: canEdit(u.role)});
 /** Для кнопок «Подключить Telegram / ВК»: к каким каналам уже привязан человек и какой у него логин (он идёт в ссылку-подключение). */
 const connections = (store, me) => ({login: me.login, channels: [...new Set(store.chats().filter((c) => c.phone === me.phone).map((c) => c.channel))]});
@@ -57,7 +59,7 @@ export function handleApi(req, deps) {
     if (method === "GET" && path === "/api/schedule") {
       const table = store.book.get(TABS.schedule);
       const events = parseEvents(table, today)
-        .filter((e) => (e.dateEnd || e.date) >= today)
+        .filter((e) => (e.dateEnd || e.date) >= addDays(today, -62)) // два месяца назад: для календаря на вкладке «Площадки»
         .sort((a, b) => (a.date + a.time).localeCompare(b.date + b.time))
         .map((e) => ({...e, rev: rev(table[e.row - 1]),
           mine: Object.entries(e.roles).filter(([, names]) => names.some((n) => matchPhones(n, users).includes(me.phone))).map(([role]) => role)}));
@@ -65,23 +67,28 @@ export function handleApi(req, deps) {
       const venues = [...store.venues()];
       for (const e of events) if (e.hall && !venues.some((v) => norm(v) === norm(e.hall))) venues.push(e.hall);
       const editor = canEdit(me.role);
-      return {status: 200, body: {today, me: {...publicUser(me), ...connections(store, me)}, roles: headerRoles(table), layout: layoutOf(table).v, rev: getRev(), events, venues,
+      return {status: 200, body: {today, me: {...publicUser(me), ...connections(store, me)}, roles: headerRoles(table), layout: layoutOf(table).v, rev: getRev(), events, venues, venueColors: venueColorMap(store), palette: VENUE_COLORS,
         staff: editor ? store.staffNames() : undefined, groups: editor ? store.groups() : undefined}};
     }
 
-    if (path === "/api/venues" && ["POST", "DELETE"].includes(method)) {
+    if (path === "/api/venues" && ["POST", "PUT", "DELETE"].includes(method)) {
       if (!canEdit(me.role)) throw new HttpError(403, "Площадки могут менять только администратор и редактор.");
       const name = String(body.name || "").split(/\s+/).filter(Boolean).join(" ");
       if (!name) throw new HttpError(400, "Укажите название площадки");
       if (name.length > 60) throw new HttpError(400, "Название слишком длинное");
-      if (method === "POST") store.addVenue(name);
-      else {
+      if (method === "PUT") {
+        if (!colorName(body.color)) throw new HttpError(400, "Выберите цвет из списка");
+        if (!store.setVenueColor(name, body.color)) throw new HttpError(404, "Такой площадки нет");
+      } else if (method === "POST") {
+        if (body.color && !colorName(body.color)) throw new HttpError(400, "Выберите цвет из списка");
+        store.addVenue(name, body.color);
+      } else {
         const busy = parseEvents(store.book.get(TABS.schedule), today).some((e) => norm(e.hall) === norm(name) && (e.dateEnd || e.date) >= today);
         if (busy) throw new HttpError(409, "На этой площадке есть будущие события. Сначала перенесите их.");
         store.removeVenue(name);
       }
       bumpRev();
-      return {status: 200, body: {ok: true, venues: store.venues()}};
+      return {status: 200, body: {ok: true, venues: store.venues(), venueColors: venueColorMap(store)}};
     }
 
     if (["POST", "PUT", "DELETE"].includes(method) && path.startsWith("/api/events")) {

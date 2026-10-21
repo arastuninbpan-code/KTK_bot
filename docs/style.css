@@ -228,3 +228,52 @@ body.modal-open { overflow: hidden; }
 .conn { display: inline-flex; align-items: center; gap: 6px; padding: 7px 12px; border: var(--line); border-radius: 999px; background: var(--cream); color: var(--navy); font-size: 13px; font-weight: 700; text-decoration: none; }
 .conn.on { background: #EAF8EE; border-width: 2px; }
 .conn .ico { width: 16px; height: 16px; }
+
+/* календарь площадок */
+.calendar { margin: 10px 0 8px; padding: 12px 10px 10px; background: #fff; border: var(--line); border-radius: 22px; box-shadow: 3px 3px 0 var(--navy); }
+.calhead { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 8px; }
+.caltitle { text-align: center; display: grid; gap: 2px; }
+.caltitle b { font: 700 20px var(--h); }
+.cal-nav { width: 40px; height: 40px; border-radius: 12px; border: 2.5px solid var(--navy); background: var(--light); font: 700 24px/1 var(--h); display: grid; place-items: center; padding: 0 0 3px; }
+.cal-nav:disabled { opacity: .35; }
+.calwd, .calgrid { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 4px; }
+.calwd { margin-bottom: 4px; text-align: center; font-size: 11px; font-weight: 900; color: var(--muted); text-transform: uppercase; }
+.calwd .we { color: var(--coral); }
+.calday { position: relative; aspect-ratio: 1 / 1.08; min-width: 0; padding: 4px 0 0; border: 2px solid transparent; border-radius: 12px; background: var(--cream); display: flex; flex-direction: column; align-items: center; gap: 2px; font-weight: 800; color: var(--navy); }
+.calday b { font: 700 15px var(--h); }
+.calday.out { background: transparent; color: #9fb0cc; }
+.calday.past { opacity: .72; }
+.calday.today { border-color: var(--coral); }
+.calday.sel { background: var(--blue); color: #fff; border-color: var(--navy); box-shadow: 2px 2px 0 var(--navy); opacity: 1; }
+.calday .dots { display: flex; flex-wrap: wrap; justify-content: center; gap: 3px; max-width: 92%; min-height: 10px; }
+.calday .dots i { width: 10px; height: 10px; border-radius: 50%; border: 1px solid #fff; box-shadow: 0 0 0 1px rgba(27,53,96,.45); }
+.calday .dots em { font-style: normal; font-size: 10px; line-height: 8px; font-weight: 900; }
+.vlegend { display: flex; flex-wrap: wrap; gap: 8px; margin: 10px 0 4px; }
+.vchip { display: inline-flex; align-items: center; gap: 7px; padding: 6px 12px; border: 2.5px solid var(--navy); border-radius: 999px; background: #fff; font-weight: 800; font-size: 14px; }
+.vchip i, .cdot { display: inline-block; width: 12px; height: 12px; border-radius: 50%; box-shadow: 0 0 0 1.5px rgba(27,53,96,.55); flex: none; }
+.vchip.add { background: var(--cream); }
+.vchip .ico { width: 15px; height: 15px; }
+.chip.withdot { display: inline-flex; align-items: center; gap: 7px; }
+.dayevents .vday { margin: 12px 0 8px; }
+.plaques { display: grid; gap: 8px; }
+.plaque { display: flex; gap: 12px; align-items: center; width: 100%; padding: 11px 14px; border: 2.5px solid var(--navy); border-radius: 16px; text-align: left; box-shadow: 2px 2px 0 var(--navy); }
+.plaque .pt { flex: none; min-width: 74px; font: 700 15px var(--h); }
+.plaque .pm { display: grid; gap: 2px; min-width: 0; }
+.plaque .pm b { font-size: 16px; overflow-wrap: anywhere; }
+.plaque .pm small { font-size: 12.5px; font-weight: 800; opacity: .9; }
+.empty.small { padding: 18px 0; text-align: center; color: var(--muted); font-weight: 700; }
+.swatches { display: flex; flex-wrap: wrap; gap: 10px; }
+.swatch { width: 40px; height: 40px; border-radius: 50%; border: 2.5px solid var(--navy); display: grid; place-items: center; padding: 0; }
+.swatch .ico { width: 20px; height: 20px; stroke: #fff; }
+.swatch.on { box-shadow: 0 0 0 3px #fff, 0 0 0 5.5px var(--navy); }
+
+/* карточка события */
+.dmeta { display: grid; gap: 8px; margin: 4px 0 12px; }
+.drow { display: flex; justify-content: space-between; gap: 12px; align-items: center; padding: 8px 12px; border: 2px solid var(--navy); border-radius: 12px; background: var(--cream); }
+.drow span { color: var(--muted); font-weight: 800; font-size: 13px; }
+.drow b { text-align: right; }
+.vtag { padding: 2px 12px; border-radius: 999px; border: 2px solid var(--navy); }
+.note.ok { background: #d9f5df; }
+.note.offline { background: var(--cream); border-color: var(--orange); }
+.actions { flex-wrap: wrap; }
+.actions .btn { flex: 1 1 140px; min-width: 0; }

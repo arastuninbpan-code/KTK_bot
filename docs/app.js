@@ -5,7 +5,7 @@ const WD = ["Вс", "Пн", "Вт", "Ср", "Чт", "Пт", "Сб"];
 // цвета меток разделов (Администратор, Гардероб, Касса…): по порядку колонок таблицы, из палитры
 const TAG_COLORS = [["#0A96DC", "#fff"], ["#F2961E", "#fff"], ["#F04E4A", "#fff"], ["#F4C79A", "#1B3560"], ["#1B3560", "#fff"], ["#D4F1FC", "#1B3560"]];
 
-const state = {token: localStorage.getItem("ktk_token") || "", me: null, events: [], roles: [], staff: [], venues: [], groups: [], layout: 2, rev: "", today: "", day: "", tab: "all", ready: false};
+const state = {token: localStorage.getItem("ktk_token") || "", me: null, events: [], roles: [], staff: [], venues: [], venueColors: {}, palette: [], groups: [], layout: 2, rev: "", today: "", day: "", calMonth: "", tab: "all", ready: false, offline: false, savedAt: 0};
 const root = document.getElementById("root");
 
 // ---------- разметка без innerHTML ----------
@@ -108,7 +108,11 @@ async function api(method, path, body) {
           break;
         } catch (e) { if (method !== "GET" || attempt >= 1) throw e; }
       }
-    } catch (e) { throw new Error("Нет связи с сервером (" + e.message + "). Проверьте, что доступ веб-приложения «Все», а не «Только я»."); }
+    } catch (e) {
+      const err = new Error(navigator.onLine === false ? "Нет интернета" : "Нет связи с сервером (" + e.message + "). Проверьте, что доступ веб-приложения «Все», а не «Только я».");
+      err.offline = true;
+      throw err;
+    }
     try { data = JSON.parse(raw); } catch (e) { throw new Error("Сервер ответил не так, как ждали (код " + r.status + "): " + raw.replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").slice(0, 160)); }
     status = data._status || (r.ok ? 200 : r.status);
   } else {
@@ -257,7 +261,7 @@ function eventCard(e) {
   const roles = Object.entries(e.roles).filter(([r]) => state.tab !== "mine" || e.mine.includes(r));
   const list = h("ul", {class: "roles"}, roles.map(([role, names]) => h("li", {class: e.mine.includes(role) ? "me" : ""}, tag(role), h("div", {class: "n"}, names.join(", ")))));
   const urgent = isSoon(e);
-  return h(canEdit ? "button" : "article", {class: "ev" + (e.mine.length ? " mine" : "") + (urgent ? " urgent" : ""), ...(canEdit ? {onclick: () => actionSheet(e), "aria-label": `Изменить: ${e.title}`} : {})},
+  return h("button", {class: "ev" + (e.mine.length ? " mine" : "") + (urgent ? " urgent" : ""), onclick: () => (canEdit ? actionSheet(e) : eventDetails(e)), "aria-label": `${canEdit ? "Изменить" : "Открыть"}: ${e.title}`},
     time,
     h("div", {}, h("h3", {}, e.title), range, hall, roles.length ? list : null),
     canEdit ? h("span", {class: "edit-hint"}, icon("pencil")) : (e.mine.length ? h("span", {class: "pill mine-tag"}, "вы") : null),
@@ -265,7 +269,7 @@ function eventCard(e) {
 }
 
 function scheduleBody(canEdit) {
-  const list = state.events.filter((e) => state.tab === "all" || e.mine.length);
+  const list = state.events.filter((e) => upcoming(e) && (state.tab === "all" || e.mine.length));
   const byDay = new Map();
   for (const e of list) {
     const key = e.date < state.today ? state.today : e.date; // многодневные события, которые уже идут, показываем под «Сегодня»
@@ -287,92 +291,169 @@ function scheduleBody(canEdit) {
   return body;
 }
 
-// ---------- площадки: занятость по дням ----------
-const TRACK_FROM = 8 * 60, TRACK_TO = 24 * 60; // шкала 08:00 — 24:00
+// ---------- площадки: календарь на месяц ----------
+const FALLBACK_HEX = "#7A8699";
+const MONTH_NAMES = ["Январь", "Февраль", "Март", "Апрель", "Май", "Июнь", "Июль", "Август", "Сентябрь", "Октябрь", "Ноябрь", "Декабрь"];
+const hexOfHall = (hall) => {
+  const k = hallKey(hall);
+  if (!k) return FALLBACK_HEX;
+  for (const [name, hex] of Object.entries(state.venueColors || {})) if (hallKey(name) === k) return hex;
+  return FALLBACK_HEX;
+};
+/** Цвет текста на цветной плашке: тёмный на светлых цветах, белый на тёмных. */
+const inkOn = (hex) => { const n = parseInt(String(hex).slice(1), 16); return 0.299 * (n >> 16) + 0.587 * ((n >> 8) & 255) + 0.114 * (n & 255) > 170 ? "#1B3560" : "#fff"; };
+const monthShift = (ym, n) => { const [y, m] = ym.split("-").map(Number); return new Date(Date.UTC(y, m - 1 + n, 1)).toISOString().slice(0, 7); };
+const upcoming = (e) => (e.dateEnd || e.date) >= state.today;
+const startMin = (e) => { const m = toMin(String(e.time || "").split(/,\s*/)[0]); return m === null ? -1 : m; };
 
-function venueItems(venue, day) {
-  const evs = state.events.filter((e) => hallKey(e.hall) === hallKey(venue) && onDay(e, day));
-  const items = [];
-  for (const e of evs) for (const [a, b] of slotsOf(e)) items.push({e, a, b, all: b - a >= 1440});
-  items.sort((x, y) => x.a - y.a);
-  for (const it of items) it.clash = items.some((o) => o !== it && o.e !== it.e && o.a < it.b && it.a < o.b);
-  return items;
+/** События по дням в промежутке [from, to] (многодневные попадают во все свои дни). */
+function eventsByDay(from, to) {
+  const map = new Map();
+  for (const e of state.events) {
+    const a = e.date > from ? e.date : from, b = (e.dateEnd || e.date) < to ? (e.dateEnd || e.date) : to;
+    for (let d = a, guard = 0; d <= b && guard < 70; d = addDays(d, 1), guard++) { if (!map.has(d)) map.set(d, []); map.get(d).push(e); }
+  }
+  for (const list of map.values()) list.sort((x, y) => startMin(x) - startMin(y) || String(x.title).localeCompare(y.title));
+  return map;
 }
 
-function venueCard(venue, day, canEdit) {
-  const items = venueItems(venue, day);
-  const clash = items.some((i) => i.clash);
-  const segs = items.map((it) => {
-    const from = Math.max(it.a, TRACK_FROM), to = Math.min(it.b, TRACK_TO);
-    const left = ((from - TRACK_FROM) / (TRACK_TO - TRACK_FROM)) * 100;
-    const width = Math.max(((to - from) / (TRACK_TO - TRACK_FROM)) * 100, 2.5);
-    return h("i", {class: "seg" + (it.clash ? " clash" : it.all ? " all" : ""), style: `left:${left}%;width:${Math.min(width, 100 - left)}%`, title: it.e.title});
-  });
-  const rows = items.map((it) => {
-    const label = it.all ? timeLabel(it.e) : fmtMin(it.a) + (it.e.end && String(it.e.time).split(/,\s*/).length === 1 ? "–" + it.e.end : "");
-    return h(canEdit ? "button" : "div", {class: "slot" + (it.clash ? " clash" : ""), ...(canEdit ? {onclick: () => actionSheet(it.e)} : {})},
-      h("b", {}, label), h("span", {}, it.e.title));
-  });
-  return h("section", {class: "venue" + (clash ? " clash" : "")},
-    h("div", {class: "vhead"}, icon("pin"), h("h3", {}, cap(venue)),
-      h("span", {class: "vbadge" + (clash ? " bad" : items.length ? "" : " free")}, clash ? "пересечение" : items.length ? `занято: ${items.length}` : "свободно"),
-      canEdit ? h("button", {class: "mini", "aria-label": "Убрать площадку", onclick: () => confirmDialog("Убрать площадку?", `«${venue}» пропадёт из списка. События останутся, но без площадки их не получится проверить на занятость.`, "Убрать", () => removeVenue(venue))}, icon("trash")) : null),
-    h("div", {class: "track"}, ...segs),
-    h("div", {class: "ticks"}, [8, 12, 16, 20, 24].map((x) => h("span", {}, String(x)))),
-    rows.length ? h("div", {class: "slots"}, ...rows) : null);
+/** Ряд цветных кружков на выбор цвета площадки. */
+function swatches(selected, onPick) {
+  const palette = state.palette && state.palette.length ? state.palette : [{name: "Голубой", hex: "#0A96DC"}];
+  return h("div", {class: "swatches", role: "radiogroup", "aria-label": "Цвет площадки"}, palette.map((c) =>
+    h("button", {class: "swatch" + (selected === c.name ? " on" : ""), role: "radio", "aria-checked": String(selected === c.name), "aria-label": c.name, title: c.name, style: `background:${c.hex}`, onclick: () => onPick(c.name)}, selected === c.name ? icon("check") : null)));
 }
 
-/** Занятость на 14 дней: площадки в строках, дни в столбцах; цвет — насколько день загружен (08:00–24:00), красный — пересечение. */
-function heatmap(venues, days, day) {
-  const cfg = window.KTK || {};
-  const head = h("tr", {}, h("th", {}), ...days.map((d) => { const p = dateParts(d); return h("th", {class: d === day ? "sel" : ""}, h("small", {}, p.wd), h("b", {}, String(p.d))); }));
-  const rows = venues.map((v) => h("tr", {}, h("th", {class: "hv"}, cap(v)), ...days.map((d) => {
-    const items = venueItems(v, d);
-    const busy = items.reduce((m, i) => m + Math.max(0, Math.min(i.b, TRACK_TO) - Math.max(i.a, TRACK_FROM)), 0);
-    const level = !items.length ? 0 : items.some((i) => i.clash) ? "x" : busy > 600 ? 3 : busy > 240 ? 2 : 1;
-    const text = !items.length ? "свободно" : items.some((i) => i.clash) ? "пересечение" : `занято: ${items.length}`;
-    return h("td", {}, h("button", {class: "hm l" + level + (d === day ? " sel" : ""), "aria-label": `${cap(v)}, ${dayTitle(d)}: ${text}`, title: `${cap(v)}: ${text}`, onclick: () => { state.day = d; render(); }}));
-  })));
-  return h("div", {class: "heat"}, h("div", {class: "heatscroll"}, h("table", {}, h("thead", {}, head), h("tbody", {}, ...rows))),
-    h("div", {class: "legend"}, [["l0", "свободно"], ["l1", "немного"], ["l2", "много"], ["l3", "почти весь день"], ["lx", "пересечение"]].map(([c, t]) => h("span", {}, h("i", {class: "hm " + c}), t))));
+/** Подробная карточка события: открывается из календаря площадок и из списка расписания. */
+function eventDetails(e) {
+  const canEdit = state.me.canEdit;
+  const hex = e.hall ? hexOfHall(e.hall) : null;
+  const when = e.dateEnd ? `${dayTitle(e.date)} — ${dayTitle(e.dateEnd)}` : dayTitle(e.date);
+  const roles = Object.entries(e.roles || {});
+  const {close} = overlay(sheet(
+    h("h2", {}, e.title),
+    h("div", {class: "dmeta"},
+      h("div", {class: "drow"}, h("span", {}, "Когда"), h("b", {}, when)),
+      h("div", {class: "drow"}, h("span", {}, "Время"), h("b", {}, timeLabel(e))),
+      e.hall ? h("div", {class: "drow"}, h("span", {}, "Площадка"), h("b", {class: "vtag", style: `background:${hex};color:${inkOn(hex)}`}, cap(e.hall))) : null),
+    e.mine && e.mine.length ? h("div", {class: "note ok"}, icon("check"), h("span", {}, "Вы заняты: " + e.mine.map(roleText).join(", "))) : null,
+    roles.length ? h("div", {class: "field"}, h("span", {}, "Кто занят"), h("ul", {class: "roles"}, roles.map(([role, names]) => h("li", {class: (e.mine || []).includes(role) ? "me" : ""}, tag(role), h("div", {class: "n"}, names.join(", ")))))) : h("div", {class: "hint-line"}, "Людей на событие пока не назначили"),
+    h("div", {class: "actions"},
+      canEdit ? h("button", {class: "btn light", onclick: () => { close(); confirmDialog("Удалить событие?", `«${e.title}» пропадёт из расписания, а сотрудникам придёт сообщение об отмене.`, "Удалить", () => remove(e)); }}, icon("trash"), "Удалить") : null,
+      canEdit ? h("button", {class: "btn", onclick: () => { close(); editor(e); }}, icon("pencil"), "Редактировать") : h("button", {class: "btn", onclick: () => close()}, "Закрыть"))));
+}
+
+function plaque(e) {
+  const hex = e.hall ? hexOfHall(e.hall) : FALLBACK_HEX;
+  return h("button", {class: "plaque", style: `background:${hex};color:${inkOn(hex)}`, "aria-label": `${e.title}, ${timeLabel(e)}${e.hall ? ", " + cap(e.hall) : ""}`, onclick: () => eventDetails(e)},
+    h("span", {class: "pt"}, timeLabel(e)),
+    h("span", {class: "pm"}, h("b", {}, e.title), e.hall ? h("small", {}, cap(e.hall)) : h("small", {}, "без площадки")));
 }
 
 function venuesBody(canEdit) {
-  const day = state.day && state.day >= state.today ? state.day : state.today;
-  const strip = h("div", {class: "dstrip", role: "tablist"}, Array.from({length: 14}, (_, i) => addDays(state.today, i)).map((d) => {
-    const p = dateParts(d);
-    return h("button", {class: "dchip", role: "tab", "aria-selected": String(d === day), onclick: () => { state.day = d; render(); }}, h("small", {}, d === state.today ? "сегодня" : p.wd), h("b", {}, String(p.d)));
-  }));
+  const thisYM = state.today.slice(0, 7);
+  const ym = state.calMonth && state.calMonth >= monthShift(thisYM, -2) && state.calMonth <= monthShift(thisYM, 12) ? state.calMonth : thisYM;
+  const first = ym + "-01";
+  const dow = (new Date(first + "T00:00:00Z").getUTCDay() + 6) % 7; // неделя с понедельника
+  const daysInMonth = new Date(Date.UTC(+ym.slice(0, 4), +ym.slice(5, 7), 0)).getUTCDate();
+  const weeks = Math.ceil((dow + daysInMonth) / 7);
+  const start = addDays(first, -dow);
+  const end = addDays(start, weeks * 7 - 1);
+  const day = state.day && state.day >= start && state.day <= end && state.day.slice(0, 7) === ym ? state.day : (ym === thisYM ? state.today : first);
+  const byDay = eventsByDay(start, end);
+  const go = (n) => { state.calMonth = monthShift(ym, n); state.day = ""; render(); };
+
+  const head = h("div", {class: "calhead"},
+    h("button", {class: "cal-nav", "aria-label": "Предыдущий месяц", disabled: ym <= monthShift(thisYM, -2), onclick: () => go(-1)}, "‹"),
+    h("div", {class: "caltitle"}, h("b", {}, `${MONTH_NAMES[+ym.slice(5, 7) - 1]} ${ym.slice(0, 4)}`),
+      ym !== thisYM ? h("button", {class: "link", onclick: () => { state.calMonth = thisYM; state.day = state.today; render(); }}, "Сегодня") : null),
+    h("button", {class: "cal-nav", "aria-label": "Следующий месяц", disabled: ym >= monthShift(thisYM, 12), onclick: () => go(1)}, "›"));
+  const wd = h("div", {class: "calwd"}, ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"].map((x, i) => h("span", {class: i > 4 ? "we" : ""}, x)));
+  const cells = [];
+  for (let d = start; d <= end; d = addDays(d, 1)) {
+    const list = byDay.get(d) || [];
+    const colors = [...new Set(list.map((e) => (e.hall ? hexOfHall(e.hall) : FALLBACK_HEX)))];
+    const out = d.slice(0, 7) !== ym;
+    cells.push(h("button", {class: "calday" + (out ? " out" : "") + (d === state.today ? " today" : "") + (d === day ? " sel" : "") + (d < state.today ? " past" : ""), "aria-pressed": String(d === day),
+      "aria-label": `${dayTitle(d)}${list.length ? ", событий: " + list.length : ""}`,
+      onclick: () => { state.day = d; if (out) state.calMonth = d.slice(0, 7); render(); }},
+      h("b", {}, String(dateParts(d).d)),
+      h("span", {class: "dots"}, colors.slice(0, 4).map((c) => h("i", {style: `background:${c}`})), colors.length > 4 ? h("em", {}, "+") : null)));
+  }
+  const grid = h("div", {class: "calgrid"}, ...cells);
+
   const venues = state.venues.slice();
-  const days14 = Array.from({length: 14}, (_, i) => addDays(state.today, i));
-  const noHall = state.events.filter((e) => !e.hall && onDay(e, day));
-  const body = h("div", {class: "venues"}, venues.length ? heatmap(venues, days14, day) : null, strip, h("h2", {class: "vday"}, dayTitle(day)));
-  if (canEdit) body.append(h("button", {class: "btn light addv", onclick: () => addVenueSheet()}, icon("plus"), "Новая площадка"));
-  if (!venues.length) body.append(h("div", {class: "empty"}, cloud(), h("h3", {}, "Площадок пока нет"), canEdit ? h("div", {}, "Добавьте первую, и сможете видеть, когда она занята") : h("div", {}, "Их добавит администратор")));
-  for (const v of venues) body.append(venueCard(v, day, canEdit));
-  if (noHall.length) body.append(h("section", {class: "venue"}, h("div", {class: "vhead"}, h("h3", {}, "Без площадки"), h("span", {class: "vbadge free"}, String(noHall.length))),
-    h("div", {class: "slots"}, ...noHall.map((e) => h(canEdit ? "button" : "div", {class: "slot", ...(canEdit ? {onclick: () => actionSheet(e)} : {})}, h("b", {}, timeLabel(e)), h("span", {}, e.title))))));
+  const legend = h("div", {class: "vlegend"},
+    ...venues.map((v) => h(canEdit ? "button" : "span", {class: "vchip", ...(canEdit ? {onclick: () => venueSheet(v), "aria-label": `Площадка «${v}»: цвет и удаление`} : {})},
+      h("i", {style: `background:${hexOfHall(v)}`}), cap(v))),
+    canEdit ? h("button", {class: "vchip add", onclick: () => addVenueSheet()}, icon("plus"), "Площадка") : null);
+
+  const list = byDay.get(day) || [];
+  const dayBox = h("section", {class: "dayevents", "aria-live": "polite"},
+    h("h2", {class: "vday"}, dayTitle(day)),
+    list.length ? h("div", {class: "plaques"}, ...list.map(plaque))
+      : h("div", {class: "empty small"}, h("div", {}, "На этот день событий нет")));
+  const body = h("div", {class: "venues"}, h("section", {class: "calendar"}, head, wd, grid), legend, dayBox);
+  if (!venues.length && !canEdit) body.append(h("div", {class: "hint-line"}, "Площадки добавит администратор"));
+  // листаем месяцы свайпом по календарю
+  let x0 = null;
+  grid.addEventListener("touchstart", (ev) => { x0 = ev.touches[0].clientX; }, {passive: true});
+  grid.addEventListener("touchend", (ev) => { if (x0 === null) return; const dx = ev.changedTouches[0].clientX - x0; x0 = null; if (Math.abs(dx) > 60) { const n = dx < 0 ? 1 : -1; const to = monthShift(ym, n); if (to >= monthShift(thisYM, -2) && to <= monthShift(thisYM, 12)) go(n); } });
   return body;
 }
 
 function addVenueSheet(onAdded) {
   const err = h("div", {class: "error", role: "alert"});
+  const palette = state.palette || [];
+  const used = new Set(Object.values(state.venueColors || {}));
+  let color = (palette.find((c) => !used.has(c.hex)) || palette[0] || {}).name || "";
   const input = h("input", {class: "input", placeholder: "Например, Фойе или Репетиционный зал", maxlength: "60", onkeydown: (e) => { if (e.key === "Enter") add.click(); }});
+  const pick = h("div", {});
+  const paint = () => pick.replaceChildren(swatches(color, (name) => { color = name; paint(); }));
   const add = h("button", {class: "btn", onclick: async () => {
     const name = input.value.trim().split(/\s+/).join(" ");
     if (!name) { err.textContent = "Введите название"; return; }
     add.disabled = true;
-    try { await api("POST", "/api/venues", {name}); close(); toast("Площадка добавлена", {plane: true}); await load(); if (onAdded) onAdded(name); }
+    try { await api("POST", "/api/venues", {name, color}); close(); toast("Площадка добавлена", {plane: true}); await load(); if (onAdded) onAdded(name); }
     catch (e) { err.textContent = e.message; add.disabled = false; }
   }}, "Добавить");
-  const {close} = overlay(sheet(h("h2", {}, "Новая площадка"), h("label", {class: "field"}, h("span", {}, "Название"), input), err,
+  const {close} = overlay(sheet(h("h2", {}, "Новая площадка"), h("label", {class: "field"}, h("span", {}, "Название"), input),
+    h("div", {class: "field"}, h("span", {}, "Цвет"), pick), err,
     h("div", {class: "actions"}, h("button", {class: "btn light", onclick: () => close()}, "Отмена"), add)));
+  paint();
   setTimeout(() => input.focus(), 60);
+}
+
+/** Площадка: сменить цвет или убрать. */
+function venueSheet(name) {
+  const palette = state.palette || [];
+  const current = (palette.find((c) => c.hex === hexOfHall(name)) || {}).name || "";
+  const body = h("div", {});
+  const paint = (sel) => body.replaceChildren(swatches(sel, async (color) => {
+    paint(color);
+    try { await api("PUT", "/api/venues", {name, color}); toast("Цвет сохранён"); await load(); } catch (e) { toast(e.message, {bad: true}); paint(current); }
+  }));
+  const {close} = overlay(sheet(h("h2", {}, cap(name)), h("div", {class: "field"}, h("span", {}, "Цвет"), body),
+    h("div", {class: "actions"},
+      h("button", {class: "btn light", onclick: () => { close(); confirmDialog("Убрать площадку?", `«${name}» пропадёт из списка. События останутся, но без площадки их не получится проверить на занятость.`, "Убрать", () => removeVenue(name)); }}, icon("trash"), "Убрать"),
+      h("button", {class: "btn", onclick: () => close()}, "Готово"))));
+  paint(current);
 }
 
 async function removeVenue(name) {
   try { await api("DELETE", "/api/venues", {name}); toast("Площадка убрана"); await load(); } catch (e) { toast(e.message, {bad: true}); }
 }
+
+/** Плашка «нет интернета»: показываем последнее, что удалось загрузить, и когда это было. */
+function offlineBar() {
+  if (!state.offline) return null;
+  const d = state.savedAt ? new Date(state.savedAt) : null;
+  const hhmm = d ? d.toLocaleTimeString("ru-RU", {hour: "2-digit", minute: "2-digit"}) : "";
+  const same = d && d.toDateString() === new Date().toDateString();
+  const when = d ? (same ? "сегодня в " + hhmm : d.toLocaleDateString("ru-RU", {day: "numeric", month: "long"}) + " в " + hhmm) : "";
+  return h("div", {class: "note offline", role: "status"}, icon("alert"), h("span", {}, "Нет интернета. Показано последнее сохранённое" + (when ? " (" + when + ")" : "") + ". Изменить расписание можно, когда появится сеть."));
+}
+function setOffline(on) { if (state.offline !== on) { state.offline = on; render(); } }
 
 /** «Синхронизация» с мессенджерами: уже подключён — галочка, нет — кнопка-ссылка с логином (бот сам привяжет аккаунт). */
 function connectBar() {
@@ -402,7 +483,7 @@ function appView() {
         h("button", {class: "icon-btn", "aria-label": "Выйти", onclick: () => confirmDialog("Выйти?", "Чтобы войти снова, понадобится ваш логин.", "Выйти", logout)}, icon("exit"))),
       h("div", {class: "tabs", role: "tablist"},
         [["all", "Расписание"], ["mine", "Мои смены"], ["venues", "Площадки"]].map(([t, label]) => h("button", {class: "tab", role: "tab", "aria-selected": String(state.tab === t), onclick: () => { state.tab = t; render(); window.scrollTo(0, 0); }}, label)))),
-    connectBar(), old, body,
+    offlineBar(), connectBar(), old, body,
     canEdit && state.tab !== "venues" ? h("button", {class: "fab", "aria-label": "Добавить событие", onclick: () => editor(null)}, icon("plus")) : null);
 }
 
@@ -418,16 +499,18 @@ let loading = false;
 async function load(manual = false) {
   if (!state.token) return render();
   if (loading) return;
+  if (navigator.onLine === false && state.ready) { setOffline(true); if (manual) toast("Нет интернета: показано последнее сохранённое", {bad: true}); return; }
   loading = true;
   try {
     const d = await api("GET", "/api/schedule");
-    const next = {me: d.me, events: d.events, roles: d.roles, staff: d.staff || [], venues: d.venues || [], groups: d.groups || [], layout: d.layout || 2, rev: d.rev || "", today: d.today};
-    Object.assign(state, next, {ready: true});
-    try { localStorage.setItem("ktk_cache", JSON.stringify(next)); } catch (_) {}
+    const next = {me: d.me, events: d.events, roles: d.roles, staff: d.staff || [], venues: d.venues || [], venueColors: d.venueColors || {}, palette: d.palette || [], groups: d.groups || [], layout: d.layout || 2, rev: d.rev || "", today: d.today};
+    Object.assign(state, next, {ready: true, offline: false, savedAt: Date.now()});
+    try { localStorage.setItem("ktk_cache", JSON.stringify({...next, savedAt: state.savedAt})); } catch (_) {}
     render();
     if (manual) toast("Обновлено");
   } catch (e) {
     if (!state.token) return; // 401: api() уже вернул на экран входа
+    if (e.offline && state.ready) { setOffline(true); if (manual) toast(e.message, {bad: true}); return; } // нет сети: остаёмся на последних сохранённых данных
     toast(e.message, {bad: true});
     if (!state.ready) root.replaceChildren(h("div", {class: "loading"}, h("div", {class: "empty"}, cloud(), h("h3", {}, "Не удалось загрузить"), h("p", {}, e.message),
       h("div", {class: "stack"}, h("button", {class: "btn", onclick: () => { render(); load(); }}, "Повторить"), h("button", {class: "btn light", onclick: logout}, "Выйти")))));
@@ -460,7 +543,7 @@ function editor(e) {
     const start = h("input", {class: "input", type: "time", value: draft.time, "aria-label": "Начало", onchange: (ev) => { draft.time = ev.target.value; if (!draft.time) draft.end = ""; paint(); }});
     const end = h("input", {class: "input", type: "time", value: draft.end, "aria-label": "Окончание", disabled: !draft.time, onchange: (ev) => { draft.end = ev.target.value; paint(); }});
     const hallChips = h("div", {class: "chips"},
-      ...venues.map((x) => h("button", {class: "chip" + (hallKey(draft.hall) === hallKey(x) ? " on" : ""), onclick: () => { draft.hall = hallKey(draft.hall) === hallKey(x) ? "" : x; paint(); }}, cap(x))),
+      ...venues.map((x) => h("button", {class: "chip withdot" + (hallKey(draft.hall) === hallKey(x) ? " on" : ""), onclick: () => { draft.hall = hallKey(draft.hall) === hallKey(x) ? "" : x; paint(); }}, h("i", {class: "cdot", style: `background:${hexOfHall(x)}`}), cap(x))),
       h("button", {class: "chip add", onclick: () => addVenueSheet((name) => { draft.hall = name; paint(); })}, "+ новая"));
     const clash = conflictsFor({...draft, time: [draft.time, ...draft.extra].filter(Boolean).join(", ")});
     const warn = clash.length ? h("div", {class: "warn"}, icon("alert"), h("span", {}, `Площадка занята: ${clash.map((c) => `${c.title} (${timeLabel(c)})`).join("; ")}`)) : null;
@@ -528,15 +611,19 @@ function picker(role, selected, onDone) {
 if (state.token) {
   // сначала показываем прошлое расписание, чтобы не ждать сервер, потом обновляем
   try { const c = JSON.parse(localStorage.getItem("ktk_cache") || "null"); if (c && c.events && c.me) Object.assign(state, c, {ready: true}); } catch (_) {}
+  if (navigator.onLine === false && state.ready) state.offline = true;
 }
 render();
 if (state.token) load();
 
 // Раз в несколько секунд спрашиваем сервер «версия данных изменилась?» (дёшево: таблицу он при этом не читает) и подгружаем новое.
 async function poll() {
-  if (!state.token || !state.ready || document.hidden || loading) return;
-  try { const r = await api("GET", "/api/ping", {rev: state.rev}); if (r.changed) await load(); } catch (_) { /* нет связи — молча ждём следующий раз */ }
+  if (!state.token || !state.ready || document.hidden || loading || navigator.onLine === false) return;
+  try { const r = await api("GET", "/api/ping", {rev: state.rev}); if (r.changed || state.offline) await load(); } catch (_) { /* нет связи — молча ждём следующий раз */ }
 }
 setInterval(poll, 8000);
 document.addEventListener("visibilitychange", () => { if (!document.hidden) poll(); });
 window.addEventListener("focus", poll);
+window.addEventListener("online", () => { if (state.token) load(); });
+window.addEventListener("offline", () => { if (state.token && state.ready) setOffline(true); });
+if ("serviceWorker" in navigator && !window.KTK_DEMO && /^https?:$/.test(location.protocol)) navigator.serviceWorker.register("sw.js").catch(() => {}); // страница открывается и без интернета

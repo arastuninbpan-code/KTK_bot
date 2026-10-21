@@ -295,7 +295,7 @@ function everyMinute() {
   autoStyle_(p);
   const todayStr = todayIso(Date.now());
   if (p.getProperty("months_day") !== todayStr) { p.setProperty("months_day", todayStr); p.setProperty("regroup", "1"); } // новый день: месяц мог стать прошедшим, перекладываем вниз
-  if (p.getProperty("regroup")) { p.deleteProperty("regroup"); try { tidyStaff_(); renderPeopleList_(); tidySchedule_(); syncRestoreButtons_(); renderOccupancy_(); } catch (err) { diag_("Таблица: ОШИБКА — " + String(err && err.message ? err.message : err)); } }
+  if (p.getProperty("regroup")) { p.deleteProperty("regroup"); try { tidyStaff_(); renderPeopleList_(); tidySchedule_(); syncRestoreButtons_(); fillVenueColors_(); renderOccupancy_(); } catch (err) { diag_("Таблица: ОШИБКА — " + String(err && err.message ? err.message : err)); } }
   if (!dueDirty && now - last < 4 * 60e3 + 30e3) return;
   withLock_(() => {
     if (dueDirty) p.deleteProperty("dirty");
@@ -325,7 +325,7 @@ function onSheetChange(e) {
       if (e && e.range && e.range.getSheet().getName() === TABS.staff) { tidyStaff_(); renderPeopleList_(); p.deleteProperty("regroup"); }
       if (e && e.range && e.range.getSheet().getName() === TABS.schedule && e.range.getRow() === 1) applyPeopleValidation_(e.range.getSheet()); // добавили новую роль-колонку: сразу список
       syncRestoreButtons_();
-      if (e && e.range) { const nm = e.range.getSheet().getName(); if (nm === TABS.schedule || nm === TABS.venues) renderOccupancy_(); } // занятость площадок обновляем сразу
+      if (e && e.range) { const nm = e.range.getSheet().getName(); if (nm === TABS.venues) fillVenueColors_(); if (nm === TABS.schedule || nm === TABS.venues) renderOccupancy_(); } // занятость площадок обновляем сразу
     } catch (err) { diag_("Таблица: ОШИБКА — " + String(err && err.message ? err.message : err)); }
     runCycle_();
   });
@@ -491,6 +491,7 @@ function styleSheets() {
   const book = new GasBook();
   book.ensure(TABS.venues, VENUES_HEADER);
   seedVenues_(book);
+  fillVenueColors_();
   styleStaff_(ss.getSheetByName(TABS.staff));
   renderPeopleList_();
   styleSchedule_(ss.getSheetByName(TABS.schedule));
@@ -733,7 +734,7 @@ function groupMonths_(sheet, fresh) {
   });
 }
 
-const STYLE_VERSION_ = "10"; // поднимайте, когда меняется оформление: таблица перестроится сама при ближайшем срабатывании таймера
+const STYLE_VERSION_ = "11"; // поднимайте, когда меняется оформление: таблица перестроится сама при ближайшем срабатывании таймера
 
 /** После обновления кода один раз оформляет таблицу сама (то же, что ручной запуск styleSheets). */
 function autoStyle_(p) {
@@ -993,6 +994,15 @@ function renderPeopleList_() {
   return true;
 }
 
+/** Площадки без выбранного цвета получают свободный из палитры и записывают его в таблицу: цвет больше не «плавает» при добавлении новых. */
+function fillVenueColors_() {
+  const store = store_();
+  const list = store.venueList();
+  const todo = list.filter((v) => v.auto);
+  todo.forEach((v) => store.book.setCell(TABS.venues, v.row, 3, v.color));
+  return todo.length > 0;
+}
+
 /** Колонки с людьми в «Расписании» (всё правее «Площадки») — выпадающие списки сотрудников. Вписать другое можно, но клетка получит отметку. */
 function applyPeopleValidation_(sheet) {
   const people = sheet.getParent().getSheetByName(TABS.people);
@@ -1021,6 +1031,8 @@ function renderOccupancy_() {
   const book = new GasBook();
   const table = book.get(TABS.schedule);
   const rows = occupancyRows(parseEvents(table, today), today);
+  const hexOf = {};
+  store_().venueList().forEach((v) => { hexOf[norm(v.name)] = v.hex; });
   const width = OCC_HEAD_.length;
   const total = Math.max(sheet.getMaxRows(), rows.length + 2);
   if (sheet.getMaxRows() < rows.length + 1) sheet.insertRowsAfter(sheet.getMaxRows(), rows.length + 1 - sheet.getMaxRows());
@@ -1041,8 +1053,12 @@ function renderOccupancy_() {
     if (r.kind === "month") {
       line.merge().setBackground(r.past ? "#6B7F9E" : C.navy).setFontColor(C.white).setFontWeight("bold").setHorizontalAlignment("center").setFontSize(12);
       sheet.setRowHeight(2 + i, 30);
-    } else if (r.clash) line.setBackground("#FBE0DF");
-    else if (r.past) line.setFontColor("#8A8A8A");
+    } else {
+      if (r.clash) line.setBackground("#FBE0DF");
+      else if (r.past) line.setFontColor("#8A8A8A");
+      const hex = hexOf[norm(r.venue)];
+      if (hex) sheet.getRange(2 + i, OCC_COL_ + 2).setBackground(hex).setFontColor(C.white).setFontWeight("bold"); // цвет площадки
+    }
   });
 }
 
@@ -1051,8 +1067,16 @@ function styleHeaderRange_(range) {
 }
 
 function styleVenues_(sheet) {
-  styleHeader_(sheet, 2);
-  sheet.setColumnWidth(1, 260);
-  sheet.setColumnWidth(2, 300);
+  if (String(sheet.getRange(1, 3).getValue()).trim() === "") sheet.getRange(1, 3).setNumberFormat("@").setValue("Цвет");
+  styleHeader_(sheet, 3);
+  sheet.setColumnWidth(1, 220);
+  sheet.setColumnWidth(2, 200);
+  sheet.setColumnWidth(3, 130);
+  sheet.setColumnWidth(4, 90);
   sheet.getRange(2, 1, Math.max(sheet.getMaxRows() - 1, 1), 2).setFontColor(C.navy).setVerticalAlignment("middle");
+  // цвет площадки: выбирается из списка, ячейка красится в этот цвет (тот же цвет у плашек в приложении)
+  const colors = sheet.getRange(2, 3, Math.max(sheet.getMaxRows() - 1, 1), 1);
+  colors.setDataValidation(SpreadsheetApp.newDataValidation().requireValueInList(VENUE_COLORS.map((c) => c.name), true).setAllowInvalid(false).build())
+    .setHorizontalAlignment("center").setVerticalAlignment("middle").setFontWeight("bold");
+  sheet.setConditionalFormatRules(VENUE_COLORS.map((c) => SpreadsheetApp.newConditionalFormatRule().whenTextEqualTo(c.name).setBackground(c.hex).setFontColor(C.white).setRanges([colors]).build()));
 }

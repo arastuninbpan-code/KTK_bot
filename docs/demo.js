@@ -9,6 +9,9 @@
   const STAFF = ["Иванова М.В.", "Кузнецова Е.Н.", "Морозова Н.М.", "Орлова А.В.", "Петрова Л.Н.", "Сидорова Л.Р."];
   const GROUPS = [{name: "Актёры", members: ["Иванова М.В.", "Петрова Л.Н."]}, {name: "Техника", members: ["Кузнецова Е.Н.", "Орлова А.В."]}, {name: "Зал", members: ["Морозова Н.М.", "Сидорова Л.Р."]}];
   let venues = ["Большая сцена", "Малая сцена", "Фойе"];
+  const PALETTE = [{name: "Красный", hex: "#E5484D"}, {name: "Оранжевый", hex: "#F2961E"}, {name: "Жёлтый", hex: "#E8C21A"}, {name: "Зелёный", hex: "#3DB16B"}, {name: "Бирюзовый", hex: "#1BA8A0"}, {name: "Голубой", hex: "#0A96DC"}, {name: "Синий", hex: "#3B5BDB"}, {name: "Фиолетовый", hex: "#8E5BD0"}, {name: "Розовый", hex: "#E0509A"}, {name: "Серый", hex: "#7A8699"}];
+  const venueColors = {"Большая сцена": "#E5484D", "Малая сцена": "#0A96DC", "Фойе": "#3DB16B"};
+  const hexByName = (n) => (PALETTE.find((c) => c.name === n) || {}).hex;
   let seq = 10, rev = 1;
   const events = [
     {row: 2, date: iso(0), dateEnd: "", time: hh(40), end: hh(160), title: "Спектакль «Игра в солдатики»", hall: "Большая сцена", roles: {[A]: ["Петрова Л.Н."], [G]: ["Сидорова Л.Р."], [K]: ["Орлова А.В."]}},
@@ -31,13 +34,14 @@
       const u = users[String(token).replace("demo:", "")];
       if (!u) return {status: 401, data: {error: "Нужно войти"}};
       if (path === "/api/ping") return {status: 200, data: {rev: String(rev), changed: (body || {}).rev !== String(rev)}};
-      if (method === "GET") return {status: 200, data: {today: iso(0), me: u, roles: [A, G, K, M, S], layout: 2, rev: String(rev), events: view(u), venues, staff: u.canEdit ? STAFF : undefined, groups: u.canEdit ? GROUPS : undefined}};
+      if (method === "GET") return {status: 200, data: {today: iso(0), me: u, roles: [A, G, K, M, S], layout: 2, rev: String(rev), events: view(u), venues, venueColors, palette: PALETTE, staff: u.canEdit ? STAFF : undefined, groups: u.canEdit ? GROUPS : undefined}};
       if (!u.canEdit) return {status: 403, data: {error: "Менять расписание могут только администратор и редактор."}};
       if (path === "/api/venues") {
         const name = String(body.name || "").trim();
-        if (method === "POST") { if (!venues.some((v) => key(v) === key(name))) venues.push(name); }
+        if (method === "PUT") { const hx = hexByName(body.color); if (!hx) return {status: 400, data: {error: "Выберите цвет из списка"}}; const v = venues.find((x) => key(x) === key(name)); if (v) venueColors[v] = hx; }
+        else if (method === "POST") { if (!venues.some((v) => key(v) === key(name))) { venues.push(name); venueColors[name] = hexByName(body.color) || PALETTE[venues.length % PALETTE.length].hex; } }
         else { if (events.some((e) => key(e.hall) === key(name))) return {status: 409, data: {error: "На этой площадке есть будущие события. Сначала перенесите их."}}; venues = venues.filter((v) => key(v) !== key(name)); }
-        rev++; return {status: 200, data: {ok: true, venues}};
+        rev++; return {status: 200, data: {ok: true, venues, venueColors}};
       }
       const row = Number(path.split("/")[3] || 0);
       if (method === "DELETE") { events.splice(events.findIndex((e) => e.row === row), 1); rev++; return {status: 200, data: {ok: true}}; }

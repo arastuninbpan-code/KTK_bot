@@ -8,7 +8,7 @@ const SCHEDULE = [HEAD,
   ["04.10\n11.00 и 13.00", "Спектакль «Бука»\n(малая сцена)", "Иванова М.В.", "Морозова Н.М.", "", "", ""],
   ["10.10", "Сказки из старого чемодана", "Петрова Л.Н.", "", "", "", ""]];
 const G = () => loadGas({now: NOW, tabs: {"Расписание": SCHEDULE, "Сотрудники": STAFF},
-  props: {SHEET_ID: "x", STYLE_VER: "10", TELEGRAM_BOT_TOKEN: "TOKEN", WEBHOOK_SECRET: "hook", APP_URL: "https://app.test"}});
+  props: {SHEET_ID: "x", STYLE_VER: "11", TELEGRAM_BOT_TOKEN: "TOKEN", WEBHOOK_SECRET: "hook", APP_URL: "https://app.test"}});
 
 const tg = (g, update) => g.run(`doPost(${JSON.stringify({parameter: {secret: "hook"}, postData: {contents: JSON.stringify(update)}})}).getContent()`);
 const msg = (id, text, contact) => ({update_id: Math.floor(Math.random() * 1e9), message: {chat: {id, type: "private"}, from: {id}, text, contact}});
@@ -164,7 +164,7 @@ test("группы: галочки в таблице -> состав групп;
 // ---------- ВКонтакте ----------
 const VKPROPS = {VK_TOKEN: "VKTOKEN", VK_GROUP_ID: "club123", VK_SECRET: "vksecret", VK_CONFIRM: "abc123", TG_CHANNEL: "@teatr"};
 const GV = (extra = {}) => loadGas({now: NOW, tabs: {"Расписание": SCHEDULE, "Сотрудники": STAFF},
-  props: {SHEET_ID: "x", STYLE_VER: "10", TELEGRAM_BOT_TOKEN: "TOKEN", WEBHOOK_SECRET: "hook", APP_URL: "https://app.test", ...VKPROPS, ...extra}});
+  props: {SHEET_ID: "x", STYLE_VER: "11", TELEGRAM_BOT_TOKEN: "TOKEN", WEBHOOK_SECRET: "hook", APP_URL: "https://app.test", ...VKPROPS, ...extra}});
 const vk = (g, update, secret = "hook") => g.run(`doPost(${JSON.stringify({parameter: {secret, vk: "1"}, postData: {contents: JSON.stringify(update)}})}).getContent()`);
 const vkMsg = (id, text, extra = {}) => ({type: "message_new", event_id: "e" + Math.random(), secret: "vksecret", object: {message: {peer_id: id, from_id: id, text, ...extra}}});
 const vkSent = (g, id) => g.fetches.filter((f) => f.url.endsWith("/messages.send") && String(f.body.user_id) === String(id));
@@ -364,7 +364,7 @@ test("после обновления таблица оформляется са
   const g = G();
   delete g.properties.STYLE_VER;
   g.run("everyMinute()"); // как после выкладки новой версии
-  assert.equal(g.properties.STYLE_VER, "10");
+  assert.equal(g.properties.STYLE_VER, "11");
   const staff = g.ss.getSheetByName("Сотрудники");
   assert.deepEqual(staff.getDataRange().getDisplayValues()[0].slice(4, 6), ["Доступ", "Комментарий"]);
   assert.deepEqual(g.ss.sheets.filter((x) => !x.hidden).map((x) => x.name).sort(), ["Площадки", "Расписание", "Сотрудники"]);
@@ -494,7 +494,7 @@ test("«Сотрудники» как в жизни: тысяча строк-з�
 });
 
 test("заявка из ВК: в «ФИО» имя из профиля, роль «Заявка»; поставили «Доступ» — это уже обычный сотрудник", () => {
-  const g = GV({STYLE_VER: "10"});
+  const g = GV({STYLE_VER: "11"});
   g.run("styleSheets()");
   g.setFetchReply((url) => (/users\.get/.test(url) ? JSON.stringify({response: [{first_name: "Анна", last_name: "Смирнова"}]}) : ""));
   vk(g, vkMsg(77, "89112223344"));
@@ -559,4 +559,34 @@ test("в «Расписании» люди выбираются из выпад�
   staff.put(2, accessCol, "FALSE");
   g.run(`onSheetChange({range: {getSheet: () => SpreadsheetApp.openById("x").getSheetByName("Сотрудники"), getRow: () => 2, getValue: () => "FALSE"}, value: "FALSE"})`);
   assert.ok(!list().includes("Иванова М.В.") || g.properties.OWNER_PHONE, "снятый доступ убирает из списка (кроме владельца)");
+});
+
+test("цвета площадок: в таблице выбираются из списка, у новых — свободный по порядку, приложение получает цвета и может их менять", () => {
+  const g = G();
+  g.run("styleSheets()");
+  const venues = g.ss.getSheetByName("Площадки");
+  assert.equal(venues.getDataRange().getDisplayValues()[0][2], "Цвет");
+  assert.equal(venues.getDataRange().getDisplayValues()[1][2], "Красный", "площадке из расписания достался первый цвет, он записан в таблицу");
+  assert.equal(venues.rules.length, 10, "ячейка красится по выбранному названию цвета");
+  const login = (() => { g.run("store_().ensureLogins()"); return g.run("store_().users().find((u) => u.phone === '9000000001').login"); })();
+  const t = api(g, {method: "POST", path: "/api/login", body: {login}}).token;
+  // новая площадка с выбранным цветом и без
+  assert.equal(api(g, {method: "POST", path: "/api/venues", token: t, body: {name: "Фойе", color: "Синий"}})._status, 200);
+  assert.equal(api(g, {method: "POST", path: "/api/venues", token: t, body: {name: "Двор"}})._status, 200);
+  assert.equal(api(g, {method: "POST", path: "/api/venues", token: t, body: {name: "Крыша", color: "Лиловый"}})._status, 400);
+  let s = api(g, {method: "GET", path: "/api/schedule", token: t});
+  assert.deepEqual(s.venueColors, {"Малая сцена": "#E5484D", "Фойе": "#3B5BDB", "Двор": "#F2961E"});
+  assert.equal(s.palette.length, 10);
+  // смена цвета из приложения попадает в таблицу
+  assert.equal(api(g, {method: "PUT", path: "/api/venues", token: t, body: {name: "Двор", color: "Зелёный"}})._status, 200);
+  assert.equal(api(g, {method: "PUT", path: "/api/venues", token: t, body: {name: "Двор", color: "Нет такого"}})._status, 400);
+  const rows = venues.getDataRange().getDisplayValues();
+  assert.equal(rows.find((r) => r[0] === "Двор")[2], "Зелёный");
+  // цвет выбрали руками в таблице
+  const at = rows.findIndex((r) => r[0] === "Фойе") + 1;
+  venues.put(at, 3, "Розовый"); g.run("dropAllCaches_()");
+  s = api(g, {method: "GET", path: "/api/schedule", token: t});
+  assert.equal(s.venueColors["Фойе"], "#E0509A");
+  // в занятости цвет площадки виден и в таблице
+  assert.ok(venues.styleLog.some((l) => l[0] === "setBackground" && l[2] === "#E5484D"));
 });

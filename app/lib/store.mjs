@@ -4,7 +4,20 @@ import {platform} from "./platform.mjs";
 
 export const TABS = {schedule: "Расписание", staff: "Сотрудники", venues: "Площадки", chats: "Подписчики", requests: "_заявки", people: "_люди", state: "_служебное", lock: "_замок"};
 export const REQUESTS_HEADER = ["Канал", "ID чата", "Телефон"];
-export const VENUES_HEADER = ["Площадка", "Заметка"];
+export const VENUES_HEADER = ["Площадка", "Заметка", "Цвет"];
+/** Цвета площадок: название (оно выбирается в таблице из списка) и цвет в приложении. */
+export const VENUE_COLORS = [
+  {name: "Красный", hex: "#E5484D"}, {name: "Оранжевый", hex: "#F2961E"}, {name: "Жёлтый", hex: "#E8C21A"}, {name: "Зелёный", hex: "#3DB16B"},
+  {name: "Бирюзовый", hex: "#1BA8A0"}, {name: "Голубой", hex: "#0A96DC"}, {name: "Синий", hex: "#3B5BDB"}, {name: "Фиолетовый", hex: "#8E5BD0"},
+  {name: "Розовый", hex: "#E0509A"}, {name: "Серый", hex: "#7A8699"},
+];
+/** Название цвета из таблицы (или #RRGGBB) -> название из палитры или "". */
+export function colorName(value) {
+  const t = String(value || "").trim().toLowerCase().replace(/ё/g, "е");
+  const hit = VENUE_COLORS.find((c) => c.name.toLowerCase().replace(/ё/g, "е") === t || c.hex.toLowerCase() === t);
+  return hit ? hit.name : "";
+}
+export const colorHex = (name) => (VENUE_COLORS.find((c) => c.name === name) || {}).hex || "";
 const CHECKED_RE = /^(true|да|yes|1|✓|✔|x|х)$/i; // галочка в таблице: TRUE / ✓ / «да»
 export const SUBS_HEADER = ["Канал", "ID чата", "Телефон", "ФИО"];
 export const ROLE_LABELS = {admin: "Админ", editor: "Редактор", reader: "Читатель", blocked: "Заблокирован"};
@@ -160,12 +173,53 @@ export class Store {
     return out;
   }
 
-  addVenue(name) {
+  /** Площадки с цветами: [{name, color, hex, row}]. Если цвет в таблице не выбран — даём свободный из палитры по порядку (в таблицу его вписывает таймер). */
+  venueList() {
+    if (!this.book.has(TABS.venues)) return [];
+    const seen = new Set();
+    const out = [];
+    this.book.get(TABS.venues).forEach((r, i) => {
+      if (i === 0) return;
+      const n = String(r[0] || "").split(/\s+/).filter(Boolean).join(" ");
+      if (!n || seen.has(n.toLowerCase())) return;
+      seen.add(n.toLowerCase());
+      out.push({name: n, color: colorName(r[2]), row: i + 1});
+    });
+    const used = new Set(out.map((v) => v.color).filter(Boolean));
+    let k = 0;
+    for (const v of out) {
+      if (v.color) continue;
+      while (k < VENUE_COLORS.length && used.has(VENUE_COLORS[k].name)) k++;
+      v.color = VENUE_COLORS[k % VENUE_COLORS.length].name;
+      v.auto = true;
+      used.add(v.color);
+    }
+    for (const v of out) v.hex = colorHex(v.color);
+    return out;
+  }
+
+  addVenue(name, color) {
     const n = String(name || "").split(/\s+/).filter(Boolean).join(" ");
     if (!n) return false;
     this.book.ensure(TABS.venues, VENUES_HEADER);
     if (this.venues().some((v) => v.toLowerCase() === n.toLowerCase())) return false;
-    this.book.append(TABS.venues, [n, ""]);
+    const list = this.venueList();
+    let chosen = colorName(color);
+    if (!chosen) chosen = (VENUE_COLORS.find((c) => !list.some((v) => v.color === c.name)) || VENUE_COLORS[list.length % VENUE_COLORS.length]).name;
+    this.book.append(TABS.venues, [n, "", chosen]);
+    return true;
+  }
+
+  /** Меняет цвет площадки; вписывает и «автоматические» цвета остальных, чтобы они больше не менялись при добавлении площадок. */
+  setVenueColor(name, color) {
+    const c = colorName(color);
+    if (!c) return false;
+    const want = String(name || "").trim().toLowerCase();
+    const list = this.venueList();
+    const v = list.find((x) => x.name.toLowerCase() === want);
+    if (!v) return false;
+    for (const o of list) if (o.auto && o !== v) this.book.setCell(TABS.venues, o.row, 3, o.color);
+    this.book.setCell(TABS.venues, v.row, 3, c);
     return true;
   }
 
