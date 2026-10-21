@@ -8,7 +8,7 @@ const SCHEDULE = [HEAD,
   ["04.10\n11.00 и 13.00", "Спектакль «Бука»\n(малая сцена)", "Иванова М.В.", "Морозова Н.М.", "", "", ""],
   ["10.10", "Сказки из старого чемодана", "Петрова Л.Н.", "", "", "", ""]];
 const G = () => loadGas({now: NOW, tabs: {"Расписание": SCHEDULE, "Сотрудники": STAFF},
-  props: {SHEET_ID: "x", STYLE_VER: "12", TELEGRAM_BOT_TOKEN: "TOKEN", WEBHOOK_SECRET: "hook", APP_URL: "https://app.test"}});
+  props: {SHEET_ID: "x", STYLE_VER: "13", TELEGRAM_BOT_TOKEN: "TOKEN", WEBHOOK_SECRET: "hook", APP_URL: "https://app.test"}});
 
 const tg = (g, update) => g.run(`doPost(${JSON.stringify({parameter: {secret: "hook"}, postData: {contents: JSON.stringify(update)}})}).getContent()`);
 const msg = (id, text, contact) => ({update_id: Math.floor(Math.random() * 1e9), message: {chat: {id, type: "private"}, from: {id}, text, contact}});
@@ -164,7 +164,7 @@ test("группы: галочки в таблице -> состав групп;
 // ---------- ВКонтакте ----------
 const VKPROPS = {VK_TOKEN: "VKTOKEN", VK_GROUP_ID: "club123", VK_SECRET: "vksecret", VK_CONFIRM: "abc123", TG_CHANNEL: "@teatr"};
 const GV = (extra = {}) => loadGas({now: NOW, tabs: {"Расписание": SCHEDULE, "Сотрудники": STAFF},
-  props: {SHEET_ID: "x", STYLE_VER: "12", TELEGRAM_BOT_TOKEN: "TOKEN", WEBHOOK_SECRET: "hook", APP_URL: "https://app.test", ...VKPROPS, ...extra}});
+  props: {SHEET_ID: "x", STYLE_VER: "13", TELEGRAM_BOT_TOKEN: "TOKEN", WEBHOOK_SECRET: "hook", APP_URL: "https://app.test", ...VKPROPS, ...extra}});
 const vk = (g, update, secret = "hook") => g.run(`doPost(${JSON.stringify({parameter: {secret, vk: "1"}, postData: {contents: JSON.stringify(update)}})}).getContent()`);
 const vkMsg = (id, text, extra = {}) => ({type: "message_new", event_id: "e" + Math.random(), secret: "vksecret", object: {message: {peer_id: id, from_id: id, text, ...extra}}});
 const vkSent = (g, id) => g.fetches.filter((f) => f.url.endsWith("/messages.send") && String(f.body.user_id) === String(id));
@@ -364,7 +364,7 @@ test("после обновления таблица оформляется са
   const g = G();
   delete g.properties.STYLE_VER;
   g.run("everyMinute()"); // как после выкладки новой версии
-  assert.equal(g.properties.STYLE_VER, "12");
+  assert.equal(g.properties.STYLE_VER, "13");
   const staff = g.ss.getSheetByName("Сотрудники");
   assert.deepEqual(staff.getDataRange().getDisplayValues()[0].slice(4, 6), ["Доступ", "Комментарий"]);
   assert.deepEqual(g.ss.sheets.filter((x) => !x.hidden).map((x) => x.name).sort(), ["Площадки", "Расписание", "Сотрудники"]);
@@ -494,7 +494,7 @@ test("«Сотрудники» как в жизни: тысяча строк-з�
 });
 
 test("заявка из ВК: в «ФИО» имя из профиля, роль «Заявка»; поставили «Доступ» — это уже обычный сотрудник", () => {
-  const g = GV({STYLE_VER: "12"});
+  const g = GV({STYLE_VER: "13"});
   g.run("styleSheets()");
   g.setFetchReply((url) => (/users\.get/.test(url) ? JSON.stringify({response: [{first_name: "Анна", last_name: "Смирнова"}]}) : ""));
   vk(g, vkMsg(77, "89112223344"));
@@ -626,23 +626,33 @@ test("«Не могу работать»: отмеченные даты хран
   assert.deepEqual(r.off, ["2026-10-13", "2026-10-14"]);
 });
 
-test("новая должность в «Расписании»: приложение сразу предлагает выбрать людей на неё и сохраняет в эту колонку", () => {
+test("должности в приложении — группы из «Сотрудников»; новая группа даёт новую колонку в «Расписании» и выбор людей на неё; старые записи не теряются", () => {
   const g = G();
   g.run("styleSheets()");
-  const sch = g.ss.getSheetByName("Расписание");
-  const head = sch.getDataRange().getDisplayValues()[0];
-  sch.put(1, head.length + 1, "Светооператор");
-  g.run(`onSheetChange({range: {getSheet: () => SpreadsheetApp.openById("x").getSheetByName("Расписание"), getRow: () => 1, getValue: () => "Светооператор"}, value: "Светооператор"})`);
   g.run("store_().ensureLogins()");
+  const sch = g.ss.getSheetByName("Расписание");
+  const staff = g.ss.getSheetByName("Сотрудники");
   const t = api(g, {method: "POST", path: "/api/login", body: {login: g.run("store_().users().find((u) => u.phone === '9000000001').login")}}).token;
-  const s = api(g, {method: "GET", path: "/api/schedule", token: t});
-  assert.ok(s.roles.includes("Светооператор"), "новая должность видна приложению");
-  assert.ok(s.staff.includes("Морозова Н.М."), "и есть кого выбрать");
+  let s = api(g, {method: "GET", path: "/api/schedule", token: t});
+  assert.deepEqual(s.roles, ["Актёры", "Техника", "Зал"], "выбор только из должностей-групп");
+  assert.ok(s.allRoles.includes("Касса") && s.allRoles.includes("Актёры"), "старые колонки таблицы остаются");
+  assert.ok(s.staff.includes("Морозова Н.М."), "а человека можно выбрать, на какой бы галочке он ни стоял");
+  // администратор добавил новую группу в «Сотрудниках»
+  const col = staff.getLastColumn() + 1;
+  staff.put(1, col, "Светооператор");
+  g.run(`onSheetChange({range: {getSheet: () => SpreadsheetApp.openById("x").getSheetByName("Сотрудники"), getRow: () => 1, getValue: () => "Светооператор"}, value: "Светооператор"})`);
+  s = api(g, {method: "GET", path: "/api/schedule", token: t});
+  assert.deepEqual(s.roles, ["Актёры", "Техника", "Зал", "Светооператор"]);
+  assert.ok(sch.getDataRange().getDisplayValues()[0].includes("Светооператор"), "в «Расписании» появилась колонка");
+  // событие на новую должность сохраняется в эту колонку
   const ok = api(g, {method: "POST", path: "/api/events", token: t, body: {event: {title: "Свет", date: "2026-10-20", dateEnd: "", time: "", end: "", hall: "", roles: {"Светооператор": ["Морозова Н.М."]}}}});
   assert.equal(ok._status, 200);
   const rows = sch.getDataRange().getDisplayValues();
-  const col = rows[0].indexOf("Светооператор");
-  assert.equal(rows.find((r) => r[3] === "Свет")[col], "Морозова Н.М.");
-  // выпадающий список людей достался и новой колонке
-  assert.ok(sch.styleLog.some((l) => l[0] === "validation" && l[1].calls.some((c) => c[0] === "requireValueInRange")));
+  assert.equal(rows.find((r) => r[3] === "Свет")[rows[0].indexOf("Светооператор")], "Морозова Н.М.");
+  // правка события со старой должностью (колонка не из групп) ничего не стирает
+  const ev = s.events.find((e) => e.title.startsWith("Спектакль «Бука»"));
+  const upd = api(g, {method: "PUT", path: "/api/events/" + ev.row, token: t, body: {rev: ev.rev, event: {title: ev.title + "!", date: ev.date, dateEnd: ev.dateEnd || "", time: ev.time, end: ev.end || "", hall: ev.hall, roles: ev.roles}}});
+  assert.equal(upd._status, 200);
+  const after = sch.getDataRange().getDisplayValues();
+  assert.ok(after.some((r) => r[3].startsWith("Спектакль «Бука»!") && r.includes("Иванова М.В.")), "люди в старых колонках на месте");
 });

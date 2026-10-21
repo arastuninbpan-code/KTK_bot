@@ -5,7 +5,7 @@ const WD = ["Вс", "Пн", "Вт", "Ср", "Чт", "Пт", "Сб"];
 // цвета меток разделов (Администратор, Гардероб, Касса…): по порядку колонок таблицы, из палитры
 const TAG_COLORS = [["#0A96DC", "#fff"], ["#F2961E", "#fff"], ["#F04E4A", "#fff"], ["#F4C79A", "#1B3560"], ["#1B3560", "#fff"], ["#D4F1FC", "#1B3560"]];
 
-const state = {token: localStorage.getItem("ktk_token") || "", me: null, events: [], roles: [], staff: [], venues: [], venueColors: {}, palette: [], groups: [], layout: 2, rev: "", today: "", day: "", calMonth: "", tab: "all", ready: false, offline: false, savedAt: 0, unavailable: {}};
+const state = {token: localStorage.getItem("ktk_token") || "", me: null, events: [], roles: [], allRoles: [], staff: [], venues: [], venueColors: {}, palette: [], groups: [], layout: 2, rev: "", today: "", day: "", calMonth: "", tab: "all", ready: false, offline: false, savedAt: 0, unavailable: {}};
 const root = document.getElementById("root");
 
 // ---------- разметка без innerHTML ----------
@@ -66,7 +66,7 @@ const slotsMeet = (a, b) => slotsOf(a).some(([x, y]) => slotsOf(b).some(([u, v])
 /** События, которые мешают `draft` на той же площадке. */
 const conflictsFor = (draft) => (!draft.hall || !draft.date ? [] : state.events.filter((e) => e.row !== draft.row && hallKey(e.hall) === hallKey(draft.hall) && rangesMeet(e, draft) && slotsMeet(e, draft)));
 const timeLabel = (e) => (e.time ? e.time.split(/,\s*/).join(" и ") + (e.end ? "–" + e.end : "") : e.dateEnd ? "несколько дней" : "весь день");
-const tagStyle = (role) => { const i = Math.max(0, state.roles.indexOf(role)) % TAG_COLORS.length; return `background:${TAG_COLORS[i][0]};color:${TAG_COLORS[i][1]}`; };
+const tagStyle = (role) => { const all = state.allRoles && state.allRoles.length ? state.allRoles : state.roles; const i = Math.max(0, all.indexOf(role)) % TAG_COLORS.length; return `background:${TAG_COLORS[i][0]};color:${TAG_COLORS[i][1]}`; };
 const tag = (role) => h("span", {class: "tag", style: tagStyle(role)}, roleText(role));
 
 /** Смена начинается в ближайший час (по Москве)? Тогда карточка «срочная». */
@@ -556,7 +556,7 @@ async function load(manual = false) {
   loading = true;
   try {
     const d = await api("GET", "/api/schedule");
-    const next = {me: d.me, events: d.events, roles: d.roles, staff: d.staff || [], venues: d.venues || [], venueColors: d.venueColors || {}, palette: d.palette || [], unavailable: d.unavailable || {}, groups: d.groups || [], layout: d.layout || 2, rev: d.rev || "", today: d.today};
+    const next = {me: d.me, events: d.events, roles: d.roles, allRoles: d.allRoles || d.roles, staff: d.staff || [], venues: d.venues || [], venueColors: d.venueColors || {}, palette: d.palette || [], unavailable: d.unavailable || {}, groups: d.groups || [], layout: d.layout || 2, rev: d.rev || "", today: d.today};
     Object.assign(state, next, {ready: true, offline: false, savedAt: Date.now()});
     try { localStorage.setItem("ktk_cache", JSON.stringify({...next, savedAt: state.savedAt})); } catch (_) {}
     render();
@@ -604,7 +604,9 @@ function editor(e) {
     const dDays = eventDays(draft);
     const badPeople = [...new Set(Object.values(draft.roles).flat())].filter((n) => !origNames.has(n) && blockedDays(n, dDays).length);
     const warnOff = badPeople.length ? h("div", {class: "warn"}, icon("alert"), h("span", {}, `Не могут работать в эти дни: ${badPeople.map((n) => `${n} (${blockedDays(n, dDays).map(shortDate).join(", ")})`).join("; ")}. Уберите их или смените дату.`)) : null;
-    const roleBlocks = state.roles.map((role) => {
+    // должности — группы из «Сотрудников»; плюс те, где на этом событии уже кто-то стоит (чтобы старые записи не потерялись)
+    const editRoles = [...state.roles, ...Object.keys(draft.roles).filter((r) => !state.roles.includes(r))];
+    const roleBlocks = editRoles.map((role) => {
       const names = draft.roles[role] || [];
       return h("div", {class: "roleblock"}, tag(role),
         h("div", {class: "chips"},

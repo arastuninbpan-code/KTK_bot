@@ -1115,6 +1115,15 @@ const unavailableMap = (store, today) => {
 
 /** {название площадки: #цвет} — по ним приложение красит плашки событий. */
 const venueColorMap = (store) => Object.fromEntries(store.venueList().map((v) => [v.name, v.hex]));
+/**
+ * Должности для выбора людей на событие: колонки-группы из листа «Сотрудники» (их добавляет администратор), в том виде, как они названы в «Расписании».
+ * Если групп нет или в «Расписании» нет таких колонок — все колонки с людьми.
+ */
+function editableRoles(store, table) {
+  const all = headerRoles(table);
+  const picked = store.groups().map((g) => all.find((r) => norm(r) === norm(g.name))).filter(Boolean);
+  return picked.length ? picked : all;
+}
 const ISO_RE = /^\d{4}-\d{2}-\d{2}$/;
 const publicUser = (u) => ({name: u.name, role: u.role, roleLabel: ROLE_LABELS[u.role], canEdit: canEdit(u.role)});
 /** Для кнопок «Подключить Telegram / ВК»: к каким каналам уже привязан человек и какой у него логин (он идёт в ссылку-подключение). */
@@ -1154,7 +1163,7 @@ function handleApi(req, deps) {
       const venues = [...store.venues()];
       for (const e of events) if (e.hall && !venues.some((v) => norm(v) === norm(e.hall))) venues.push(e.hall);
       const editor = canEdit(me.role);
-      return {status: 200, body: {today, me: {...publicUser(me), ...connections(store, me), off: store.offDates(me.phone).filter((d) => d >= today)}, roles: headerRoles(table), layout: layoutOf(table).v, rev: getRev(), events, venues, venueColors: venueColorMap(store), palette: VENUE_COLORS,
+      return {status: 200, body: {today, me: {...publicUser(me), ...connections(store, me), off: store.offDates(me.phone).filter((d) => d >= today)}, roles: editableRoles(store, table), allRoles: headerRoles(table), layout: layoutOf(table).v, rev: getRev(), events, venues, venueColors: venueColorMap(store), palette: VENUE_COLORS,
         staff: editor ? store.staffNames() : undefined, groups: editor ? store.groups() : undefined,
         unavailable: editor ? unavailableMap(store, today) : undefined}};
     }
@@ -1713,7 +1722,7 @@ function everyMinute() {
   autoStyle_(p);
   const todayStr = todayIso(Date.now());
   if (p.getProperty("months_day") !== todayStr) { p.setProperty("months_day", todayStr); p.setProperty("regroup", "1"); } // новый день: месяц мог стать прошедшим, перекладываем вниз
-  if (p.getProperty("regroup")) { p.deleteProperty("regroup"); try { tidyStaff_(); renderPeopleList_(); tidySchedule_(); syncRestoreButtons_(); fillVenueColors_(); renderOccupancy_(); } catch (err) { diag_("Таблица: ОШИБКА — " + String(err && err.message ? err.message : err)); } }
+  if (p.getProperty("regroup")) { p.deleteProperty("regroup"); try { tidyStaff_(); renderPeopleList_(); syncRoleColumns_(); tidySchedule_(); syncRestoreButtons_(); fillVenueColors_(); renderOccupancy_(); } catch (err) { diag_("Таблица: ОШИБКА — " + String(err && err.message ? err.message : err)); } }
   if (!dueDirty && now - last < 4 * 60e3 + 30e3) return;
   withLock_(() => {
     if (dueDirty) p.deleteProperty("dirty");
@@ -1740,7 +1749,7 @@ function onSheetChange(e) {
     p.deleteProperty("dirty");
     p.setProperty("last_cycle", String(Date.now()));
     try { // правка в «Сотрудниках» (новая колонка-группа, новый человек): оформляем сразу, не дожидаясь таймера
-      if (e && e.range && e.range.getSheet().getName() === TABS.staff) { tidyStaff_(); renderPeopleList_(); p.deleteProperty("regroup"); }
+      if (e && e.range && e.range.getSheet().getName() === TABS.staff) { tidyStaff_(); renderPeopleList_(); syncRoleColumns_(); p.deleteProperty("regroup"); }
       if (e && e.range && e.range.getSheet().getName() === TABS.schedule && e.range.getRow() === 1) applyPeopleValidation_(e.range.getSheet()); // добавили новую роль-колонку: сразу список
       syncRestoreButtons_();
       if (e && e.range) { const nm = e.range.getSheet().getName(); if (nm === TABS.venues) fillVenueColors_(); if (nm === TABS.schedule || nm === TABS.venues) renderOccupancy_(); } // занятость площадок обновляем сразу
@@ -1911,7 +1920,9 @@ function styleSheets() {
   seedVenues_(book);
   fillVenueColors_();
   styleStaff_(ss.getSheetByName(TABS.staff));
+  dropAllCaches_(); // «Сотрудники» только что поменялись: дальше читаем их заново
   renderPeopleList_();
+  syncRoleColumns_();
   styleSchedule_(ss.getSheetByName(TABS.schedule));
   styleVenues_(ss.getSheetByName(TABS.venues));
   const chats = ss.getSheetByName(TABS.chats);
@@ -2174,7 +2185,7 @@ function groupMonths_(sheet, fresh) {
   });
 }
 
-const STYLE_VERSION_ = "12"; // поднимайте, когда меняется оформление: таблица перестроится сама при ближайшем срабатывании таймера
+const STYLE_VERSION_ = "13"; // поднимайте, когда меняется оформление: таблица перестроится сама при ближайшем срабатывании таймера
 
 /** После обновления кода один раз оформляет таблицу сама (то же, что ручной запуск styleSheets). */
 function autoStyle_(p) {
@@ -2449,6 +2460,29 @@ function fillVenueColors_() {
     p.setProperty("VENUE_SIG", sig);
   }
   return todo.length > 0;
+}
+
+/**
+ * Должности = колонки-группы в «Сотрудниках». Если администратор добавил новую группу, в «Расписании» появляется колонка с таким названием
+ * (справа от последней), и в приложении на неё можно выбирать людей. Уже существующие колонки и данные в них не трогаем.
+ */
+function syncRoleColumns_() {
+  const sheet = SpreadsheetApp.openById(prop_("SHEET_ID")).getSheetByName(TABS.schedule);
+  if (!sheet || sheet.getLastColumn() < 1) return false;
+  const head = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getDisplayValues()[0].map((x) => String(x).trim());
+  if (layoutOf([head]).v !== 2) return false;
+  const have = new Set(head.filter((x) => x && !x.startsWith(RESTORE_MARK)).map((x) => norm(x)));
+  const missing = store_().groups().map((g) => g.name).filter((n) => !have.has(norm(n)));
+  if (!missing.length) return false;
+  let at = 0;
+  head.forEach((x, i) => { if (x && !x.startsWith(RESTORE_MARK)) at = i + 1; });
+  const btn = head.findIndex((x) => x.startsWith(RESTORE_MARK));
+  if (btn >= 0 && btn === at) sheet.getRange(1, btn + 1).clear(); // красная кнопка стояла на этом месте: ближайшая проверка поставит её правее
+  sheet.getRange(1, at + 1, 1, missing.length).setNumberFormat("@").setValues([missing]);
+  styleSchedule_(sheet);
+  dropAllCaches_();
+  bumpRev_();
+  return true;
 }
 
 /** Колонки с людьми в «Расписании» (всё правее «Площадки») — выпадающие списки сотрудников. Вписать другое можно, но клетка получит отметку. */
