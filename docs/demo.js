@@ -32,7 +32,7 @@
   const view = (u) => events.slice().sort((a, b) => (a.date + a.time).localeCompare(b.date + b.time)).map((e) => ({...e, id: "d" + e.row, meta: metas["d" + e.row] || {kind: "event", note: ""}, comments: (chat["d" + e.row] || []).length, mine: Object.entries(e.roles).filter(([, n]) => n.includes(u.name)).map(([r]) => r)}));
   window.KTK_DEMO = {
     call(method, path, body, token) {
-      if (method === "POST" && path === "/api/login") { const k = String(body.login).toUpperCase(); return users[k] ? {status: 200, data: {token: "demo:" + k, user: users[k]}} : {status: 401, data: {error: "В демо-режиме логины: ADMIN (админ) и READER (читатель)"}}; }
+      if (method === "POST" && path === "/api/login") { const k = String(body.login).toUpperCase(); if (k === "NOACCESS") return {status: 403, data: {error: "Доступ закрыт. Обратитесь к администратору."}}; return users[k] ? {status: 200, data: {token: "demo:" + k, user: users[k]}} : {status: 401, data: {error: "В демо-режиме логины: ADMIN (админ), READER (читатель) и NOACCESS (без доступа)"}}; }
       const u = users[String(token).replace("demo:", "")];
       if (!u) return {status: 401, data: {error: "Нужно войти"}};
       if (path === "/api/ping") return {status: 200, data: {rev: String(rev), changed: (body || {}).rev !== String(rev)}};

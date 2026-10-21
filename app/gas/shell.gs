@@ -352,6 +352,7 @@ function everyMinute() {
   const last = Number(p.getProperty("last_cycle") || 0);
   const dueDirty = dirty && now - dirty >= 15000;
   autoStyle_(p);
+  seedTestUsers_(p);
   const todayStr = todayIso(Date.now());
   if (p.getProperty("months_day") !== todayStr) { p.setProperty("months_day", todayStr); p.setProperty("regroup", "1"); } // новый день: месяц мог стать прошедшим, перекладываем вниз
   if (p.getProperty("regroup")) { p.deleteProperty("regroup"); try { tidyStaff_(); renderPeopleList_(); syncRoleColumns_(); ensureEventIds_(); tidySchedule_(); syncRestoreButtons_(); fillVenueColors_(); renderOccupancy_(); } catch (err) { diag_("Таблица: ОШИБКА — " + String(err && err.message ? err.message : err)); } }
@@ -841,6 +842,42 @@ function groupMonths_(sheet, fresh) {
     const g = sheet.getRowGroup(m.head + 1, 1);
     if (g) { if (collapsed) g.collapse(); else g.expand(); }
   });
+}
+
+/**
+ * Два тестовых сотрудника для проверки приложения «чужими глазами» (один раз, без повторов, если их удалят):
+ *  • «Читатель Тестовый» — роль «Читатель», доступ есть: заходит в приложение и бот, но ничего не правит;
+ *  • «Заблокированный Тестовый» — доступа нет (галочка «Доступ» снята): при входе увидит «Доступ закрыт».
+ * Логины выдаются автоматически (колонка «Логин»). Номера выдуманные; удалить строки можно в любой момент.
+ */
+function seedTestUsers_(p) {
+  if (p.getProperty("TEST_USERS")) return;
+  p.setProperty("TEST_USERS", "1");
+  try {
+    const store = store_();
+    const sheet = SpreadsheetApp.openById(prop_("SHEET_ID")).getSheetByName(TABS.staff);
+    const rows = store.book.get(TABS.staff);
+    const cols = store.staffCols_(rows);
+    const plan = columnPlan("staff", sheet.getRange(1, 1, 1, Math.max(sheet.getLastColumn(), 6)).getDisplayValues()[0]);
+    const phys = (virtual) => (plan ? plan.perm[virtual] : virtual);
+    const people = [
+      ["Читатель Тестовый", "9990000001", "Читатель", true, "Тестовый пользователь: проверка приложения от лица читателя. Можно удалить."],
+      ["Заблокированный Тестовый", "9990000002", "Читатель", false, "Тестовый пользователь без доступа: вход должен быть закрыт. Можно удалить."],
+    ];
+    people.forEach(([name, phone, role, access, note]) => {
+      const cur = store.book.get(TABS.staff);
+      if (cur.some((r, i) => i > 0 && String(r[1] || "").replace(/\D/g, "").endsWith(phone))) return;
+      let at = cur.findIndex((r, i) => i > 0 && !String(r[0] || "").trim() && !String(r[1] || "").trim());
+      if (at < 0) at = cur.length;
+      store.book.setCell(TABS.staff, at + 1, 1, name);
+      store.book.setCell(TABS.staff, at + 1, 2, phone);
+      store.book.setCell(TABS.staff, at + 1, 3, role);
+      if (cols.access >= 0 && sheet) sheet.getRange(at + 1, phys(cols.access) + 1).setValue(access); // галочка «Доступ»
+      if (cols.comment >= 0) store.book.setCell(TABS.staff, at + 1, cols.comment + 1, note);
+    });
+    dropAllCaches_();
+    bumpRev_();
+  } catch (err) { diag_("Тестовые пользователи: ОШИБКА — " + String(err && err.message ? err.message : err)); }
 }
 
 const STYLE_VERSION_ = "16"; // поднимайте, когда меняется оформление: таблица перестроится сама при ближайшем срабатывании таймера

@@ -8,7 +8,7 @@ const SCHEDULE = [HEAD,
   ["04.10\n11.00 и 13.00", "Спектакль «Бука»\n(малая сцена)", "Иванова М.В.", "Морозова Н.М.", "", "", ""],
   ["10.10", "Сказки из старого чемодана", "Петрова Л.Н.", "", "", "", ""]];
 const G = () => loadGas({now: NOW, tabs: {"Расписание": SCHEDULE, "Сотрудники": STAFF},
-  props: {SHEET_ID: "x", STYLE_VER: "16", TELEGRAM_BOT_TOKEN: "TOKEN", WEBHOOK_SECRET: "hook", APP_URL: "https://app.test"}});
+  props: {SHEET_ID: "x", STYLE_VER: "16", TEST_USERS: "1", TELEGRAM_BOT_TOKEN: "TOKEN", WEBHOOK_SECRET: "hook", APP_URL: "https://app.test"}});
 
 const tg = (g, update) => g.run(`doPost(${JSON.stringify({parameter: {secret: "hook"}, postData: {contents: JSON.stringify(update)}})}).getContent()`);
 const msg = (id, text, contact) => ({update_id: Math.floor(Math.random() * 1e9), message: {chat: {id, type: "private"}, from: {id}, text, contact}});
@@ -165,7 +165,7 @@ test("группы: галочки в таблице -> состав групп;
 // ---------- ВКонтакте ----------
 const VKPROPS = {VK_TOKEN: "VKTOKEN", VK_GROUP_ID: "club123", VK_SECRET: "vksecret", VK_CONFIRM: "abc123", TG_CHANNEL: "@teatr"};
 const GV = (extra = {}) => loadGas({now: NOW, tabs: {"Расписание": SCHEDULE, "Сотрудники": STAFF},
-  props: {SHEET_ID: "x", STYLE_VER: "16", TELEGRAM_BOT_TOKEN: "TOKEN", WEBHOOK_SECRET: "hook", APP_URL: "https://app.test", ...VKPROPS, ...extra}});
+  props: {SHEET_ID: "x", STYLE_VER: "16", TEST_USERS: "1", TELEGRAM_BOT_TOKEN: "TOKEN", WEBHOOK_SECRET: "hook", APP_URL: "https://app.test", ...VKPROPS, ...extra}});
 const vk = (g, update, secret = "hook") => g.run(`doPost(${JSON.stringify({parameter: {secret, vk: "1"}, postData: {contents: JSON.stringify(update)}})}).getContent()`);
 const vkMsg = (id, text, extra = {}) => ({type: "message_new", event_id: "e" + Math.random(), secret: "vksecret", object: {message: {peer_id: id, from_id: id, text, ...extra}}});
 const vkSent = (g, id) => g.fetches.filter((f) => f.url.endsWith("/messages.send") && String(f.body.user_id) === String(id));
@@ -846,4 +846,32 @@ test("собрание отличается в таблице: строка зо
   assert.ok(occ.some((r) => r[3] === "📋 Собрание труппы"), "в занятости площадок у собрания значок");
   assert.ok(occ.some((r) => r[3] === "Спектакль «Бука»"), "обычные события без значка");
   assert.ok(g.ss.getSheetByName("Площадки").styleLog.some((l) => l[0] === "setBackground" && l[2] === "#FFF1C2"));
+});
+
+test("тестовые пользователи: читатель заходит, но не правит; без доступа — вход закрыт; добавляются один раз", () => {
+  const g = G();
+  g.run("styleSheets()");
+  delete g.properties.TEST_USERS;
+  g.run("everyMinute()");
+  const staff = g.ss.getSheetByName("Сотрудники");
+  const rows = staff.getDataRange().getDisplayValues();
+  const head = rows[0];
+  const reader = rows.find((r) => r[0] === "Читатель Тестовый");
+  const blocked = rows.find((r) => r[0] === "Заблокированный Тестовый");
+  assert.ok(reader && blocked);
+  assert.equal(reader[head.indexOf("Доступ")].toLowerCase(), "true");
+  assert.equal(blocked[head.indexOf("Доступ")].toLowerCase(), "false");
+  g.run("dropAllCaches_()");
+  g.run("store_().ensureLogins()");
+  const loginOf = (name) => g.ss.getSheetByName("Сотрудники").getDataRange().getDisplayValues().find((r) => r[0] === name)[3];
+  const ok = api(g, {method: "POST", path: "/api/login", body: {login: loginOf("Читатель Тестовый")}});
+  assert.equal(ok._status, 200);
+  assert.equal(ok.user.canEdit, false);
+  assert.equal(api(g, {method: "POST", path: "/api/events", token: ok.token, body: {event: {title: "x", date: "2026-10-20"}}})._status, 403);
+  const no = api(g, {method: "POST", path: "/api/login", body: {login: loginOf("Заблокированный Тестовый")}});
+  assert.equal(no._status, 403);
+  assert.match(no.error, /Доступ закрыт/);
+  // повторный запуск ничего не добавляет
+  g.run("everyMinute()"); g.advance(10 * 60e3); g.run("everyMinute()");
+  assert.equal(staff.getDataRange().getDisplayValues().filter((r) => /Тестовый/.test(r[0])).length, 2);
 });
