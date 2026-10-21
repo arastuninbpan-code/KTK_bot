@@ -1,0 +1,8 @@
+// Сайт приложения на Cloudflare (статические файлы из папки docs). Нужен, если сайт подключается через «Workers & Pages → Import a repository».
+{
+  "name": "ktk-app",
+  "compatibility_date": "2026-10-01",
+  "assets": {
+    "directory": "./docs"
+  }
+}
