@@ -161,6 +161,13 @@ async function resolveTarget(orig) {
 const sortEvents = () => state.events.sort((a, b) => (a.date + (a.time || "")).localeCompare(b.date + (b.time || "")));
 const offlineNow = () => state.offline || navigator.onLine === false;
 
+/** Пустое обязательное поле: краснеет, трясётся, получает фокус; под ним — подсказка. */
+function shakeBad(input, err, text) {
+  err.textContent = text;
+  input.classList.remove("bad"); void input.offsetWidth; input.classList.add("bad");
+  try { input.scrollIntoView({block: "center", behavior: "smooth"}); input.focus({preventScroll: true}); } catch (_) {}
+}
+
 function logout() {
   try { localStorage.removeItem("ktk_token"); localStorage.removeItem("ktk_cache"); } catch (_) {}
   Object.assign(state, {token: "", me: null, events: [], ready: false});
@@ -450,7 +457,7 @@ function addVenueSheet(onAdded) {
   const paint = () => pick.replaceChildren(swatches(color, (name) => { color = name; paint(); }));
   const add = h("button", {class: "btn", onclick: async () => {
     const name = input.value.trim().split(/\s+/).join(" ");
-    if (!name) { err.textContent = "Введите название"; return; }
+    if (!name) return shakeBad(input, err, "Введите название площадки");
     if (offlineNow()) { err.textContent = "Нет интернета: добавить можно, когда появится сеть."; return; }
     close();
     if (!state.venues.some((v) => hallKey(v) === hallKey(name))) state.venues.push(name);
@@ -660,7 +667,7 @@ function editor(e) {
   const paint = () => {
     const venues = [...new Set([...state.venues, draft.hall].filter(Boolean))];
     const err = h("div", {class: "error", role: "alert"});
-    const title = h("input", {class: "input", value: draft.title, placeholder: "Например, Спектакль «Бука»", oninput: (ev) => (draft.title = ev.target.value)});
+    const title = h("input", {class: "input", value: draft.title, placeholder: "Например, Спектакль «Бука»", oninput: (ev) => { draft.title = ev.target.value; ev.target.classList.remove("bad"); err.textContent = ""; }});
     const date = h("input", {class: "input", type: "date", value: draft.date, onchange: (ev) => { draft.date = ev.target.value; paint(); }});
     const dateEnd = h("input", {class: "input", type: "date", value: draft.dateEnd, min: draft.date, onchange: (ev) => { draft.dateEnd = ev.target.value; paint(); }});
     const start = h("input", {class: "input", type: "time", value: draft.time, "aria-label": "Начало", onchange: (ev) => { draft.time = ev.target.value; if (!draft.time) draft.end = ""; paint(); }});
@@ -687,8 +694,8 @@ function editor(e) {
     const doSave = (force) => {
       err.textContent = "";
       const event = {title: draft.title.trim(), date: draft.date, dateEnd: draft.dateEnd || "", time: [draft.time, ...draft.extra].filter(Boolean).join(", "), end: draft.end, hall: draft.hall, roles: draft.roles};
-      if (!event.title) { err.textContent = "Введите название"; return; }
-      if (!event.date) { err.textContent = "Укажите дату"; return; }
+      if (!event.title) return shakeBad(title, err, "Введите название события");
+      if (!event.date) return shakeBad(date, err, "Укажите дату");
       if (offlineNow()) { err.textContent = "Нет интернета: сохранить можно, когда появится сеть."; return; }
       if (badPeople.length) { err.textContent = "Не могут работать в эти дни: " + badPeople.join(", ") + ". Уберите их или смените дату."; return; }
       if (!force && clash.length) { confirmDialog("Площадка занята", `Площадка занята: ${clash.map((c) => `${c.title} (${timeLabel(c)})`).join("; ")}. Сохранить всё равно?`, "Сохранить", () => doSave(true)); return; }

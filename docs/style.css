@@ -310,3 +310,4 @@ body { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
 .calday .dots em { flex: none; font-size: 10px; line-height: 10px; }
 .calgrid { grid-auto-rows: auto; }
 .calday .dots i { width: 9px; height: 9px; }
+.input.bad { border-color: var(--coral); background: #ffe3dd; color: var(--coral); animation: shake .4s; }
