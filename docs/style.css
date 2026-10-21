@@ -382,3 +382,10 @@ body { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
 .lightbox { position: fixed; inset: 0; background: rgba(10,20,40,.94); display: grid; place-items: center; padding: 16px; }
 .lightbox img { max-width: 100%; max-height: 92dvh; border-radius: 12px; }
 .lbclose { position: fixed; top: calc(14px + env(safe-area-inset-top, 0px)); right: 14px; width: 42px; height: 42px; border-radius: 50%; border: 2.5px solid #fff; background: rgba(255,255,255,.12); color: #fff; font-size: 26px; line-height: 1; padding: 0 0 3px; }
+
+/* собрание: отличается заливкой (штриховка), значком и квадратным маркером; обводка остаётся цветом площадки */
+.ev.meeting { background: repeating-linear-gradient(135deg, #FFF3C4 0 11px, #FFFBEA 11px 22px); }
+.ev.meeting.mine { background: repeating-linear-gradient(135deg, #FFE9A0 0 11px, #FFF6D6 11px 22px); }
+.mtag { display: inline-block; margin: 0 8px 2px 0; padding: 1px 9px; border: 2px solid var(--navy); border-radius: 999px; background: var(--navy); color: #fff; font: 800 11.5px var(--h); letter-spacing: .02em; vertical-align: middle; }
+.plaque.meeting { background-image: repeating-linear-gradient(135deg, rgba(255,255,255,.26) 0 9px, rgba(255,255,255,0) 9px 18px); border-style: double; border-width: 5px; }
+.calday .dots i.sq { border-radius: 3px; }

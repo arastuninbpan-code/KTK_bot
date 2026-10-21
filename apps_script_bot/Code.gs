@@ -729,7 +729,7 @@ const capital = (s) => (s ? s.charAt(0).toUpperCase() + s.slice(1) : s);
  * События с площадкой -> строки для таблицы занятости: шапки месяцев и занятые отрезки времени.
  * [{kind: "month", title, past} | {kind: "slot", date, time, venue, title, clash, past}]
  */
-function occupancyRows(events, today) {
+function occupancyRows(events, today, isMeeting = () => false) {
   const items = [];
   for (const e of events) {
     if (!String(e.hall || "").trim()) continue;
@@ -741,7 +741,7 @@ function occupancyRows(events, today) {
       items.push({
         rank: rankOf(e.date, today), a: wholeDay ? -1 : a, hall: norm(e.hall), date: e.date, i,
         row: {kind: "slot", date: days, time: wholeDay ? "весь день" : hhmm(a) + (e.end && slots.length === 1 ? "–" + hhmm(b) : ""), venue: capital(String(e.hall).trim()),
-          title: e.title, clash: clashes.length ? clashes.map((c) => c.title).join(", ") : "", past: e.date < today},
+          title: e.title, meeting: Boolean(isMeeting(e)), clash: clashes.length ? clashes.map((c) => c.title).join(", ") : "", past: e.date < today},
       });
     });
   }
@@ -2474,6 +2474,15 @@ function scheduleRules_(sheet) {
       .whenFormulaSatisfied('=LOWER(TRIM($' + letter + '2))=LOWER("' + v.name.replace(/"/g, '""') + '")')
       .setBackground(v.hex).setFontColor(inkHex_(v.hex)).setBold(true).setRanges([hall]).build()));
   }
+  // собрание (тип хранится в скрытом листе «_события» по ID события): вся строка в золотистой заливке, название жирным; цвет площадки остаётся
+  const idIdx = head.findIndex((x) => isIdColumn(x));
+  if (plan && idIdx >= 0) {
+    const idL = colLetter_(idIdx + 1);
+    const isMeeting = '=COUNTIFS(INDIRECT("\'' + TABS.meta + '\'!A:A"),$' + idL + '2,INDIRECT("\'' + TABS.meta + '\'!B:B"),"meeting")>0';
+    const titleRange = sheet.getRange(2, plan.perm[3] + 1, rows, 1);
+    out.push(SpreadsheetApp.newConditionalFormatRule().whenFormulaSatisfied(isMeeting).setBackground("#FFE8A3").setBold(true).setRanges([titleRange]).build());
+    out.push(SpreadsheetApp.newConditionalFormatRule().whenFormulaSatisfied(isMeeting).setBackground("#FFF1C2").setRanges([sheet.getRange(2, 1, rows, cols)]).build());
+  }
   return out.concat([banding]);
 }
 
@@ -2530,7 +2539,7 @@ function groupMonths_(sheet, fresh) {
   });
 }
 
-const STYLE_VERSION_ = "15"; // поднимайте, когда меняется оформление: таблица перестроится сама при ближайшем срабатывании таймера
+const STYLE_VERSION_ = "16"; // поднимайте, когда меняется оформление: таблица перестроится сама при ближайшем срабатывании таймера
 
 /** После обновления кода один раз оформляет таблицу сама (то же, что ручной запуск styleSheets). */
 function autoStyle_(p) {
@@ -2940,7 +2949,8 @@ function renderOccupancy_() {
   const today = todayIso(Date.now());
   const book = new GasBook();
   const table = book.get(TABS.schedule);
-  const rows = occupancyRows(parseEvents(table, today), today);
+  const metaMap = store_().metaMap();
+  const rows = occupancyRows(parseEvents(table, today), today, (e) => Boolean(e.id && metaMap[e.id] && metaMap[e.id].kind === "meeting"));
   const hexOf = {};
   store_().venueList().forEach((v) => { hexOf[norm(v.name)] = v.hex; });
   const width = OCC_HEAD_.length;
@@ -2956,7 +2966,7 @@ function renderOccupancy_() {
     sheet.getRange(2, OCC_COL_, 1, width).setNumberFormat("@").setValues([["Событий с площадкой пока нет", "", "", "", ""]]);
     return;
   }
-  const values = rows.map((r) => (r.kind === "month" ? [r.title, "", "", "", ""] : [r.date, r.time, r.venue, r.title, r.clash ? "⚠ " + r.clash : ""]));
+  const values = rows.map((r) => (r.kind === "month" ? [r.title, "", "", "", ""] : [r.date, r.time, r.venue, (r.meeting ? "📋 " : "") + r.title, r.clash ? "⚠ " + r.clash : ""]));
   sheet.getRange(2, OCC_COL_, values.length, width).setNumberFormat("@").setValues(values).setWrap(true).setVerticalAlignment("middle").setFontColor(C.navy);
   rows.forEach((r, i) => {
     const line = sheet.getRange(2 + i, OCC_COL_, 1, width);
@@ -2965,6 +2975,7 @@ function renderOccupancy_() {
       sheet.setRowHeight(2 + i, 30);
     } else {
       if (r.clash) line.setBackground("#FBE0DF");
+      else if (r.meeting) line.setBackground("#FFF1C2"); // собрание выделено золотистым
       else if (r.past) line.setFontColor("#8A8A8A");
       const hex = hexOf[norm(r.venue)];
       if (hex) sheet.getRange(2 + i, OCC_COL_ + 2).setBackground(hex).setFontColor(C.white).setFontWeight("bold"); // цвет площадки

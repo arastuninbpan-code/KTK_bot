@@ -308,9 +308,10 @@ function eventCard(e) {
   const urgent = isSoon(e);
   const hex = e.hall ? hexOfHall(e.hall) : "";
   const outline = hex && !urgent ? `border-color:${hex};box-shadow:3px 3px 0 ${hex}` : ""; // обводка цвета площадки
-  return h("button", {class: "ev" + (e.mine.length ? " mine" : "") + (urgent ? " urgent" : ""), style: outline, onclick: () => (e.pending ? toast("Ещё сохраняется…") : eventDetails(e)), "aria-label": `Открыть: ${e.title}`},
+  const meeting = Boolean(e.meta && e.meta.kind === "meeting");
+  return h("button", {class: "ev" + (e.mine.length ? " mine" : "") + (urgent ? " urgent" : "") + (meeting ? " meeting" : ""), style: outline, onclick: () => (e.pending ? toast("Ещё сохраняется…") : eventDetails(e)), "aria-label": `Открыть: ${e.title}`},
     time,
-    h("div", {}, h("h3", {}, e.meta && e.meta.kind === "meeting" ? h("span", {class: "mt"}, "📋 ") : null, e.title), range, hall, roles.length ? list : null, e.comments ? h("span", {class: "ccount"}, "💬 " + e.comments) : null),
+    h("div", {}, h("h3", {}, meeting ? h("span", {class: "mtag"}, "📋 Собрание") : null, e.title), range, hall, roles.length ? list : null, e.comments ? h("span", {class: "ccount"}, "💬 " + e.comments) : null),
     canEdit ? h("span", {class: "edit-hint"}, icon("pencil")) : (e.mine.length ? h("span", {class: "pill mine-tag"}, "вы") : null),
     urgent ? splash() : null);
 }
@@ -678,9 +679,10 @@ function eventDetails(e) {
 
 function plaque(e) {
   const hex = e.hall ? hexOfHall(e.hall) : FALLBACK_HEX;
-  return h("button", {class: "plaque", style: `background:${hex};color:${inkOn(hex)}`, "aria-label": `${e.title}, ${timeLabel(e)}${e.hall ? ", " + cap(e.hall) : ""}`, onclick: () => eventDetails(e)},
+  const meeting = Boolean(e.meta && e.meta.kind === "meeting");
+  return h("button", {class: "plaque" + (meeting ? " meeting" : ""), style: `background-color:${hex};color:${inkOn(hex)}`, "aria-label": `${meeting ? "Собрание: " : ""}${e.title}, ${timeLabel(e)}${e.hall ? ", " + cap(e.hall) : ""}`, onclick: () => eventDetails(e)},
     h("span", {class: "pt"}, timeLabel(e)),
-    h("span", {class: "pm"}, h("b", {}, e.title), e.hall ? h("small", {}, cap(e.hall)) : h("small", {}, "без площадки")));
+    h("span", {class: "pm"}, h("b", {}, meeting ? "📋 " + e.title : e.title), e.hall ? h("small", {}, cap(e.hall)) : h("small", {}, "без площадки")));
 }
 
 function venuesBody(canEdit) {
@@ -705,13 +707,15 @@ function venuesBody(canEdit) {
   const cells = [];
   for (let d = start; d <= end; d = addDays(d, 1)) {
     const list = byDay.get(d) || [];
-    const colors = [...new Set(list.map((e) => (e.hall ? hexOfHall(e.hall) : FALLBACK_HEX)))];
+    // кружок — обычное событие, квадратик — собрание (у каждой площадки свой цвет)
+    const marks = [...new Map(list.map((e) => { const m = Boolean(e.meta && e.meta.kind === "meeting"); const c = e.hall ? hexOfHall(e.hall) : FALLBACK_HEX; return [c + (m ? "|m" : ""), {c, m}]; })).values()];
+    const colors = marks;
     const out = d.slice(0, 7) !== ym;
     cells.push(h("button", {class: "calday" + (out ? " out" : "") + (d === state.today ? " today" : "") + (d === day ? " sel" : "") + (d < state.today ? " past" : ""), "aria-pressed": String(d === day),
       "aria-label": `${dayTitle(d)}${list.length ? ", событий: " + list.length : ""}`,
       onclick: () => { state.day = d; if (out) state.calMonth = d.slice(0, 7); render(); }},
       h("b", {}, String(dateParts(d).d)),
-      h("span", {class: "dots"}, (colors.length > 3 ? colors.slice(0, 2) : colors).map((c) => h("i", {style: `background:${c}`})), colors.length > 3 ? h("em", {}, "+") : null))); // всегда одна строка (максимум три значка), чтобы ячейки не росли
+      h("span", {class: "dots"}, (colors.length > 3 ? colors.slice(0, 2) : colors).map((x) => h("i", {class: x.m ? "sq" : "", style: `background:${x.c}`})), colors.length > 3 ? h("em", {}, "+") : null))); // всегда одна строка (максимум три значка), чтобы ячейки не росли
   }
   const grid = h("div", {class: "calgrid"}, ...cells);
 

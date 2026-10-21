@@ -23,7 +23,7 @@ const capital = (s) => (s ? s.charAt(0).toUpperCase() + s.slice(1) : s);
  * События с площадкой -> строки для таблицы занятости: шапки месяцев и занятые отрезки времени.
  * [{kind: "month", title, past} | {kind: "slot", date, time, venue, title, clash, past}]
  */
-export function occupancyRows(events, today) {
+export function occupancyRows(events, today, isMeeting = () => false) {
   const items = [];
   for (const e of events) {
     if (!String(e.hall || "").trim()) continue;
@@ -35,7 +35,7 @@ export function occupancyRows(events, today) {
       items.push({
         rank: rankOf(e.date, today), a: wholeDay ? -1 : a, hall: norm(e.hall), date: e.date, i,
         row: {kind: "slot", date: days, time: wholeDay ? "весь день" : hhmm(a) + (e.end && slots.length === 1 ? "–" + hhmm(b) : ""), venue: capital(String(e.hall).trim()),
-          title: e.title, clash: clashes.length ? clashes.map((c) => c.title).join(", ") : "", past: e.date < today},
+          title: e.title, meeting: Boolean(isMeeting(e)), clash: clashes.length ? clashes.map((c) => c.title).join(", ") : "", past: e.date < today},
       });
     });
   }
