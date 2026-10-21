@@ -62,6 +62,9 @@ class Sheet {
   hideSheet() { this.hidden = true; return this; }
   showSheet() { this.hidden = false; return this; }
   isSheetHidden() { return this.hidden; }
+  insertRowsBefore(r, n) { for (let i = 0; i < n; i++) this.cells.splice(r - 1, 0, []); this.styleLog.push(["insertRowsBefore", r, n]); }
+  setHiddenGridlines(v) { this.styleLog.push(["gridlines", v]); }
+  getSheetId() { return 12345; }
   insertRowBefore(r) { this.cells.splice(r - 1, 0, []); }
   insertRowsAfter(r, n) { for (let i = 0; i < n; i++) this.cells.splice(r, 0, []); }
   deleteRow(r) { this.cells.splice(r - 1, 1); }

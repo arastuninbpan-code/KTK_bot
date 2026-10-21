@@ -85,7 +85,7 @@ class GasBook {
   ensure(tab, header) {
     if (this.has(tab)) return;
     const s = this.ss.insertSheet(tab);
-    if ([TABS.staff, TABS.schedule, TABS.venues].indexOf(tab) < 0) { try { s.hideSheet(); } catch (e) { /* служебный лист просто останется видимым */ } }
+    if ([TABS.staff, TABS.schedule, TABS.venues, TABS.reports].indexOf(tab) < 0) { try { s.hideSheet(); } catch (e) { /* служебный лист просто останется видимым */ } }
     if (header) s.getRange(1, 1, 1, header.length).setNumberFormat("@").setValues([header.map(String)]);
     this.touch(tab);
   }
@@ -417,6 +417,7 @@ function apiCall_(req) {
     store: store_(),
     secret: secret_(),
     announce: announce_,
+    saveReport: saveReport_,
     getRev: getRev_,
     bumpRev: bumpRev_,
     // после правки сразу рассылаем уведомления (не ждём таймера); ошибки рассылки не ломают сохранение
@@ -1322,6 +1323,52 @@ function renderOccupancy_() {
       if (hex) sheet.getRange(2 + i, OCC_COL_ + 2).setBackground(hex).setFontColor(C.white).setFontWeight("bold"); // цвет площадки
     }
   });
+}
+
+/**
+ * Лист «Отчёты»: каждый отчёт — отдельный блок одного размера (REPORT_HEIGHT строк, 7 колонок). Новый встаёт на самый верх,
+ * на нём красная метка «ПОСЛЕДНИЙ»; прежние сдвигаются вниз. Хранится последние REPORT_KEEP_ отчётов.
+ */
+const REPORT_KEEP_ = 15;
+const REPORT_WIDTHS_ = [130, 110, 160, 250, 130, 90, 330];
+function saveReport_(report, by) {
+  const ss = SpreadsheetApp.openById(prop_("SHEET_ID"));
+  let sheet = ss.getSheetByName(TABS.reports);
+  if (!sheet) {
+    sheet = ss.insertSheet(TABS.reports);
+    REPORT_WIDTHS_.forEach((w, i) => sheet.setColumnWidth(i + 1, w));
+    sheet.setHiddenGridlines(true);
+  }
+  const p = PropertiesService.getScriptProperties();
+  const number = Number(p.getProperty("REPORT_NO") || "0") + 1;
+  p.setProperty("REPORT_NO", String(number));
+  const H = REPORT_HEIGHT, W = REPORT_WIDTH;
+  const when = Utilities.formatDate(new Date(), "Europe/Moscow", "dd.MM.yyyy HH:mm");
+  const block = reportBlock(report, number, {when, by: by || ""});
+  sheet.insertRowsBefore(1, H);
+  const area = sheet.getRange(1, 1, H, W);
+  area.breakApart();
+  area.clear();
+  if (sheet.getLastRow() > H) sheet.getRange(H + 1, W).setValue(""); // у прежнего отчёта метка «последний» снимается
+  area.setNumberFormat("@").setValues(block.rows).setFontColor(C.navy).setVerticalAlignment("middle").setFontFamily("Arial");
+  sheet.getRange(1, 1, 1, W - 1).merge().setBackground(C.navy).setFontColor(C.white).setFontWeight("bold").setFontSize(14);
+  sheet.getRange(1, W).setValue("● ПОСЛЕДНИЙ").setBackground(C.coral).setFontColor(C.white).setFontWeight("bold").setHorizontalAlignment("center");
+  sheet.getRange(2, 1, 1, W).merge().setBackground(C.light);
+  sheet.getRange(3, 1, 1, W).merge().setBackground(C.cream).setFontWeight("bold");
+  styleHeaderRange_(sheet.getRange(4, 1, 1, W));
+  const first = REPORT_HEAD + 1, last = REPORT_HEAD + REPORT_CAP;
+  sheet.getRange(first, 1, REPORT_CAP, W).setWrap(true).setBackground(C.white);
+  for (let i = 1; i < REPORT_CAP; i += 2) sheet.getRange(first + i, 1, 1, W).setBackground("#F1F8FC");
+  sheet.getRange(4, 1, REPORT_CAP + 2, W).setBorder(true, true, true, true, true, true, "#B7CDE0", SpreadsheetApp.BorderStyle.SOLID);
+  sheet.getRange(last + 1, 1, 1, W).setBackground(C.light).setFontWeight("bold");
+  sheet.getRange(last + 2, 1, 1, W).merge().setFontColor(C.coral).setFontSize(9).setWrap(true);
+  sheet.setRowHeight(1, 34); sheet.setRowHeight(2, 24); sheet.setRowHeight(3, 28); sheet.setRowHeight(4, 30);
+  for (let r = first; r <= last; r++) sheet.setRowHeight(r, 34);
+  sheet.setRowHeight(last + 1, 28); sheet.setRowHeight(last + 2, 24);
+  for (let r = last + 3; r <= H; r++) sheet.setRowHeight(r, 21);
+  const keep = REPORT_KEEP_ * H;
+  if (sheet.getMaxRows() > keep) sheet.deleteRows(keep + 1, sheet.getMaxRows() - keep);
+  return {number, rows: block.shown, url: "https://docs.google.com/spreadsheets/d/" + prop_("SHEET_ID") + "/edit#gid=" + sheet.getSheetId()};
 }
 
 function styleHeaderRange_(range) {

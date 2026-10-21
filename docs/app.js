@@ -34,6 +34,7 @@ const ICONS = {
   check: '<path d="M5 12.5l4.5 4.5L19 7.5"/>',
   cross: '<path d="M6 6l12 12M18 6L6 18"/>',
   alert: '<path class="fill-r" d="M12 3l10 18H2z"/><path d="M12 10v5M12 18.2v.1"/>',
+  chart: '<path class="fill-l" d="M4 4h16v16H4z"/><path d="M8 16v-4M12 16V8M16 16v-6"/>',
   group: '<circle class="fill-l" cx="9" cy="8" r="3.2"/><circle class="fill-c" cx="17" cy="9" r="2.6"/><path d="M3 20c0-3.5 2.7-6 6-6s6 2.5 6 6M15.5 14.3c3 0 5.5 2 5.5 5"/>',
 };
 const icon = (name, cls = "") => { const s = document.createElementNS("http://www.w3.org/2000/svg", "svg"); s.setAttribute("viewBox", "0 0 24 24"); s.setAttribute("class", "ico " + cls); s.setAttribute("aria-hidden", "true"); s.innerHTML = ICONS[name]; return s; };
@@ -864,8 +865,67 @@ function profileSheet() {
       me.login ? h("div", {class: "drow"}, h("span", {}, "Ваш логин"), h("b", {class: "mono"}, me.login)) : null,
       social("telegram", "Telegram", cfg.BOT_URL ? cfg.BOT_URL + "?start=" : ""),
       social("vk", "ВКонтакте", cfg.VK_URL ? cfg.VK_URL + "?ref=" : "")),
+    me.canEdit ? h("button", {class: "btn light report-btn", onclick: () => { close(); reportSheet(); }}, icon("chart"), "Сформировать отчёт") : null,
     h("div", {class: "field"}, h("span", {}, "Когда я не могу работать"), calBox, info),
     h("div", {class: "actions"}, h("button", {class: "btn light", onclick: () => close()}, "Закрыть"), save)));
+  paint();
+}
+
+// ---------- отчёт за период (администраторам) ----------
+function reportSheet() {
+  const first = state.today.slice(0, 7) + "-01";
+  const f = {kind: "venue", value: "", from: first, to: state.today};
+  let result = null, busy = false;
+  const valueOptions = () => f.kind === "venue" ? state.venues : f.kind === "person" ? state.staff : (state.groups.length ? state.groups.map((g) => g.name) : state.roles);
+  const allLabel = () => f.kind === "venue" ? "Все площадки" : f.kind === "person" ? "Все сотрудники (по каждому)" : "Все отделы";
+  const body = h("div", {});
+  const out = h("div", {class: "rep-out"});
+  const quick = (label, from, to) => h("button", {class: "vchip", onclick: () => { f.from = from; f.to = to; result = null; paint(); }}, label);
+  const monthEnd = (ym) => addDays(monthShift(ym, 1) + "-01", -1);
+  const run = async (extra) => {
+    if (busy) return null;
+    if (offlineNow()) { toast("Нет интернета", {bad: true}); return null; }
+    busy = true; paintOut();
+    try { return await api("POST", "/api/report", {from: f.from, to: f.to, kind: f.kind, value: f.value, ...extra}); }
+    catch (err) { toast(err.message, {bad: true}); return null; }
+    finally { busy = false; }
+  };
+  const show = async () => { const r = await run({}); if (r) { result = r.report; } paintOut(); };
+  const toSheet = async () => { const r = await run({save: true}); if (r) { result = r.report; toast(`Отчёт № ${r.saved.number} записан в лист «Отчёты»`, {plane: true}); if (r.saved.url) window.open(r.saved.url, "_blank", "noopener"); } paintOut(); };
+  const download = async () => {
+    const r = await run({csv: true}); if (!r) return paintOut();
+    const url = URL.createObjectURL(new Blob([r.csv], {type: "text/csv;charset=utf-8"}));
+    const a = h("a", {href: url, download: `Отчёт ${f.from} — ${f.to}.csv`}); document.body.append(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(url), 4000);
+    paintOut();
+  };
+  const paintOut = () => {
+    if (busy) return out.replaceChildren(h("div", {class: "hint-line"}, "Готовим отчёт…"));
+    if (!result) return out.replaceChildren();
+    const r = result;
+    out.replaceChildren(
+      h("div", {class: "rep-sum"}, r.summary.map(([a, b]) => h("div", {}, h("b", {}, b), h("span", {}, a)))),
+      r.rows.length ? h("div", {class: "rep-wrap"}, h("table", {class: "rep"}, h("thead", {}, h("tr", {}, r.columns.map((c) => h("th", {}, c)))),
+        h("tbody", {}, r.rows.map((row) => h("tr", {}, row.map((c) => h("td", {}, c))))), h("tfoot", {}, h("tr", {}, r.total.map((c) => h("td", {}, c))))))
+        : h("div", {class: "hint-line"}, "За этот период ничего не нашлось"),
+      r.note ? h("div", {class: "hint-line"}, "Внимание: " + r.note) : null,
+      r.rows.length ? h("div", {class: "actions"}, h("button", {class: "btn light", onclick: download}, "Скачать для Excel"), h("button", {class: "btn", onclick: toSheet}, "Записать в лист «Отчёты»")) : null);
+  };
+  const paint = () => {
+    const sel = h("select", {class: "input", "aria-label": "Что показать", onchange: (e) => { f.value = e.target.value; result = null; paintOut(); }},
+      h("option", {value: ""}, allLabel()), valueOptions().map((v) => h("option", {value: v, selected: v === f.value}, v)));
+    body.replaceChildren(
+      h("div", {class: "field"}, h("span", {}, "По чему отчёт"),
+        h("div", {class: "seg2", role: "tablist"}, [["venue", "Площадка"], ["person", "Сотрудник"], ["role", "Отдел"]].map(([k, label]) => h("button", {class: "segb" + (f.kind === k ? " on" : ""), role: "tab", "aria-selected": String(f.kind === k), onclick: () => { f.kind = k; f.value = ""; result = null; paint(); }}, label))), sel),
+      h("div", {class: "field"}, h("span", {}, "Период"),
+        h("div", {class: "rep-dates"},
+          h("input", {type: "date", class: "input", value: f.from, "aria-label": "С даты", onchange: (e) => { f.from = e.target.value; result = null; paintOut(); }}),
+          h("input", {type: "date", class: "input", value: f.to, "aria-label": "По дату", onchange: (e) => { f.to = e.target.value; result = null; paintOut(); }})),
+        h("div", {class: "vchips"},
+          quick("Этот месяц", first, monthEnd(state.today.slice(0, 7))),
+          quick("Прошлый месяц", monthShift(state.today.slice(0, 7), -1) + "-01", addDays(first, -1)),
+          quick("30 дней", addDays(state.today, -29), state.today))));
+  };
+  const {close} = overlay(sheet(h("h2", {}, "Отчёт за период"), body, h("div", {class: "actions"}, h("button", {class: "btn", onclick: show}, "Показать")), out, h("div", {class: "actions"}, h("button", {class: "btn light", onclick: () => close()}, "Закрыть"))));
   paint();
 }
 
@@ -966,13 +1026,19 @@ function editor(e) {
     const title = h("input", {class: "input", value: draft.title, placeholder: "Например, Спектакль «Бука»", oninput: (ev) => { draft.title = ev.target.value; ev.target.classList.remove("bad"); err.textContent = ""; }});
     const date = h("input", {class: "input", type: "date", value: draft.date, onchange: (ev) => { draft.date = ev.target.value; paint(); }});
     const dateEnd = h("input", {class: "input", type: "date", value: draft.dateEnd, min: draft.date, onchange: (ev) => { draft.dateEnd = ev.target.value; paint(); }});
-    const start = h("input", {class: "input", type: "time", value: draft.time, "aria-label": "Начало", onchange: (ev) => { draft.time = ev.target.value; if (!draft.time) draft.end = ""; paint(); }});
-    const end = h("input", {class: "input", type: "time", value: draft.end, "aria-label": "Окончание", disabled: !draft.time, onchange: (ev) => { draft.end = ev.target.value; paint(); }});
+    // время меняем «на месте», без перерисовки окна: иначе системное колесо выбора времени закрывается при каждом движении и приложение «вылетает»
+    const start = h("input", {class: "input", type: "time", value: draft.time, "aria-label": "Начало", onchange: (ev) => { draft.time = ev.target.value; if (!draft.time) { draft.end = ""; end.value = ""; } end.disabled = !draft.time; refreshClash(); }});
+    const end = h("input", {class: "input", type: "time", value: draft.end, "aria-label": "Окончание", disabled: !draft.time, onchange: (ev) => { draft.end = ev.target.value; refreshClash(); }});
     const hallChips = h("div", {class: "chips"},
       ...venues.map((x) => h("button", {class: "chip withdot" + (hallKey(draft.hall) === hallKey(x) ? " on" : ""), onclick: () => { draft.hall = hallKey(draft.hall) === hallKey(x) ? "" : x; paint(); }}, h("i", {class: "cdot", style: `background:${hexOfHall(x)}`}), cap(x))),
       h("button", {class: "chip add", onclick: () => addVenueSheet((name) => { draft.hall = name; paint(); })}, "+ новая"));
-    const clash = conflictsFor({...draft, time: [draft.time, ...draft.extra].filter(Boolean).join(", ")});
-    const warn = clash.length ? h("div", {class: "warn"}, icon("alert"), h("span", {}, `Площадка занята: ${clash.map((c) => `${c.title} (${timeLabel(c)})`).join("; ")}`)) : null;
+    let clash = [];
+    const warn = h("div", {});
+    const refreshClash = () => {
+      clash = conflictsFor({...draft, time: [draft.time, ...draft.extra].filter(Boolean).join(", ")});
+      warn.replaceChildren(...(clash.length ? [h("div", {class: "warn"}, icon("alert"), h("span", {}, `Площадка занята: ${clash.map((c) => `${c.title} (${timeLabel(c)})`).join("; ")}`))] : []));
+    };
+    refreshClash();
     const origNames = new Set(e ? Object.values(e.roles || {}).flat() : []);
     const dDays = eventDays(draft);
     const badPeople = [...new Set(Object.values(draft.roles).flat())].filter((n) => !origNames.has(n) && blockedDays(n, dDays).length);

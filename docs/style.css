@@ -389,3 +389,22 @@ body { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
 .mtag { display: inline-block; margin: 0 8px 2px 0; padding: 1px 9px; border: 2px solid var(--navy); border-radius: 999px; background: var(--navy); color: #fff; font: 800 11.5px var(--h); letter-spacing: .02em; vertical-align: middle; }
 .plaque.meeting { background-image: repeating-linear-gradient(135deg, rgba(255,255,255,.26) 0 9px, rgba(255,255,255,0) 9px 18px); border-style: double; border-width: 5px; }
 .calday .dots i.sq { border-radius: 3px; }
+
+/* отчёт за период */
+.rep-dates { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 10px; }
+.vchips { display: flex; flex-wrap: wrap; gap: 8px; }
+.field > select.input { margin-top: 10px; }
+.rep-out { margin-top: 16px; }
+.rep-sum { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin-bottom: 12px; }
+.rep-sum div { border: 2.5px solid var(--navy); border-radius: 12px; background: var(--cream); padding: 8px 6px; text-align: center; }
+.rep-sum b { display: block; font-size: 20px; }
+.rep-sum span { font-size: 11px; font-weight: 800; color: var(--muted); }
+.rep-wrap { overflow: auto; max-height: 46vh; border: 2.5px solid var(--navy); border-radius: 12px; }
+table.rep { border-collapse: collapse; width: 100%; font-size: 13px; }
+table.rep th { position: sticky; top: 0; background: var(--blue); color: #fff; padding: 8px; text-align: left; white-space: nowrap; }
+table.rep td { padding: 7px 8px; border-top: 1px solid #b7cde0; vertical-align: top; }
+table.rep tbody tr:nth-child(even) { background: #f1f8fc; }
+table.rep tfoot td { font-weight: 900; background: var(--light); border-top: 2.5px solid var(--navy); position: sticky; bottom: 0; }
+
+.report-btn { margin-top: 14px; }
+.rep-dates .input { min-width: 0; padding-left: 8px; padding-right: 6px; }

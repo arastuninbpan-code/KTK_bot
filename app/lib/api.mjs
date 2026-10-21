@@ -2,6 +2,7 @@
 import {makeToken, readToken} from "./auth.mjs";
 import {addDays, buildRow, daysOf, findConflicts, headerRoles, isIdColumn, layoutOf, rowColumns, matchPhones, norm, parseDate, parseEvents, todayIso, validateEvent} from "./core.mjs";
 import {platform} from "./platform.mjs";
+import {buildReport, checkParams, reportCsv} from "./report.mjs";
 import {canEdit, cleanPhotoIds, colorName, ROLE_LABELS, TABS, VENUE_COLORS} from "./store.mjs";
 
 class HttpError extends Error {
@@ -53,7 +54,7 @@ const publicUser = (u) => ({name: u.name, role: u.role, roleLabel: ROLE_LABELS[u
 const connections = (store, me) => ({login: me.login, channels: [...new Set(store.chats().filter((c) => c.phone === me.phone).map((c) => c.channel))]});
 
 export function handleApi(req, deps) {
-  const {store, secret, now = () => Date.now(), afterChange = () => {}, getRev = () => "", bumpRev = () => {}, announce = () => {}} = deps;
+  const {store, secret, now = () => Date.now(), afterChange = () => {}, getRev = () => "", bumpRev = () => {}, announce = () => {}, saveReport = () => ({number: 0})} = deps;
   const {method, path, body = {}, token} = req;
   try {
     // --- без входа ---
@@ -93,6 +94,20 @@ export function handleApi(req, deps) {
       return {status: 200, body: {today, me: {...publicUser(me), ...connections(store, me), uid: store.uid(me.phone), off: store.offDates(me.phone).filter((d) => d >= today)}, roles: editableRoles(store, table), allRoles: headerRoles(table), layout: layoutOf(table).v, rev: getRev(), events, venues, venueColors: venueColorMap(store), palette: VENUE_COLORS,
         staff: editor ? store.staffNames() : undefined, groups: editor ? store.groups() : undefined,
         unavailable: editor ? unavailableMap(store, today) : undefined, avatarKey: avatarKey(store)}};
+    }
+
+    // --- отчёт за период (только для редакторов): показать или записать в лист «Отчёты» ---
+    if (path === "/api/report" && method === "POST") {
+      if (!canEdit(me.role)) throw new HttpError(403, "Отчёты доступны только администраторам");
+      const bad = checkParams(body);
+      if (bad) throw new HttpError(400, bad);
+      const metaMap = store.metaMap();
+      const events = parseEvents(store.book.get(TABS.schedule), today);
+      const report = buildReport(events, {from: body.from, to: body.to, kind: body.kind, value: body.value, isMeeting: (e) => Boolean(e.id && metaMap[e.id] && metaMap[e.id].kind === "meeting")});
+      const out = {report};
+      if (body.save) out.saved = saveReport(report, me.name);
+      if (body.csv) out.csv = reportCsv(report);
+      return {status: 200, body: out};
     }
 
     // --- аватарки (из профилей ВК и Telegram): {uid: ссылка или маленькая картинка} ---

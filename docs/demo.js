@@ -37,6 +37,12 @@
       if (!u) return {status: 401, data: {error: "Нужно войти"}};
       if (path === "/api/ping") return {status: 200, data: {rev: String(rev), changed: (body || {}).rev !== String(rev)}};
       if (method === "GET" && path === "/api/schedule") return {status: 200, data: {today: iso(0), me: {...u, off: offDates[u.name] || []}, unavailable: u.canEdit ? offDates : undefined, roles: [A, G, K, M, S], layout: 2, rev: String(rev), avatarKey: "demo", events: view(u), venues, venueColors, palette: PALETTE, staff: u.canEdit ? STAFF : undefined, groups: u.canEdit ? GROUPS : undefined}};
+      if (path === "/api/report" && method === "POST") {
+        const list = events.filter((e) => e.date >= body.from && e.date <= body.to && (!body.value || body.kind !== "venue" || key(e.hall) === key(body.value)));
+        const rows = list.map((e) => [e.date.split("-").reverse().join("."), e.time || "", e.hall || "", e.title, "Событие", "", Object.values(e.roles || {}).flat().join(", ")]);
+        const report = {kind: body.kind, kindLabel: "Демо", value: body.value || "", from: body.from, to: body.to, columns: ["Дата", "Время", "Площадка", "Событие", "Тип", "Часы", "Состав"], rows, summary: [["Записей", String(rows.length)], ["", ""], ["", ""], ["", ""]], total: ["ИТОГО", "", "", String(rows.length), "", "", ""], note: "демо-режим"};
+        return {status: 200, data: {report, saved: body.save ? {number: 1} : undefined, csv: body.csv ? rows.map((r) => r.join(";")).join("\n") : undefined}};
+      }
       if (path === "/api/avatars") return {status: 200, data: {items: {}, key: "demo"}};
       if (path === "/api/photos") {
         if (method === "POST") { const id = Math.random().toString(16).slice(2, 14).padEnd(12, "0"); photos[id] = "data:image/jpeg;base64," + String(body.data).replace(/^data:image\/jpeg;base64,/, ""); return {status: 200, data: {ok: true, id}}; }

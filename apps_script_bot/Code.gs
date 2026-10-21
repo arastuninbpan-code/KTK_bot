@@ -756,10 +756,149 @@ function occupancyRows(events, today, isMeeting = () => false) {
   return out;
 }
 
+// ===== lib/report.mjs =====
+// Отчёты за период: по площадке, по сотруднику, по отделу (должности). Чистые функции: события -> таблица.
+
+const REPORT_KINDS = {venue: "Площадка", person: "Сотрудник", role: "Отдел"};
+const REPORT_WIDTH = 7; // все отчёты в листе одной ширины
+const REPORT_CAP = 30; // и одной высоты: строк под данные в блоке
+const REPORT_HEAD = 4; // строк шапки блока: заголовок, период, итоги, названия колонок
+const REPORT_GAP = 2; // пустых строк между отчётами
+const REPORT_HEIGHT = REPORT_HEAD + REPORT_CAP + 1 + 1 + REPORT_GAP; // + строка «ИТОГО» и строка-примечание
+
+const ddmmyyyy = (iso) => iso.slice(8, 10) + "." + iso.slice(5, 7) + "." + iso.slice(0, 4);
+const clockMin = (t) => { const m = /^(\d{1,2}):(\d{2})$/.exec(t || ""); return m ? +m[1] * 60 + +m[2] : null; };
+const hoursText = (min) => (min == null ? "" : String(Math.round(min / 6) / 10).replace(".", ","));
+const plural = (n, a, b, c) => { const m = n % 100, k = n % 10; return m > 10 && m < 15 ? c : k === 1 ? a : k > 1 && k < 5 ? b : c; };
+
+/** Длительность одного дня события в минутах: известна, только если указано одно время начала и конец. */
+function minutesOf(e) {
+  if (e.dateEnd) return null;
+  const starts = String(e.time || "").split(/,\s*/).filter(Boolean);
+  const s = clockMin(starts[0]), f = clockMin(e.end);
+  return starts.length === 1 && s !== null && f !== null && f > s ? f - s : null;
+}
+
+/** События -> по одной записи на каждый день внутри периода. */
+function occurrences(events, from, to, isMeeting) {
+  const out = [];
+  for (const e of events) {
+    for (const d of daysOf(e)) {
+      if (d < from || d > to) continue;
+      out.push({date: d, time: e.time || "", end: e.end || "", title: e.title, hall: e.hall || "", roles: e.roles || {}, meeting: Boolean(isMeeting(e)), min: minutesOf(e)});
+    }
+  }
+  return out.sort((a, b) => (a.date + a.time).localeCompare(b.date + b.time) || a.title.localeCompare(b.title));
+}
+
+const span = (o) => (o.time ? o.time + (o.end ? "–" + o.end : "") : "весь день");
+const sumMin = (list) => list.reduce((s, o) => s + (o.min || 0), 0);
+const unknownMin = (list) => list.filter((o) => o.min == null).length;
+
+/** Строка «По отделу / по всем сотрудникам»: одна строка на человека. */
+function peopleRows(occ, roleFilter, personFilter) {
+  const by = new Map();
+  for (const o of occ) {
+    for (const [role, names] of Object.entries(o.roles)) {
+      if (roleFilter && norm(role) !== norm(roleFilter)) continue;
+      for (const n of names) {
+        if (personFilter && norm(n) !== norm(personFilter)) continue;
+        const p = by.get(n) || {name: n, shifts: [], roles: new Set()};
+        p.shifts.push(o); p.roles.add(role);
+        by.set(n, p);
+      }
+    }
+  }
+  return [...by.values()].sort((a, b) => b.shifts.length - a.shifts.length || a.name.localeCompare(b.name, "ru"));
+}
+
+/**
+ * Отчёт. kind: venue | person | role; value — что именно (пусто = все).
+ * Возвращает {kind, kindLabel, value, from, to, columns, rows, summary: [[подпись, значение]], total: [..], note}.
+ */
+function buildReport(events, {from, to, kind, value = "", isMeeting = () => false}) {
+  if (!REPORT_KINDS[kind]) throw new Error("Неизвестный вид отчёта");
+  const occ = occurrences(events, from, to, isMeeting);
+  const v = String(value || "").trim();
+  let columns, rows, summary, total;
+  if (kind === "venue") {
+    const list = v ? occ.filter((o) => norm(o.hall) === norm(v)) : occ.filter((o) => o.hall);
+    columns = ["Дата", "Время", "Площадка", "Событие", "Тип", "Часы", "Состав"];
+    rows = list.map((o) => [ddmmyyyy(o.date), span(o), o.hall, o.title, o.meeting ? "Собрание" : "Событие", hoursText(o.min), Object.entries(o.roles).map(([r, n]) => r + ": " + n.join(", ")).join("; ")]);
+    const days = new Set(list.map((o) => o.date)).size;
+    summary = [["Событий", list.filter((o) => !o.meeting).length], ["Собраний", list.filter((o) => o.meeting).length], ["Часов", hoursText(sumMin(list)) || "0"], ["Дней с событиями", days]];
+    total = ["ИТОГО", "", "", list.length + " " + plural(list.length, "запись", "записи", "записей"), "", hoursText(sumMin(list)) || "0", ""];
+    var noTime = unknownMin(list);
+  } else if (kind === "person" && v) {
+    const p = peopleRows(occ, "", v)[0];
+    const list = p ? p.shifts : [];
+    columns = ["Дата", "Время", "Площадка", "Событие", "Должность", "Часы", "Тип"];
+    rows = list.map((o) => [ddmmyyyy(o.date), span(o), o.hall, o.title, Object.entries(o.roles).filter(([, n]) => n.some((x) => norm(x) === norm(v))).map(([r]) => r).join(", "), hoursText(o.min), o.meeting ? "Собрание" : "Событие"]);
+    const halls = new Set(list.map((o) => o.hall).filter(Boolean));
+    summary = [["Смен", list.length], ["Часов", hoursText(sumMin(list)) || "0"], ["Площадок", halls.size], ["Собраний", list.filter((o) => o.meeting).length]];
+    total = ["ИТОГО", "", "", list.length + " " + plural(list.length, "смена", "смены", "смен"), "", hoursText(sumMin(list)) || "0", ""];
+    var noTime = unknownMin(list);
+  } else {
+    const people = peopleRows(occ, kind === "role" ? v : "", "");
+    columns = ["Сотрудник", "Смен", "Часов", "Собраний", "Площадки", "Первая смена", "Последняя смена"];
+    rows = people.map((p) => {
+      const dates = p.shifts.map((o) => o.date).sort();
+      const halls = [...new Set(p.shifts.map((o) => o.hall).filter(Boolean))];
+      return [p.name, p.shifts.length, hoursText(sumMin(p.shifts)) || "0", p.shifts.filter((o) => o.meeting).length, halls.join(", "), ddmmyyyy(dates[0]), ddmmyyyy(dates[dates.length - 1])];
+    });
+    const all = people.flatMap((p) => p.shifts);
+    summary = [["Сотрудников", people.length], ["Смен", all.length], ["Часов", hoursText(sumMin(all)) || "0"], ["Собраний", all.filter((o) => o.meeting).length]];
+    total = ["ИТОГО", all.length, hoursText(sumMin(all)) || "0", all.filter((o) => o.meeting).length, "", "", ""];
+    var noTime = unknownMin(all);
+  }
+  const notes = [];
+  if (noTime) notes.push(`у ${noTime} ${plural(noTime, "записи", "записей", "записей")} не указано время начала и конца — их часы не учтены`);
+  return {kind, kindLabel: REPORT_KINDS[kind], value: v, from, to, columns, rows: rows.map((r) => r.map(String)), summary: summary.map(([a, b]) => [a, String(b)]), total: total.map(String), note: notes.join("; ")};
+}
+
+const reportTitle = (r) => `${r.kindLabel}: ${r.value || (r.kind === "venue" ? "все площадки" : r.kind === "role" ? "все отделы" : "все сотрудники")}`;
+const periodText = (r) => `${ddmmyyyy(r.from)} – ${ddmmyyyy(r.to)}`;
+
+/** Валидация параметров запроса. */
+function checkParams(p) {
+  const iso = /^\d{4}-\d{2}-\d{2}$/;
+  if (!REPORT_KINDS[p.kind]) return "Выберите, по чему готовить отчёт";
+  if (!iso.test(p.from || "") || !iso.test(p.to || "")) return "Укажите даты начала и конца периода";
+  if (p.to < p.from) return "Конец периода раньше начала";
+  if (p.to > addDays(p.from, 366)) return "Период не больше года";
+  return "";
+}
+
+/**
+ * Блок отчёта для листа: ровно REPORT_HEIGHT строк по REPORT_WIDTH ячеек. Одинаковая высота у всех отчётов:
+ * лишних строк нет, недостающие пусты; если данных больше REPORT_CAP, остальное — в примечании (итоги считаются по всем).
+ */
+function reportBlock(r, number, meta) {
+  const pad = (a) => [...a.map(String), ...Array(REPORT_WIDTH).fill("")].slice(0, REPORT_WIDTH);
+  const rows = [];
+  rows.push(pad([`ОТЧЁТ № ${number} · ${reportTitle(r)}`, "", "", "", "", "", ""]));
+  rows.push(pad([`Период: ${periodText(r)} · сформирован ${meta.when}${meta.by ? " · " + meta.by : ""}`]));
+  rows.push(pad([r.summary.map(([a, b]) => `${a}: ${b}`).join("   ·   ")]));
+  rows.push(pad(r.columns));
+  const shown = r.rows.slice(0, REPORT_CAP);
+  for (let i = 0; i < REPORT_CAP; i++) rows.push(pad(shown[i] || []));
+  rows.push(pad(r.total));
+  const more = r.rows.length - shown.length;
+  rows.push(pad([[more > 0 ? `Показаны первые ${REPORT_CAP} из ${r.rows.length} строк — полный список можно скачать в приложении (итоги выше посчитаны по всем).` : "", r.note ? "Внимание: " + r.note : ""].filter(Boolean).join(" ")]));
+  for (let i = 0; i < REPORT_GAP; i++) rows.push(pad([]));
+  return {rows, shown: shown.length};
+}
+
+/** Файл для скачивания (CSV с разделителем «;» — так его правильно открывает русский Excel). */
+function reportCsv(r) {
+  const q = (s) => /[;"\n]/.test(s) ? '"' + String(s).replace(/"/g, '""') + '"' : String(s);
+  return "﻿" + [[reportTitle(r)], [`Период: ${periodText(r)}`], [], r.columns, ...r.rows, r.total].map((row) => row.map(q).join(";")).join("\r\n");
+}
+
 // ===== lib/store.mjs =====
 // Хранилище поверх таблицы: сотрудники и роли, чаты, снимок расписания, коды входа, блокировка.
 
-const TABS = {schedule: "Расписание", staff: "Сотрудники", venues: "Площадки", chats: "Подписчики", requests: "_заявки", people: "_люди", off: "_недоступность", comments: "_комментарии", meta: "_события", avatars: "_аватары", photos: "_фото", state: "_служебное", lock: "_замок"};
+const TABS = {schedule: "Расписание", staff: "Сотрудники", venues: "Площадки", reports: "Отчёты", chats: "Подписчики", requests: "_заявки", people: "_люди", off: "_недоступность", comments: "_комментарии", meta: "_события", avatars: "_аватары", photos: "_фото", state: "_служебное", lock: "_замок"};
 const REQUESTS_HEADER = ["Канал", "ID чата", "Телефон"];
 const COMMENT_HEADER = ["ID события", "ID", "Время", "Телефон", "Имя", "Текст", "Фото"];
 const META_HEADER = ["ID события", "Тип", "Описание", "—", "Автор", "Создано"];
@@ -1313,7 +1452,7 @@ const publicUser = (u) => ({name: u.name, role: u.role, roleLabel: ROLE_LABELS[u
 const connections = (store, me) => ({login: me.login, channels: [...new Set(store.chats().filter((c) => c.phone === me.phone).map((c) => c.channel))]});
 
 function handleApi(req, deps) {
-  const {store, secret, now = () => Date.now(), afterChange = () => {}, getRev = () => "", bumpRev = () => {}, announce = () => {}} = deps;
+  const {store, secret, now = () => Date.now(), afterChange = () => {}, getRev = () => "", bumpRev = () => {}, announce = () => {}, saveReport = () => ({number: 0})} = deps;
   const {method, path, body = {}, token} = req;
   try {
     // --- без входа ---
@@ -1353,6 +1492,20 @@ function handleApi(req, deps) {
       return {status: 200, body: {today, me: {...publicUser(me), ...connections(store, me), uid: store.uid(me.phone), off: store.offDates(me.phone).filter((d) => d >= today)}, roles: editableRoles(store, table), allRoles: headerRoles(table), layout: layoutOf(table).v, rev: getRev(), events, venues, venueColors: venueColorMap(store), palette: VENUE_COLORS,
         staff: editor ? store.staffNames() : undefined, groups: editor ? store.groups() : undefined,
         unavailable: editor ? unavailableMap(store, today) : undefined, avatarKey: avatarKey(store)}};
+    }
+
+    // --- отчёт за период (только для редакторов): показать или записать в лист «Отчёты» ---
+    if (path === "/api/report" && method === "POST") {
+      if (!canEdit(me.role)) throw new HttpError(403, "Отчёты доступны только администраторам");
+      const bad = checkParams(body);
+      if (bad) throw new HttpError(400, bad);
+      const metaMap = store.metaMap();
+      const events = parseEvents(store.book.get(TABS.schedule), today);
+      const report = buildReport(events, {from: body.from, to: body.to, kind: body.kind, value: body.value, isMeeting: (e) => Boolean(e.id && metaMap[e.id] && metaMap[e.id].kind === "meeting")});
+      const out = {report};
+      if (body.save) out.saved = saveReport(report, me.name);
+      if (body.csv) out.csv = reportCsv(report);
+      return {status: 200, body: out};
     }
 
     // --- аватарки (из профилей ВК и Telegram): {uid: ссылка или маленькая картинка} ---
@@ -1781,7 +1934,7 @@ class GasBook {
   ensure(tab, header) {
     if (this.has(tab)) return;
     const s = this.ss.insertSheet(tab);
-    if ([TABS.staff, TABS.schedule, TABS.venues].indexOf(tab) < 0) { try { s.hideSheet(); } catch (e) { /* служебный лист просто останется видимым */ } }
+    if ([TABS.staff, TABS.schedule, TABS.venues, TABS.reports].indexOf(tab) < 0) { try { s.hideSheet(); } catch (e) { /* служебный лист просто останется видимым */ } }
     if (header) s.getRange(1, 1, 1, header.length).setNumberFormat("@").setValues([header.map(String)]);
     this.touch(tab);
   }
@@ -2113,6 +2266,7 @@ function apiCall_(req) {
     store: store_(),
     secret: secret_(),
     announce: announce_,
+    saveReport: saveReport_,
     getRev: getRev_,
     bumpRev: bumpRev_,
     // после правки сразу рассылаем уведомления (не ждём таймера); ошибки рассылки не ломают сохранение
@@ -3018,6 +3172,52 @@ function renderOccupancy_() {
       if (hex) sheet.getRange(2 + i, OCC_COL_ + 2).setBackground(hex).setFontColor(C.white).setFontWeight("bold"); // цвет площадки
     }
   });
+}
+
+/**
+ * Лист «Отчёты»: каждый отчёт — отдельный блок одного размера (REPORT_HEIGHT строк, 7 колонок). Новый встаёт на самый верх,
+ * на нём красная метка «ПОСЛЕДНИЙ»; прежние сдвигаются вниз. Хранится последние REPORT_KEEP_ отчётов.
+ */
+const REPORT_KEEP_ = 15;
+const REPORT_WIDTHS_ = [130, 110, 160, 250, 130, 90, 330];
+function saveReport_(report, by) {
+  const ss = SpreadsheetApp.openById(prop_("SHEET_ID"));
+  let sheet = ss.getSheetByName(TABS.reports);
+  if (!sheet) {
+    sheet = ss.insertSheet(TABS.reports);
+    REPORT_WIDTHS_.forEach((w, i) => sheet.setColumnWidth(i + 1, w));
+    sheet.setHiddenGridlines(true);
+  }
+  const p = PropertiesService.getScriptProperties();
+  const number = Number(p.getProperty("REPORT_NO") || "0") + 1;
+  p.setProperty("REPORT_NO", String(number));
+  const H = REPORT_HEIGHT, W = REPORT_WIDTH;
+  const when = Utilities.formatDate(new Date(), "Europe/Moscow", "dd.MM.yyyy HH:mm");
+  const block = reportBlock(report, number, {when, by: by || ""});
+  sheet.insertRowsBefore(1, H);
+  const area = sheet.getRange(1, 1, H, W);
+  area.breakApart();
+  area.clear();
+  if (sheet.getLastRow() > H) sheet.getRange(H + 1, W).setValue(""); // у прежнего отчёта метка «последний» снимается
+  area.setNumberFormat("@").setValues(block.rows).setFontColor(C.navy).setVerticalAlignment("middle").setFontFamily("Arial");
+  sheet.getRange(1, 1, 1, W - 1).merge().setBackground(C.navy).setFontColor(C.white).setFontWeight("bold").setFontSize(14);
+  sheet.getRange(1, W).setValue("● ПОСЛЕДНИЙ").setBackground(C.coral).setFontColor(C.white).setFontWeight("bold").setHorizontalAlignment("center");
+  sheet.getRange(2, 1, 1, W).merge().setBackground(C.light);
+  sheet.getRange(3, 1, 1, W).merge().setBackground(C.cream).setFontWeight("bold");
+  styleHeaderRange_(sheet.getRange(4, 1, 1, W));
+  const first = REPORT_HEAD + 1, last = REPORT_HEAD + REPORT_CAP;
+  sheet.getRange(first, 1, REPORT_CAP, W).setWrap(true).setBackground(C.white);
+  for (let i = 1; i < REPORT_CAP; i += 2) sheet.getRange(first + i, 1, 1, W).setBackground("#F1F8FC");
+  sheet.getRange(4, 1, REPORT_CAP + 2, W).setBorder(true, true, true, true, true, true, "#B7CDE0", SpreadsheetApp.BorderStyle.SOLID);
+  sheet.getRange(last + 1, 1, 1, W).setBackground(C.light).setFontWeight("bold");
+  sheet.getRange(last + 2, 1, 1, W).merge().setFontColor(C.coral).setFontSize(9).setWrap(true);
+  sheet.setRowHeight(1, 34); sheet.setRowHeight(2, 24); sheet.setRowHeight(3, 28); sheet.setRowHeight(4, 30);
+  for (let r = first; r <= last; r++) sheet.setRowHeight(r, 34);
+  sheet.setRowHeight(last + 1, 28); sheet.setRowHeight(last + 2, 24);
+  for (let r = last + 3; r <= H; r++) sheet.setRowHeight(r, 21);
+  const keep = REPORT_KEEP_ * H;
+  if (sheet.getMaxRows() > keep) sheet.deleteRows(keep + 1, sheet.getMaxRows() - keep);
+  return {number, rows: block.shown, url: "https://docs.google.com/spreadsheets/d/" + prop_("SHEET_ID") + "/edit#gid=" + sheet.getSheetId()};
 }
 
 function styleHeaderRange_(range) {
