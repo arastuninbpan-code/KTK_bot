@@ -40,6 +40,21 @@ export function shiftBlock(r, opts = {}) {
   return lines.join("\n");
 }
 
+/**
+ * Один человек может стоять на одном событии сразу на нескольких должностях: такие строки сводим в одну («👤 Актёры, Техника»),
+ * чтобы в сообщении было одно событие, а не по сообщению на каждую должность.
+ */
+export function mergeRoles(rows) {
+  const by = new Map();
+  for (const r of rows) {
+    const k = [r.date, r.time, r.event, r.hall].join("|");
+    const cur = by.get(k);
+    if (!cur) { by.set(k, {...r, _roles: r.role ? [r.role] : []}); continue; }
+    if (r.role && !cur._roles.includes(r.role)) cur._roles.push(r.role);
+  }
+  return [...by.values()].map(({_roles, ...r}) => ({...r, role: _roles.join(", ")}));
+}
+
 export const msgAdded = (r) => `✈️ <b>Вам назначена смена</b>\n\n${shiftBlock(r)}`;
 export const msgChanged = (r, old) => `💬 <b>Смена изменена</b>\n\n${shiftBlock(r, {old})}`;
 export const msgRemoved = (r) => `💬 <b>Смена отменена</b>\n\n${shiftBlock(r, {strike: true})}`;
@@ -50,11 +65,12 @@ export function msgChange(kind, row, old) {
 
 /** Напоминание: kind = "day" (за сутки / накануне) или "hour" (❗ срочное); rows — смены одного человека. */
 export function msgReminder(kind, rows) {
+  rows = mergeRoles(rows);
   const many = rows.length > 1;
   const head = kind === "hour"
     ? `❗ <b>${many ? "Через час у вас смены" : "Через час у вас смена"}</b>`
     : `💬 <b>${many ? "Завтра у вас смены" : "Завтра у вас смена"}</b>`;
-  return `${head}\n\n${rows.map((r) => shiftBlock(r, {withDate: kind !== "hour"})).join("\n\n")}`;
+  return `${head}\n\n${mergeRoles(rows).map((r) => shiftBlock(r, {withDate: kind !== "hour"})).join("\n\n")}`;
 }
 
 const byDate = (a, b) => (a.date + a.time).localeCompare(b.date + b.time);
@@ -64,7 +80,7 @@ export function shiftsText(rows) {
   if (!rows.length) return "💬 <b>Ближайших смен пока нет</b>";
   const out = ["💬 <b>Ваши ближайшие смены</b>"];
   let day = "";
-  for (const r of [...rows].sort(byDate)) {
+  for (const r of mergeRoles(rows).sort(byDate)) {
     if (r.date !== day) { day = r.date; out.push(`\n🗓 <b>${dateShort(r.date)}</b>`); }
     out.push(shiftBlock(r, {withDate: false}) + "\n");
   }

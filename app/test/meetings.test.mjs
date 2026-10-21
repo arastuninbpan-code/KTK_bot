@@ -110,3 +110,18 @@ test("аватарки: ключ — короткий код человека, �
   assert.ok(!JSON.stringify(items).includes("9000000002"), "телефон в ответе не светится");
   assert.ok(t.store.avatarAge("9000000002", "vk") > 0);
 });
+
+test("«не могу работать» нельзя отметить на дату, когда человек уже назначен на смену", () => {
+  const t = make();
+  const admin = t.login("9000000001");
+  const reader = t.login("9000000002");
+  t.call("POST", "/api/events", admin, {event: {...MEETING, title: "Спектакль", date: "2026-10-12", roles: {"Касса": ["Петрова Л.Н."]}}});
+  const r = t.call("POST", "/api/off", reader, {add: ["2026-10-12", "2026-10-14"]});
+  assert.equal(r.status, 409);
+  assert.match(r.body.error, /12\.10 вам уже назначена смена/);
+  assert.deepEqual(r.body.busy, ["2026-10-12"]);
+  assert.deepEqual(t.store.offDates("9000000002"), [], "ничего не записалось (ни занятая, ни свободная дата)");
+  assert.equal(t.call("POST", "/api/off", reader, {add: ["2026-10-14"]}).status, 200);
+  // чужая смена не мешает
+  assert.equal(t.call("POST", "/api/off", admin, {add: ["2026-10-12"]}).status, 200);
+});

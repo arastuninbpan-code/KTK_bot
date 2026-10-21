@@ -432,6 +432,21 @@ function shiftBlock(r, opts = {}) {
   return lines.join("\n");
 }
 
+/**
+ * Один человек может стоять на одном событии сразу на нескольких должностях: такие строки сводим в одну («👤 Актёры, Техника»),
+ * чтобы в сообщении было одно событие, а не по сообщению на каждую должность.
+ */
+function mergeRoles(rows) {
+  const by = new Map();
+  for (const r of rows) {
+    const k = [r.date, r.time, r.event, r.hall].join("|");
+    const cur = by.get(k);
+    if (!cur) { by.set(k, {...r, _roles: r.role ? [r.role] : []}); continue; }
+    if (r.role && !cur._roles.includes(r.role)) cur._roles.push(r.role);
+  }
+  return [...by.values()].map(({_roles, ...r}) => ({...r, role: _roles.join(", ")}));
+}
+
 const msgAdded = (r) => `✈️ <b>Вам назначена смена</b>\n\n${shiftBlock(r)}`;
 const msgChanged = (r, old) => `💬 <b>Смена изменена</b>\n\n${shiftBlock(r, {old})}`;
 const msgRemoved = (r) => `💬 <b>Смена отменена</b>\n\n${shiftBlock(r, {strike: true})}`;
@@ -442,11 +457,12 @@ function msgChange(kind, row, old) {
 
 /** Напоминание: kind = "day" (за сутки / накануне) или "hour" (❗ срочное); rows — смены одного человека. */
 function msgReminder(kind, rows) {
+  rows = mergeRoles(rows);
   const many = rows.length > 1;
   const head = kind === "hour"
     ? `❗ <b>${many ? "Через час у вас смены" : "Через час у вас смена"}</b>`
     : `💬 <b>${many ? "Завтра у вас смены" : "Завтра у вас смена"}</b>`;
-  return `${head}\n\n${rows.map((r) => shiftBlock(r, {withDate: kind !== "hour"})).join("\n\n")}`;
+  return `${head}\n\n${mergeRoles(rows).map((r) => shiftBlock(r, {withDate: kind !== "hour"})).join("\n\n")}`;
 }
 
 const byDate = (a, b) => (a.date + a.time).localeCompare(b.date + b.time);
@@ -456,7 +472,7 @@ function shiftsText(rows) {
   if (!rows.length) return "💬 <b>Ближайших смен пока нет</b>";
   const out = ["💬 <b>Ваши ближайшие смены</b>"];
   let day = "";
-  for (const r of [...rows].sort(byDate)) {
+  for (const r of mergeRoles(rows).sort(byDate)) {
     if (r.date !== day) { day = r.date; out.push(`\n🗓 <b>${dateShort(r.date)}</b>`); }
     out.push(shiftBlock(r, {withDate: false}) + "\n");
   }
@@ -1399,6 +1415,16 @@ function handleApi(req, deps) {
       const add = clean(body.add).filter((d) => d >= today);
       const remove = clean(body.remove);
       if (add.length > 400 || remove.length > 400) throw new HttpError(400, "Слишком много дат за раз");
+      // если директор уже поставил человека на работу в этот день, отметить «не могу» нельзя: отказ от смены — через администратора
+      if (add.length) {
+        const busyDays = new Set();
+        for (const e of parseEvents(store.book.get(TABS.schedule), today)) {
+          const mineHere = Object.values(e.roles).some((names) => names.some((n) => matchPhones(n, users).includes(me.phone)));
+          if (mineHere) for (const d of daysOf(e)) busyDays.add(d);
+        }
+        const clash = add.filter((d) => busyDays.has(d));
+        if (clash.length) throw new HttpError(409, `На ${clash.map((d) => d.slice(8, 10) + "." + d.slice(5, 7)).join(", ")} вам уже назначена смена, отметить «не могу» нельзя. Если не получится выйти, напишите администратору: он снимет вас со смены.`, {busy: clash});
+      }
       store.setOff(me.phone, me.name, add, remove);
       bumpRev();
       return {status: 200, body: {ok: true, off: store.offDates(me.phone).filter((d) => d >= today)}};
@@ -1648,7 +1674,14 @@ function runCycle({store, senders, now = Date.now(), appUrl = "", log = console}
   }
   if (JSON.stringify(plan.snap) !== JSON.stringify({chats: [], ...snap})) store.saveSnapshot(plan.snap);
 
-  const messages = plan.changes.map((c) => ({phone: c.phone, text: msgChange(c.kind, c.row, c.old)}));
+  // человек на одном событии может стоять на нескольких должностях: изменения по одному событию сводим в одно сообщение
+  const changeGroups = new Map();
+  for (const c of plan.changes) {
+    const k = [c.phone, c.kind, c.row.date, c.row.event, c.row.time].join("|");
+    const g = changeGroups.get(k);
+    if (g) { if (c.row.role && !g.roles.includes(c.row.role)) g.roles.push(c.row.role); } else changeGroups.set(k, {c, roles: c.row.role ? [c.row.role] : []});
+  }
+  const messages = [...changeGroups.values()].map(({c, roles}) => ({phone: c.phone, text: msgChange(c.kind, {...c.row, role: roles.join(", ")}, c.old)}));
   const groups = new Map();
   for (const r of plan.reminders) {
     const k = r.phone + "\t" + r.kind;

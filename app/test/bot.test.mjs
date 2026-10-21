@@ -100,3 +100,29 @@ test("блокировка не пускает второй проход", () =>
   assert.equal(first, "первый"); assert.deepEqual(inner, {skipped: true});
   assert.equal(ctx.store.withLock(() => "снова"), "снова"); // после завершения замок снят
 });
+
+test("несколько должностей на одном событии: в сообщениях и списке смен одно событие и все должности; изменения по нему приходят одним сообщением", () => {
+  const ctx = setup(); const ch = fakeChannel();
+  const staff = TABS.schedule;
+  // Петрова на «Сказках» (10.10) стоит и в «Администраторе», и в «Гардеробе»
+  const rows = ctx.store.book.get(staff);
+  const i = rows.findIndex((r) => String(r[1]).startsWith("Сказки"));
+  ctx.store.book.set(staff, i + 1, [rows[i][0], rows[i][1], "Петрова Л.Н.", "Петрова Л.Н.", "", "", ""]);
+  say(ctx, ch, 7, "", "9000000002");
+  say(ctx, ch, 7, "/shifts");
+  const text = lastTo(ch, 7).text;
+  assert.equal((text.match(/Сказки из старого чемодана/g) || []).length, 1, "событие в списке один раз");
+  assert.match(text, /👤 Администратор \/ Капельдинер, Гардероб \/ Уборщица/);
+  // первый проход запоминает состояние молча
+  runCycle({store: ctx.store, senders: {telegram: ch}, now: msk(1, 10)});
+  const before = ch.sent.length;
+  // её же ставят ещё на две должности сразу -> одно сообщение со всеми новыми должностями
+  const r2 = ctx.store.book.get(staff);
+  const j = r2.findIndex((r) => String(r[1]).startsWith("Сказки"));
+  ctx.store.book.set(staff, j + 1, [r2[j][0], r2[j][1], "Петрова Л.Н.", "Петрова Л.Н.", "Петрова Л.Н.", "Петрова Л.Н.", ""]);
+  runCycle({store: ctx.store, senders: {telegram: ch}, now: msk(1, 10)});
+  const added = ch.sent.slice(before).filter((s) => s.chatId === "7");
+  assert.equal(added.length, 1, "одно сообщение, а не по одному на должность");
+  assert.match(added[0].text, /Вам назначена смена/);
+  assert.match(added[0].text, /Касса, Монтировка/);
+});

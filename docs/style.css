@@ -311,3 +311,66 @@ body { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
 .calgrid { grid-auto-rows: auto; }
 .calday .dots i { width: 9px; height: 9px; }
 .input.bad { border-color: var(--coral); background: #ffe3dd; color: var(--coral); animation: shake .4s; }
+
+/* профиль: день со сменой нельзя отметить как «не могу» */
+.calday.shiftday { opacity: 1; background: var(--light); border-color: var(--blue); cursor: not-allowed; }
+.calday.shiftday::after { content: "🔒"; position: absolute; right: 3px; top: 1px; font-size: 9px; }
+
+/* аватарки */
+.av { display: inline-grid; place-items: center; width: 40px; height: 40px; border-radius: 50%; border: 2px solid var(--navy); color: #fff; font: 700 14px var(--h); object-fit: cover; flex: none; overflow: hidden; }
+.av.sm { width: 32px; height: 32px; font-size: 12px; }
+.av.avatar { width: 48px; height: 48px; font-size: 16px; box-shadow: 2px 2px 0 var(--blue); }
+.av.avatar.big { width: 64px; height: 64px; font-size: 20px; }
+
+/* переписка по событию */
+.sheet.chat { height: 90dvh; display: flex; flex-direction: column; padding-bottom: calc(10px + var(--safe-b)); overflow: hidden; }
+.chathead { display: grid; gap: 2px; padding: 2px 4px 8px; border-bottom: 2px solid var(--light); }
+.chathead b { font: 700 17px var(--h); }
+.chathead small { color: var(--muted); font-weight: 800; }
+.msgs { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; touch-action: pan-y; padding: 10px 2px; display: flex; flex-direction: column; gap: 8px; }
+.dsep { text-align: center; margin: 6px 0 2px; }
+.dsep span { display: inline-block; padding: 2px 12px; border-radius: 999px; background: var(--light); font-size: 12px; font-weight: 900; color: var(--muted); }
+.msg { display: flex; align-items: flex-end; gap: 8px; max-width: 88%; }
+.msg.mine { align-self: flex-end; flex-direction: row-reverse; }
+.bubble { display: grid; gap: 4px; padding: 8px 12px; border: 2.5px solid var(--navy); border-radius: 18px 18px 18px 4px; background: #fff; min-width: 0; box-shadow: 2px 2px 0 var(--navy); }
+.msg.mine .bubble { background: var(--blue); color: #fff; border-radius: 18px 18px 4px 18px; }
+.msg.pending { opacity: .65; }
+.msg.failed .bubble { background: #ffe3dd; border-color: var(--coral); color: var(--navy); cursor: pointer; }
+.mname { font-size: 12.5px; color: var(--blue); }
+.bubble p { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; font-weight: 700; line-height: 1.35; }
+.mtime { font-size: 11px; font-weight: 800; opacity: .75; display: flex; gap: 8px; align-items: center; }
+.mdel { background: none; border: 0; padding: 0; font: inherit; font-size: 11px; text-decoration: underline; color: inherit; }
+.mfiles { display: grid; gap: 6px; }
+.mimg img { display: block; max-width: min(240px, 64vw); max-height: 240px; border-radius: 12px; border: 2px solid rgba(27,53,96,.4); object-fit: cover; }
+.fchip { display: flex; align-items: center; gap: 8px; padding: 6px 10px; border: 2px solid var(--navy); border-radius: 12px; background: var(--cream); color: var(--navy); text-decoration: none; font-weight: 800; min-width: 0; }
+.fchip .fi { font-size: 20px; }
+.fchip .fn { display: grid; min-width: 0; overflow-wrap: anywhere; font-size: 13.5px; }
+.fchip .fn small { font-size: 11px; opacity: .7; }
+.fdel { margin-left: auto; width: 28px; height: 28px; border-radius: 50%; border: 2px solid var(--navy); background: #fff; font-size: 16px; line-height: 1; padding: 0; flex: none; }
+.attach-row { display: flex; gap: 8px; flex-wrap: wrap; padding: 4px 0; }
+.achip { display: inline-flex; align-items: center; gap: 6px; padding: 3px 4px 3px 8px; border: 2px solid var(--navy); border-radius: 999px; background: var(--cream); font-size: 12.5px; font-weight: 800; max-width: 100%; }
+.achip img { width: 28px; height: 28px; border-radius: 8px; object-fit: cover; }
+.achip em { font-style: normal; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 120px; }
+.achip button { width: 22px; height: 22px; border-radius: 50%; border: 0; background: var(--navy); color: #fff; padding: 0; line-height: 1; }
+.composer { display: flex; align-items: flex-end; gap: 8px; padding-top: 8px; border-top: 2px solid var(--light); }
+.chat-input { flex: 1; min-height: 44px; max-height: 120px; resize: none; line-height: 1.3; padding: 10px 12px; }
+.clip, .send { width: 46px; height: 46px; flex: none; border-radius: 50%; border: 2.5px solid var(--navy); display: grid; place-items: center; padding: 0; font-size: 20px; }
+.clip { background: var(--cream); }
+.send { background: var(--blue); }
+.send .ico { stroke: #fff; width: 22px; height: 22px; }
+.chat-open { width: 100%; margin: 6px 0 2px; background: var(--cream); color: var(--navy); }
+
+/* собрание */
+.seg2 { display: flex; gap: 6px; padding: 4px; border: 2.5px solid var(--navy); border-radius: 999px; background: var(--light); margin: 2px 0 6px; }
+.segb { flex: 1; padding: 8px 6px; border: 0; border-radius: 999px; background: transparent; font-weight: 900; color: var(--muted); }
+.segb.on { background: var(--blue); color: #fff; box-shadow: 2px 2px 0 var(--navy); }
+.meetblock { display: grid; gap: 4px; }
+.meetblock textarea { resize: vertical; min-height: 76px; }
+.files { display: grid; gap: 8px; }
+.btn.attach { width: 100%; }
+.check { display: flex; gap: 10px; align-items: flex-start; padding: 8px 4px; font-weight: 800; font-size: 14px; }
+.check input { width: 22px; height: 22px; flex: none; margin-top: 1px; accent-color: var(--blue); }
+.meet-tag { display: inline-block; margin: 0 0 8px; padding: 3px 12px; border-radius: 999px; border: 2px solid var(--navy); background: var(--cream); font-weight: 900; }
+.meet-note { margin: 0 0 10px; white-space: pre-wrap; overflow-wrap: anywhere; font-weight: 700; }
+.ev .mt { font-size: .95em; }
+.ccount { display: inline-block; margin-top: 6px; padding: 1px 10px; border-radius: 999px; border: 2px solid var(--navy); background: var(--light); font-size: 12.5px; font-weight: 900; }

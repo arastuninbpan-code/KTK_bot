@@ -159,6 +159,16 @@ export function handleApi(req, deps) {
       const add = clean(body.add).filter((d) => d >= today);
       const remove = clean(body.remove);
       if (add.length > 400 || remove.length > 400) throw new HttpError(400, "Слишком много дат за раз");
+      // если директор уже поставил человека на работу в этот день, отметить «не могу» нельзя: отказ от смены — через администратора
+      if (add.length) {
+        const busyDays = new Set();
+        for (const e of parseEvents(store.book.get(TABS.schedule), today)) {
+          const mineHere = Object.values(e.roles).some((names) => names.some((n) => matchPhones(n, users).includes(me.phone)));
+          if (mineHere) for (const d of daysOf(e)) busyDays.add(d);
+        }
+        const clash = add.filter((d) => busyDays.has(d));
+        if (clash.length) throw new HttpError(409, `На ${clash.map((d) => d.slice(8, 10) + "." + d.slice(5, 7)).join(", ")} вам уже назначена смена, отметить «не могу» нельзя. Если не получится выйти, напишите администратору: он снимет вас со смены.`, {busy: clash});
+      }
       store.setOff(me.phone, me.name, add, remove);
       bumpRev();
       return {status: 200, body: {ok: true, off: store.offDates(me.phone).filter((d) => d >= today)}};

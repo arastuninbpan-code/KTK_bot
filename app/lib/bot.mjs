@@ -140,7 +140,14 @@ export function runCycle({store, senders, now = Date.now(), appUrl = "", log = c
   }
   if (JSON.stringify(plan.snap) !== JSON.stringify({chats: [], ...snap})) store.saveSnapshot(plan.snap);
 
-  const messages = plan.changes.map((c) => ({phone: c.phone, text: msgChange(c.kind, c.row, c.old)}));
+  // человек на одном событии может стоять на нескольких должностях: изменения по одному событию сводим в одно сообщение
+  const changeGroups = new Map();
+  for (const c of plan.changes) {
+    const k = [c.phone, c.kind, c.row.date, c.row.event, c.row.time].join("|");
+    const g = changeGroups.get(k);
+    if (g) { if (c.row.role && !g.roles.includes(c.row.role)) g.roles.push(c.row.role); } else changeGroups.set(k, {c, roles: c.row.role ? [c.row.role] : []});
+  }
+  const messages = [...changeGroups.values()].map(({c, roles}) => ({phone: c.phone, text: msgChange(c.kind, {...c.row, role: roles.join(", ")}, c.old)}));
   const groups = new Map();
   for (const r of plan.reminders) {
     const k = r.phone + "\t" + r.kind;
