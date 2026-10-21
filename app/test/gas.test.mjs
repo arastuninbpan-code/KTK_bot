@@ -8,7 +8,7 @@ const SCHEDULE = [HEAD,
   ["04.10\n11.00 и 13.00", "Спектакль «Бука»\n(малая сцена)", "Иванова М.В.", "Морозова Н.М.", "", "", ""],
   ["10.10", "Сказки из старого чемодана", "Петрова Л.Н.", "", "", "", ""]];
 const G = () => loadGas({now: NOW, tabs: {"Расписание": SCHEDULE, "Сотрудники": STAFF},
-  props: {SHEET_ID: "x", STYLE_VER: "13", TELEGRAM_BOT_TOKEN: "TOKEN", WEBHOOK_SECRET: "hook", APP_URL: "https://app.test"}});
+  props: {SHEET_ID: "x", STYLE_VER: "14", TELEGRAM_BOT_TOKEN: "TOKEN", WEBHOOK_SECRET: "hook", APP_URL: "https://app.test"}});
 
 const tg = (g, update) => g.run(`doPost(${JSON.stringify({parameter: {secret: "hook"}, postData: {contents: JSON.stringify(update)}})}).getContent()`);
 const msg = (id, text, contact) => ({update_id: Math.floor(Math.random() * 1e9), message: {chat: {id, type: "private"}, from: {id}, text, contact}});
@@ -164,7 +164,7 @@ test("группы: галочки в таблице -> состав групп;
 // ---------- ВКонтакте ----------
 const VKPROPS = {VK_TOKEN: "VKTOKEN", VK_GROUP_ID: "club123", VK_SECRET: "vksecret", VK_CONFIRM: "abc123", TG_CHANNEL: "@teatr"};
 const GV = (extra = {}) => loadGas({now: NOW, tabs: {"Расписание": SCHEDULE, "Сотрудники": STAFF},
-  props: {SHEET_ID: "x", STYLE_VER: "13", TELEGRAM_BOT_TOKEN: "TOKEN", WEBHOOK_SECRET: "hook", APP_URL: "https://app.test", ...VKPROPS, ...extra}});
+  props: {SHEET_ID: "x", STYLE_VER: "14", TELEGRAM_BOT_TOKEN: "TOKEN", WEBHOOK_SECRET: "hook", APP_URL: "https://app.test", ...VKPROPS, ...extra}});
 const vk = (g, update, secret = "hook") => g.run(`doPost(${JSON.stringify({parameter: {secret, vk: "1"}, postData: {contents: JSON.stringify(update)}})}).getContent()`);
 const vkMsg = (id, text, extra = {}) => ({type: "message_new", event_id: "e" + Math.random(), secret: "vksecret", object: {message: {peer_id: id, from_id: id, text, ...extra}}});
 const vkSent = (g, id) => g.fetches.filter((f) => f.url.endsWith("/messages.send") && String(f.body.user_id) === String(id));
@@ -364,7 +364,7 @@ test("после обновления таблица оформляется са
   const g = G();
   delete g.properties.STYLE_VER;
   g.run("everyMinute()"); // как после выкладки новой версии
-  assert.equal(g.properties.STYLE_VER, "13");
+  assert.equal(g.properties.STYLE_VER, "14");
   const staff = g.ss.getSheetByName("Сотрудники");
   assert.deepEqual(staff.getDataRange().getDisplayValues()[0].slice(4, 6), ["Доступ", "Комментарий"]);
   assert.deepEqual(g.ss.sheets.filter((x) => !x.hidden).map((x) => x.name).sort(), ["Площадки", "Расписание", "Сотрудники"]);
@@ -494,7 +494,7 @@ test("«Сотрудники» как в жизни: тысяча строк-з�
 });
 
 test("заявка из ВК: в «ФИО» имя из профиля, роль «Заявка»; поставили «Доступ» — это уже обычный сотрудник", () => {
-  const g = GV({STYLE_VER: "13"});
+  const g = GV({STYLE_VER: "14"});
   g.run("styleSheets()");
   g.setFetchReply((url) => (/users\.get/.test(url) ? JSON.stringify({response: [{first_name: "Анна", last_name: "Смирнова"}]}) : ""));
   vk(g, vkMsg(77, "89112223344"));
@@ -655,4 +655,27 @@ test("должности в приложении — группы из «Сот�
   assert.equal(upd._status, 200);
   const after = sch.getDataRange().getDisplayValues();
   assert.ok(after.some((r) => r[3].startsWith("Спектакль «Бука»!") && r.includes("Иванова М.В.")), "люди в старых колонках на месте");
+});
+
+test("удалили все события текущего месяца: шапка месяца остаётся, прошлый месяц уходит под разделитель; пустой лист тоже получает шапку", () => {
+  const g = G();
+  g.ss.getSheetByName("Расписание").put(4, 1, "30.09");
+  g.run("styleSheets()");
+  const sch = g.ss.getSheetByName("Расписание");
+  // как у пользователя: стёрли строки с октябрьскими событиями, осталось одно сентябрьское
+  const keep = sch.getDataRange().getDisplayValues().filter((r, i) => i === 0 || r[0] === "30.09");
+  sch.cells = keep.map((r) => r.slice());
+  g.run("dropAllCaches_()");
+  g.run("tidySchedule_()");
+  const col = sch.getDataRange().getDisplayValues().map((r) => r[0]);
+  assert.equal(col[1], "ОКТЯБРЬ 2026", "шапка текущего месяца на месте и сверху");
+  assert.ok(col.indexOf("▼ ПРОШЕДШИЕ МЕСЯЦЫ") > 1 && col.indexOf("30.09") > col.indexOf("СЕНТЯБРЬ 2026"));
+  assert.ok(sch.styleLog.some((l) => l[0] === "autoResizeRows"), "высоты строк сброшены");
+  // совсем пустой лист
+  sch.cells = [sch.cells[0]];
+  g.run("dropAllCaches_()");
+  g.run("tidySchedule_()");
+  assert.equal(sch.getDataRange().getDisplayValues()[1][0], "ОКТЯБРЬ 2026");
+  g.run("tidySchedule_()");
+  assert.equal(sch.getDataRange().getDisplayValues().filter((r) => r[0] === "ОКТЯБРЬ 2026").length, 1, "шапка не дублируется");
 });

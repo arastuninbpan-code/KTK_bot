@@ -621,6 +621,7 @@ function monthsDisordered_(rows, today) {
     if ((last && cmpRank(rank, last) < 0) || monthTitle_(d) !== current) return true;
     last = rank;
   }
+  if (!seen[monthTitle_(today)]) return true; // шапка текущего месяца должна быть всегда, даже если событий в нём нет
   // разделитель стоит прямо перед первым прошедшим месяцем, перед ним ровно PAST_GAP_ пустых строк; без прошлого разделителя нет
   if (pastHead < 0) return divider >= 0;
   if (divider < 0 || divider !== pastHead - 1) return true;
@@ -647,6 +648,11 @@ function rebuildMonths_(sheet) {
   const out = [];
   let title = "";
   let dividerDone = false;
+  const curTitle = monthTitle_(today);
+  if (!body.some((b) => b.key !== "0000-00-00" && monthTitle_(b.key) === curTitle)) { // в текущем месяце событий нет — шапка всё равно остаётся
+    out.push([curTitle].concat(Array(cols - 1).fill("")));
+    title = curTitle;
+  }
   body.forEach((b) => {
     const t = b.key === "0000-00-00" ? "" : monthTitle_(b.key);
     if (t && t !== title) {
@@ -664,12 +670,18 @@ function rebuildMonths_(sheet) {
   sheet.getDataRange().breakApart();
   range.clear();
   if (out.length) sheet.getRange(2, 1, out.length, cols).setNumberFormat("@").setValues(out);
+  sheet.autoResizeRows(2, Math.max(lastRow - 1, out.length, 1)); // высоты строк от удалённых событий больше не нужны
   console.log("Месяцы пересобраны по порядку (строк: " + out.length + ").");
 }
 
 /** Приводит месяцы в порядок: пересборка, если они перепутаны, иначе только недостающие шапки. */
 function fixMonths_(sheet, force) {
-  if (sheet.getLastRow() < 2) return 0;
+  if (sheet.getLastRow() < 2) { // в листе нет ни одного события: шапка текущего месяца всё равно нужна
+    const head = sheet.getLastRow() >= 1 ? sheet.getRange(1, 1, 1, Math.max(2, sheet.getLastColumn())).getDisplayValues() : [];
+    if (!head.length || layoutOf(head).v !== 2) return 0;
+    sheet.getRange(2, 1).setNumberFormat("@").setValue(monthTitle_(todayIso(Date.now())));
+    return 1;
+  }
   const rows = sheet.getRange(1, 1, sheet.getLastRow(), Math.max(2, sheet.getLastColumn())).getDisplayValues();
   if (layoutOf(rows).v !== 2) return force ? ensureMonthHeaders_(sheet) : 0; // старый формат ещё не перенесён: порядок не трогаем
   const plan = columnPlan("schedule", rows[0]);
@@ -758,7 +770,7 @@ function groupMonths_(sheet, fresh) {
   });
 }
 
-const STYLE_VERSION_ = "13"; // поднимайте, когда меняется оформление: таблица перестроится сама при ближайшем срабатывании таймера
+const STYLE_VERSION_ = "14"; // поднимайте, когда меняется оформление: таблица перестроится сама при ближайшем срабатывании таймера
 
 /** После обновления кода один раз оформляет таблицу сама (то же, что ручной запуск styleSheets). */
 function autoStyle_(p) {

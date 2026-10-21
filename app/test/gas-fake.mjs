@@ -65,6 +65,7 @@ class Sheet {
   deleteRow(r) { this.cells.splice(r - 1, 1); }
   deleteRows(r, n) { this.cells.splice(r - 1, n); }
   clear() { this.cells = []; }
+  autoResizeRows(r, n) { this.styleLog.push(["autoResizeRows", r, n]); }
   setRowHeight(r, h) { this.styleLog.push(["rowHeight", r, h]); }
   setColumnWidth(c, w) { this.styleLog.push(["colWidth", c, w]); }
   setFrozenRows(n) { this.styleLog.push(["frozen", n]); }
