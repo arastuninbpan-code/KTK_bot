@@ -559,7 +559,7 @@ async function pumpChat() {
 function chatSheet(e) {
   if (!e.id) return toast("Событие ещё готовится. Попробуйте через минуту.", {bad: true});
   const cached = chatCacheRead(e.id);
-  let items = cached ? cached.items.slice() : [], lastTs = items.reduce((a, m) => Math.max(a, m.ts), 0), attach = [], loaded = Boolean(cached);
+  let polling = false, items = cached ? cached.items.slice() : [], lastTs = items.reduce((a, m) => Math.max(a, m.ts), 0), attach = [], loaded = Boolean(cached);
   const msgs = h("div", {class: "msgs", role: "log", "aria-live": "polite"});
   const chips = h("div", {class: "attach-row"});
   const ta = h("textarea", {class: "input chat-input", rows: "1", placeholder: "Сообщение", "aria-label": "Сообщение",
@@ -600,8 +600,9 @@ function chatSheet(e) {
     return added;
   };
   const poll = async () => {
-    if (!document.body.contains(ov) || offlineNow()) return;
-    try { const r = await api("GET", "/api/comments", {event: e.id, since: lastTs}); if (merge(r.items)) { paint(); chatCacheWrite(e.id, items); } } catch (_) { /* нет связи — следующий раз */ }
+    if (!document.body.contains(ov) || offlineNow() || polling) return;
+    polling = true;
+    try { const r = await api("GET", "/api/comments", {event: e.id, since: lastTs}); if (merge(r.items)) { paint(); chatCacheWrite(e.id, items); } } catch (_) { /* нет связи — следующий раз */ } finally { polling = false; }
   };
   const push = (m) => {
     chatQueue.push(async () => {
@@ -652,7 +653,7 @@ function chatSheet(e) {
     lastTs = items.reduce((a, m) => Math.max(a, m.ts), 0);
     chatCacheWrite(e.id, items); paint(true);
   }).catch((err) => { loaded = true; if (!items.length) msgs.replaceChildren(h("div", {class: "empty small"}, offlineNow() ? "Нет интернета. Переписка появится, когда сеть вернётся." : err.message)); });
-  const timer = setInterval(() => { if (!document.body.contains(ov)) clearInterval(timer); else poll(); }, 4000);
+  const timer = setInterval(() => { if (!document.body.contains(ov)) clearInterval(timer); else if (!document.hidden) poll(); }, 2500); // пока переписка открыта, новое подтягивается каждые ~2,5 с
 }
 
 /** Подробная карточка события: открывается из календаря площадок и из списка расписания. */
