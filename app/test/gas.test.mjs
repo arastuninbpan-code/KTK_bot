@@ -619,12 +619,14 @@ test("«Не могу работать»: отмеченные даты хран
   assert.equal(api(g, {method: "POST", path: "/api/events", token: admin, body: {event: ev("2026-10-14", "Петрова Л.Н.")}})._status, 200);
   // уже стоящего на событии можно не трогать, даже если потом отметила дату
   const row = g.run("store_().book.get('Расписание').findIndex((r) => r[3] === 'Проба') + 1");
-  api(g, {method: "POST", path: "/api/off", token: petr, body: {add: ["2026-10-14"]}});
+  // а отметить «не могу» на день, когда она уже назначена, нельзя
+  const refuse = api(g, {method: "POST", path: "/api/off", token: petr, body: {add: ["2026-10-14"]}});
+  assert.equal(refuse._status, 409);
   res = api(g, {method: "PUT", path: "/api/events/" + row, token: admin, body: {event: {...ev("2026-10-14", "Петрова Л.Н."), title: "Проба 2"}}});
   assert.equal(res._status, 200);
   // снять отметку
   r = api(g, {method: "POST", path: "/api/off", token: petr, body: {remove: ["2026-10-12"]}});
-  assert.deepEqual(r.off, ["2026-10-13", "2026-10-14"]);
+  assert.deepEqual(r.off, ["2026-10-13"]);
 });
 
 test("должности в приложении — группы из «Сотрудников»; новая группа даёт новую колонку в «Расписании» и выбор людей на неё; старые записи не теряются", () => {
