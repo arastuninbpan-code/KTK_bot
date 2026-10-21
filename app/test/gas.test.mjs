@@ -691,3 +691,16 @@ test("событие можно создать совсем без сотруд�
   const s = api(g, {method: "GET", path: "/api/schedule", token: t});
   assert.deepEqual(s.events.filter((e) => /Без людей|Пустые списки/.test(e.title)).map((e) => Object.keys(e.roles).length), [0, 0]);
 });
+
+test("Telegram: после подключения под полем ввода постоянное меню-кнопки; кнопка «Мои смены» работает как команда", () => {
+  const g = G();
+  tg(g, msg(5, "", {user_id: 5, phone_number: "+7 900 000-00-01"}));
+  const hello = sentTo(g, 5).at(-1).body;
+  assert.equal(hello.reply_markup.is_persistent, true);
+  assert.deepEqual(hello.reply_markup.keyboard[0].map((b) => b.text), ["📅 Мои смены", "🎭 Расписание"]);
+  assert.ok(!/\/shifts/.test(hello.text), "без списка команд");
+  tg(g, msg(5, "📅 Мои смены"));
+  assert.match(sentTo(g, 5).at(-1).body.text, /смен|Ближайших/);
+  tg(g, msg(5, "🔕 Отключить"));
+  assert.equal(sentTo(g, 5).at(-1).body.reply_markup.remove_keyboard, true, "при отключении меню убирается");
+});

@@ -95,24 +95,35 @@ export function afishaText(rows, limit = 12) {
   return out.join("\n").replace(/\n{3,}/g, "\n\n").trim();
 }
 
-export const HELP = [
-  "<b>Что я умею</b>",
-  "/shifts — ваши ближайшие смены",
-  "/schedule — афиша с составом",
-  "/login — ваш логин для входа в приложение",
-  "/stop — отключить уведомления",
-].join("\n");
+// ---------- главное меню: кнопки под полем ввода (и в Telegram, и во ВКонтакте); нажатие приходит как обычное сообщение с этой подписью ----------
+export const MENU_LABELS = {shifts: "📅 Мои смены", schedule: "🎭 Расписание", app: "📱 Приложение", login: "🔑 Мой логин", post: "📣 В группу", confirmPost: "✅ Опубликовать афишу", stop: "🔕 Отключить", menu: "🏠 Меню"};
+/** Подпись кнопки (или слово) -> команда бота. */
+export const MENU_COMMANDS = {
+  [MENU_LABELS.shifts]: "/shifts", [MENU_LABELS.schedule]: "/schedule", [MENU_LABELS.app]: "/app", [MENU_LABELS.login]: "/login",
+  [MENU_LABELS.post]: "/post", [MENU_LABELS.confirmPost]: "/post да", [MENU_LABELS.stop]: "/stop", [MENU_LABELS.menu]: "/menu", "меню": "/menu", "menu": "/menu",
+};
+/** Ряды кнопок меню. menu: {editor, confirm}. Кнопка «Приложение» во ВК открывается ссылкой, в Telegram — отдельным сообщением с кнопкой. */
+export function menuRows(menu = {}) {
+  const rows = [];
+  if (menu.confirm) rows.push([MENU_LABELS.confirmPost]);
+  rows.push([MENU_LABELS.shifts, MENU_LABELS.schedule], [MENU_LABELS.app, MENU_LABELS.login]);
+  rows.push(menu.editor ? [MENU_LABELS.post, MENU_LABELS.stop] : [MENU_LABELS.stop]);
+  return rows;
+}
+export const msgMenu = "🏠 <b>Главное меню</b>\nЧто открыть?";
+export const msgApp = "📱 <b>Приложение расписания</b>\nСмены, площадки, переписка по событиям — всё там.";
+export const msgNoApp = "💬 Адрес приложения пока не задан. Спросите у администратора.";
 
-export const msgWelcome = (name) => `✈️ <b>Готово, ${esc(name)}!</b>\nТеперь я буду присылать уведомления о ваших сменах.\n\n${HELP}`;
+export const msgWelcome = (name) => `✈️ <b>Готово, ${esc(name)}!</b>\nТеперь я буду присылать уведомления о ваших сменах. Меню — внизу.`;
 export const msgAskPhone = "💬 <b>Здравствуйте!</b>\nЧтобы получать уведомления о сменах, поделитесь номером телефона (кнопка ниже, если она есть) или просто напишите сообщением свой номер либо логин, который выдал администратор.";
 export const msgUnknownPhone = "💬 <b>Этого номера нет в списке сотрудников.</b>\nОбратитесь к администратору, чтобы вас добавили. Если у вас есть логин, просто пришлите его сюда.";
 export const msgStopped = "💬 <b>Уведомления отключены.</b>\nЧтобы включить снова, напишите /start.";
-export const msgConnected = (name, canPost = false) => `💬 <b>${esc(name)}</b>, вы подключены.\n\n${HELP}${canPost ? "\n/post — опубликовать афишу недели" : ""}`;
+export const msgConnected = (name) => `💬 <b>${esc(name)}</b>, вы подключены.\n\n${msgMenu}`;
 export const msgAlreadyConnected = (name) => `✈️ <b>Этот чат уже подключён: ${esc(name)}.</b>\nЧтобы подключить другой номер, сначала отправьте /stop.`;
 export const msgBlocked = "💬 <b>Доступ закрыт.</b>\nОбратитесь к администратору.";
 export const msgRequestSent = "💬 <b>Вашего номера нет в списке сотрудников.</b>\nЗаявка передана администратору, он увидит её в таблице. Если хотите, напишите одним сообщением, кто вы (ФИО и должность): оно попадёт администратору.\n\nКак только доступ откроют, я напишу вам сам.";
 export const msgCommentSaved = "💬 <b>Передал администратору.</b>\nКак только откроют доступ, я напишу вам сам.";
-export const msgAccessGranted = (name) => `✈️ <b>Доступ открыт, ${esc(name)}!</b>\nТеперь я буду присылать уведомления о ваших сменах.\n\n${HELP}`;
+export const msgAccessGranted = (name) => `✈️ <b>Доступ открыт, ${esc(name)}!</b>\nТеперь я буду присылать уведомления о ваших сменах. Меню — внизу.`;
 export const msgLogin = (login) => `🔑 <b>Ваш логин</b>
 
 <code>${esc(login)}</code>

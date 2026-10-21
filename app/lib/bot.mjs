@@ -1,6 +1,6 @@
 // Диалог с сотрудником (одинаков для любого мессенджера) и рассылка уведомлений. Синхронный код.
 import {looksLikePhone, matchPhones, normPhone, parseEvents, parseGrid, planCycle, todayIso} from "./core.mjs";
-import {afishaText, appButton, msgAlreadyConnected, msgAskPhone, msgBlocked, msgChange, msgConnected, msgAccessGranted, msgCommentSaved, msgLogin, msgPostEmpty, msgPostNoRights, msgPostNotConfigured, msgPostPreview, msgPostResult, msgReminder, msgRequestSent, msgStopped, msgWelcome, publicAfishaText, shiftsText} from "./format.mjs";
+import {afishaText, appButton, MENU_COMMANDS, msgApp, msgMenu, msgNoApp, msgAlreadyConnected, msgAskPhone, msgBlocked, msgChange, msgConnected, msgAccessGranted, msgCommentSaved, msgLogin, msgPostEmpty, msgPostNoRights, msgPostNotConfigured, msgPostPreview, msgPostResult, msgReminder, msgRequestSent, msgStopped, msgWelcome, publicAfishaText, shiftsText} from "./format.mjs";
 import {Gone} from "./telegram.mjs";
 import {canEdit, normLogin, TABS} from "./store.mjs";
 
@@ -16,6 +16,7 @@ export function handleMessage({store, channel, ev, appUrl = "", now = Date.now()
   if (!phone && looksLikePhone(text)) phone = normPhone(text); // номер, введённый вручную
   const users = store.users();
   const btn = appButton(appUrl);
+  const menuFor = (u) => ({editor: canEdit(u.role) && Boolean(publishers && publishers.targets().length), appUrl});
 
   // логин, выданный администратором (или пришедший из ссылки «Подключить» в приложении: /start ЛОГИН): сразу узнаём человека
   const startPayload = ev.start || (/^\/start(?:@\w+)?\s+(\S+)/i.exec(text) || [])[1] || "";
@@ -51,7 +52,7 @@ export function handleMessage({store, channel, ev, appUrl = "", now = Date.now()
       return channel.send(chat, msgRequestSent);
     }
     store.bind(channel.name, chat, phone, u.name);
-    return channel.send(chat, msgWelcome(u.name), "remove");
+    return channel.send(chat, msgWelcome(u.name), {menu: menuFor(u)});
   }
 
   const mine = store.chats().find((c) => c.channel === channel.name && c.chatId === String(chat));
@@ -66,7 +67,8 @@ export function handleMessage({store, channel, ev, appUrl = "", now = Date.now()
   }
   if (user.role === "blocked") return channel.send(chat, msgBlocked);
 
-  const [first = "", ...rest] = text.split(/\s+/);
+  const asked = MENU_COMMANDS[text] || MENU_COMMANDS[text.toLowerCase()] || text; // нажатие кнопки меню = команда
+  const [first = "", ...rest] = asked.split(/\s+/);
   const cmd = first.toLowerCase().split("@")[0];
   const today = todayIso(now);
   if (cmd === "/shifts") {
@@ -87,14 +89,15 @@ export function handleMessage({store, channel, ev, appUrl = "", now = Date.now()
     if (!targets.length) return channel.send(chat, msgPostNotConfigured);
     const text = publicAfishaText(parseEvents(store.book.get(TABS.schedule), today), today);
     if (!text) return channel.send(chat, msgPostEmpty);
-    if (!/^(да|yes|ok)$/i.test(text0(rest))) return channel.send(chat, msgPostPreview(text, targets)); // сначала показываем, что уйдёт
-    return channel.send(chat, msgPostResult(publishers.post(text)));
+    if (!/^(да|yes|ok)$/i.test(text0(rest))) return channel.send(chat, msgPostPreview(text, targets), {menu: {...menuFor(user), confirm: true}}); // сначала показываем, что уйдёт; кнопка «Опубликовать» — внизу
+    return channel.send(chat, msgPostResult(publishers.post(text)), {menu: menuFor(user)});
   }
   if (cmd === "/stop") {
     store.unbind(channel.name, chat);
     return channel.send(chat, msgStopped, "remove");
   }
-  return channel.send(chat, msgConnected(user.name, canEdit(user.role) && Boolean(publishers && publishers.targets().length)), btn);
+  if (cmd === "/app") return appUrl ? channel.send(chat, msgApp, btn) : channel.send(chat, msgNoApp);
+  return channel.send(chat, msgMenu, {menu: menuFor(user)}); // /start, /menu, /help и любое непонятное слово — главное меню
 }
 
 const text0 = (words) => String(words[0] || "").trim();
@@ -114,7 +117,7 @@ export function runCycle({store, senders, now = Date.now(), appUrl = "", log = c
     welcomed.add(u.phone);
     store.bind(rq.channel, rq.chatId, u.phone, u.name);
     store.removeRequest(rq.channel, rq.chatId);
-    try { senders[rq.channel]?.send(rq.chatId, msgAccessGranted(u.name), "remove"); } catch (err) { if (!(err instanceof Gone)) log.error(String(err.message || err)); }
+    try { senders[rq.channel]?.send(rq.chatId, msgAccessGranted(u.name), {menu: {editor: false, appUrl}}); } catch (err) { if (!(err instanceof Gone)) log.error(String(err.message || err)); }
   }
   const users = store.activeUsers();
   const table = store.book.get(TABS.schedule);

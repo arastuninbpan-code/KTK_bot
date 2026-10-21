@@ -1,3 +1,4 @@
+import {MENU_LABELS, menuRows} from "./format.mjs";
 // ВКонтакте: разбор входящих событий (Callback API) и подготовка сообщений. Сеть — в gas/shell.gs.
 // Сообщения у нас написаны в HTML-разметке Telegram (<b>, <s>, <code>); у VK такой разметки нет, поэтому переводим в простой текст.
 
@@ -13,6 +14,13 @@ export function htmlToPlain(html) {
 
 /** Клавиатура под сообщением: кнопка-ссылка «Открыть в приложении». Подпись в ВК — до 40 знаков. */
 export function vkKeyboard(options) {
+  if (options && options.menu) { // главное меню: постоянные кнопки под полем ввода; «Приложение» открывается ссылкой сразу
+    const m = options.menu;
+    const rows = menuRows(m).map((row) => row.map((label) => (label === MENU_LABELS.app && m.appUrl
+      ? {action: {type: "open_link", link: m.appUrl, label: label.slice(0, 40)}}
+      : {action: {type: "text", label: label.slice(0, 40)}})));
+    return JSON.stringify({one_time: false, inline: false, buttons: rows});
+  }
   if (!options || !options.button) return undefined;
   return JSON.stringify({inline: true, buttons: [[{action: {type: "open_link", link: options.button.url, label: String(options.button.text).slice(0, 40)}}]]});
 }

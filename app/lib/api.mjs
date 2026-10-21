@@ -1,6 +1,6 @@
 // API приложения. Чистая функция: запрос -> {status, body}. Синхронный код, никакой привязки к платформе.
 import {makeToken, readToken} from "./auth.mjs";
-import {addDays, buildRow, daysOf, findConflicts, headerRoles, layoutOf, matchPhones, norm, parseDate, parseEvents, todayIso, validateEvent} from "./core.mjs";
+import {addDays, buildRow, daysOf, findConflicts, headerRoles, layoutOf, rowColumns, matchPhones, norm, parseDate, parseEvents, todayIso, validateEvent} from "./core.mjs";
 import {platform} from "./platform.mjs";
 import {canEdit, colorName, ROLE_LABELS, TABS, VENUE_COLORS} from "./store.mjs";
 

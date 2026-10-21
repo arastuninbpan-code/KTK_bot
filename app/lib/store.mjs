@@ -2,8 +2,25 @@
 import {normPhone, phonesIn} from "./core.mjs";
 import {platform} from "./platform.mjs";
 
-export const TABS = {schedule: "Расписание", staff: "Сотрудники", venues: "Площадки", chats: "Подписчики", requests: "_заявки", people: "_люди", off: "_недоступность", state: "_служебное", lock: "_замок"};
+export const TABS = {schedule: "Расписание", staff: "Сотрудники", venues: "Площадки", chats: "Подписчики", requests: "_заявки", people: "_люди", off: "_недоступность", comments: "_комментарии", meta: "_события", avatars: "_аватары", state: "_служебное", lock: "_замок"};
 export const REQUESTS_HEADER = ["Канал", "ID чата", "Телефон"];
+export const COMMENT_HEADER = ["ID события", "ID", "Время", "Телефон", "Имя", "Текст", "Файлы"];
+export const META_HEADER = ["ID события", "Тип", "Описание", "Файлы", "Автор", "Создано"];
+export const AVATAR_HEADER = ["Телефон", "Канал", "Фото", "Обновлено"];
+/** Файл в сообщении/событии: храним только известные поля, ссылка — только на Google Диск (чужие адреса в приложение не пускаем). */
+export function cleanFiles(list) {
+  const out = [];
+  for (const f of Array.isArray(list) ? list : []) {
+    if (!f || typeof f !== "object") continue;
+    const url = String(f.url || "");
+    if (!/^https:\/\/(drive|docs)\.google\.com\//.test(url)) continue;
+    const thumb = /^https:\/\/(drive|docs|lh\d)\.(google|googleusercontent)\.com\//.test(String(f.thumb || "")) ? String(f.thumb) : "";
+    out.push({id: String(f.id || "").slice(0, 100), name: String(f.name || "файл").slice(0, 120), mime: String(f.mime || "").slice(0, 80), size: Math.max(0, Math.round(Number(f.size) || 0)), url, thumb});
+    if (out.length >= 8) break;
+  }
+  return out;
+}
+const parseJson = (t, fallback) => { try { const v = JSON.parse(t); return v == null ? fallback : v; } catch { return fallback; } };
 export const OFF_HEADER = ["Телефон", "ФИО", "Дата"];
 export const VENUES_HEADER = ["Площадка", "Заметка", "Цвет"];
 /** Цвета площадок: название (оно выбирается в таблице из списка) и цвет в приложении. */
@@ -192,6 +209,105 @@ export class Store {
     for (const date of [...new Set(add)]) if (!have.has(date)) this.book.append(TABS.off, [phone, name, date]);
     const drop = new Set(remove);
     for (const r of rows.filter((x) => drop.has(x.date)).sort((a, b) => b.row - a.row)) this.book.remove(TABS.off, r.row); // снизу вверх, чтобы номера строк не съезжали
+  }
+
+  // --- «имя» человека для чужих глаз: короткий код вместо телефона ---
+  uid(phone) { return this.hash("uid:" + phone).slice(0, 10); }
+
+  // --- метаданные события: тип (событие/собрание), описание, прикреплённые файлы. Ключ — ID события (скрытая колонка «ID» в расписании) ---
+  metaMap() {
+    if (!this.book.has(TABS.meta)) return {};
+    const out = {};
+    for (const r of this.book.get(TABS.meta).slice(1)) {
+      const id = String(r[0] || "").trim();
+      if (!id) continue;
+      out[id] = {kind: String(r[1] || "") === "meeting" ? "meeting" : "event", note: String(r[2] || ""), files: cleanFiles(parseJson(r[3], [])), author: String(r[4] || ""), created: Number(r[5]) || 0, row: 0};
+    }
+    return out;
+  }
+
+  /** Создаёт или обновляет метаданные события; поля, которых нет в `patch`, не меняются. */
+  setMeta(eventId, patch) {
+    this.book.ensure(TABS.meta, META_HEADER);
+    const rows = this.book.get(TABS.meta);
+    const at = rows.findIndex((r, i) => i > 0 && String(r[0] || "").trim() === eventId);
+    const cur = at >= 0 ? rows[at] : [eventId, "event", "", "[]", "", String(this.now())];
+    const next = [eventId,
+      patch.kind ? (patch.kind === "meeting" ? "meeting" : "event") : String(cur[1] || "event"),
+      patch.note !== undefined ? String(patch.note).slice(0, 4000) : String(cur[2] || ""),
+      patch.files !== undefined ? JSON.stringify(cleanFiles(patch.files)) : String(cur[3] || "[]"),
+      patch.author !== undefined ? String(patch.author) : String(cur[4] || ""),
+      String(cur[5] || this.now())];
+    if (at >= 0) this.book.set(TABS.meta, at + 1, next); else this.book.append(TABS.meta, next);
+  }
+
+  // --- комментарии к событию (переписка) ---
+  comments(eventId) {
+    if (!this.book.has(TABS.comments)) return [];
+    return this.book.get(TABS.comments).slice(1)
+      .filter((r) => String(r[0] || "").trim() === eventId)
+      .map((r) => ({id: String(r[1] || ""), ts: Number(r[2]) || 0, phone: normPhone(r[3] || ""), name: String(r[4] || ""), text: String(r[5] || ""), files: cleanFiles(parseJson(r[6], []))}))
+      .sort((a, b) => a.ts - b.ts);
+  }
+
+  commentCounts() {
+    if (!this.book.has(TABS.comments)) return {};
+    const out = {};
+    for (const r of this.book.get(TABS.comments).slice(1)) {
+      const id = String(r[0] || "").trim();
+      if (!id) continue;
+      const o = out[id] || (out[id] = {n: 0, last: 0});
+      o.n++;
+      o.last = Math.max(o.last, Number(r[2]) || 0);
+    }
+    return out;
+  }
+
+  addComment(eventId, user, text, files = []) {
+    this.book.ensure(TABS.comments, COMMENT_HEADER);
+    const c = {id: platform.sha256hex(`${eventId}:${user.phone}:${this.now()}:${platform.randomInt(1e9)}`).slice(0, 12), ts: this.now(), phone: user.phone, name: user.name, text: String(text || "").trim().slice(0, 2000), files: cleanFiles(files)};
+    this.book.append(TABS.comments, [eventId, c.id, String(c.ts), c.phone, c.name, c.text, JSON.stringify(c.files)]);
+    return c;
+  }
+
+  /** Удаляет сообщение: своё — любой, чужое — только тот, кто может править расписание. */
+  deleteComment(id, user) {
+    if (!this.book.has(TABS.comments)) return false;
+    const rows = this.book.get(TABS.comments);
+    const at = rows.findIndex((r, i) => i > 0 && String(r[1] || "") === id);
+    if (at < 0) return false;
+    if (normPhone(rows[at][3] || "") !== user.phone && !canEdit(user.role)) return null;
+    this.book.remove(TABS.comments, at + 1);
+    return true;
+  }
+
+  // --- аватарки: из профиля ВК (ссылка) и Telegram (маленькая картинка внутри). Ключ — телефон ---
+  setAvatar(phone, channel, photo) {
+    this.book.ensure(TABS.avatars, AVATAR_HEADER);
+    const rows = this.book.get(TABS.avatars);
+    const at = rows.findIndex((r, i) => i > 0 && normPhone(r[0] || "") === phone && String(r[1] || "") === channel);
+    const row = [phone, channel, photo, String(this.now())];
+    if (at >= 0) this.book.set(TABS.avatars, at + 1, row); else this.book.append(TABS.avatars, row);
+  }
+
+  /** Когда в последний раз обновляли аватарку этого человека в этом канале (мс), 0 — никогда. */
+  avatarAge(phone, channel) {
+    if (!this.book.has(TABS.avatars)) return 0;
+    const r = this.book.get(TABS.avatars).slice(1).find((x) => normPhone(x[0] || "") === phone && String(x[1] || "") === channel);
+    return r ? Number(r[3]) || 0 : 0;
+  }
+
+  /** {uid: фото}: у кого два канала — берём свежее. */
+  avatarsByUid() {
+    if (!this.book.has(TABS.avatars)) return {};
+    const best = {};
+    for (const r of this.book.get(TABS.avatars).slice(1)) {
+      const phone = normPhone(r[0] || "");
+      const photo = String(r[2] || "");
+      const ts = Number(r[3]) || 0;
+      if (phone && photo && (!best[phone] || ts > best[phone].ts)) best[phone] = {photo, ts};
+    }
+    return Object.fromEntries(Object.entries(best).map(([phone, v]) => [this.uid(phone), v.photo]));
   }
 
   // --- площадки: лист «Площадки» (название | заметка) ---

@@ -100,7 +100,11 @@ export function layoutOf(table) {
   return {v: 1, roleStart: 2};
 }
 
-export const headerRoles = (table) => (table[0] || []).slice(layoutOf(table).roleStart).map((c) => String(c).split(/\s+/).filter(Boolean).join(" "));
+/** Все колонки правее «Площадки»: должности и служебная колонка «ID» (скрытая; по ней находятся комментарии и файлы события). */
+export const rowColumns = (table) => (table[0] || []).slice(layoutOf(table).roleStart).map((c) => String(c).split(/\s+/).filter(Boolean).join(" "));
+export const isIdColumn = (name) => /^id$/i.test(String(name || "").trim());
+/** Должности (колонки с людьми). */
+export const headerRoles = (table) => rowColumns(table).filter((c) => !isIdColumn(c));
 
 /** Время из текста -> «09:05» или «». */
 export function clock(s) {
@@ -145,11 +149,11 @@ function splitTitleHall(cell) {
 export function parseEvents(table, today) {
   if (!table || !table.length) return [];
   const lay = layoutOf(table);
-  const roles = headerRoles(table);
+  const columns = rowColumns(table);
   const out = [];
   table.slice(1).forEach((raw, idx) => {
     const cells = raw.map((c) => String(c).trim());
-    while (cells.length < roles.length + lay.roleStart) cells.push("");
+    while (cells.length < columns.length + lay.roleStart) cells.push("");
     const d = parseDateCell(cells[0], today);
     if (!d) return;
     let time, end = "", title, hall;
@@ -164,12 +168,14 @@ export function parseEvents(table, today) {
     }
     const byRole = {};
     let staffed = 0;
-    roles.forEach((role, i) => {
+    let id = "";
+    columns.forEach((role, i) => {
+      if (isIdColumn(role)) { id = cells[i + lay.roleStart]; return; }
       const people = splitPeople(cells[i + lay.roleStart]);
       if (people.length) { byRole[role] = people; staffed += people.length; }
     });
     if (!title && !staffed) return;
-    out.push({row: idx + 2, date: d.date, dateEnd: d.dateEnd, time, end, title: title || "Смена", hall, roles: byRole, staffed: staffed > 0});
+    out.push({row: idx + 2, id, date: d.date, dateEnd: d.dateEnd, time, end, title: title || "Смена", hall, roles: byRole, staffed: staffed > 0});
   });
   return out;
 }
@@ -316,10 +322,10 @@ const dateRangeText = (e, today) => dateTextOf(e.date, today) + (e.dateEnd ? ` �
  * v2: «04.10» | «11:00» | «12:30» | «Название» | «Большая сцена» | «Иванова М.В./ Петрова Л.Н.» | …
  * v1: «04.10\n11.00 и 13.00» | «Название\n(малая сцена)» | … (конец и площадка вне скобок в старом формате не хранятся)
  */
-export function buildRow(event, roles, today, layout = {v: 1}) {
+export function buildRow(event, roles, today, layout = {v: 1}, id = "") {
   const title = String(event.title || "").trim();
   const hall = String(event.hall || "").trim();
-  const people = roles.map((r) => (event.roles?.[r] || []).join("/ "));
+  const people = roles.map((r) => (isIdColumn(r) ? String(id || "") : (event.roles?.[r] || []).join("/ ")));
   if (layout.v === 2) {
     return [dateRangeText(event, today), clock(String(event.time || "").split(/[,;]|\s+и\s+/)[0]), clock(event.end), title, hall, ...people];
   }

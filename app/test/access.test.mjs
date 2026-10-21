@@ -137,3 +137,33 @@ test("подключённый чат не «угоняется» чужим н�
   assert.deepEqual(store.chats().map((c) => [c.chatId, c.phone]), [["7", "9000000002"]]);
   assert.equal(store.requests().length, 0);
 });
+
+test("главное меню: после подключения кнопки вместо списка команд; нажатие кнопки = команда; /start и любое слово — меню; у редактора есть «В группу»", async () => {
+  const {MENU_LABELS, menuRows} = await import("../lib/format.mjs");
+  const {vkKeyboard} = await import("../lib/vk.mjs");
+  const {store, ch, say, last} = make();
+  say(7, "", {phone: "9000000002"}); // Петрова (читатель)
+  assert.doesNotMatch(last(7).text, /\/shifts|\/schedule|Что я умею/, "длинного списка команд больше нет");
+  const rows = menuRows(last(7).options.menu).flat();
+  assert.ok(rows.includes(MENU_LABELS.shifts) && rows.includes(MENU_LABELS.schedule) && rows.includes(MENU_LABELS.login) && !rows.includes(MENU_LABELS.post));
+  say(7, MENU_LABELS.shifts);
+  assert.match(last(7).text, /смен|Ближайших/);
+  say(7, MENU_LABELS.schedule);
+  assert.match(last(7).text, /./);
+  say(7, MENU_LABELS.login);
+  assert.match(last(7).text, /логин/i);
+  say(7, "/start");
+  assert.match(last(7).text, /Главное меню/);
+  say(7, "что-то непонятное");
+  assert.match(last(7).text, /Главное меню/);
+  assert.ok(last(7).options.menu);
+  // ВК: клавиатура не «inline», приложение открывается ссылкой
+  const kb = JSON.parse(vkKeyboard({menu: {editor: true, appUrl: "https://app.test"}}));
+  assert.equal(kb.inline, false);
+  assert.equal(kb.one_time, false);
+  const flat = kb.buttons.flat();
+  assert.ok(flat.some((b) => b.action.type === "open_link" && b.action.link === "https://app.test"));
+  assert.ok(flat.some((b) => b.action.type === "text" && b.action.label === MENU_LABELS.post));
+  // «Опубликовать» — отдельная кнопка внизу при предпросмотре
+  assert.equal(menuRows({editor: true, confirm: true})[0][0], MENU_LABELS.confirmPost);
+});
