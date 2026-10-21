@@ -51,6 +51,8 @@ class Sheet {
   getDataRange() { return new Range(this, 1, 1, Math.max(this.getLastRow(), 1), Math.max(this.getLastColumn(), 1)); }
   insertColumnsBefore(c, n) { for (const row of this.cells) if (row.length >= c) row.splice(c - 1, 0, ...Array(n).fill("")); }
   setRowGroupControlPosition(p) { this.styleLog.push(["groupPos", p]); }
+  deleteColumn(c) { for (const row of this.cells) if (row.length >= c) row.splice(c - 1, 1); this.styleLog.push(["deleteColumn", c]); }
+  hideColumns(c) { this.styleLog.push(["hideColumns", c]); }
   getRowGroupDepth(r) { return this.groups.filter((g) => g.from <= r && g.to >= r).length; }
   getRowGroup(r, depth) {
     const g = this.groups.filter((x) => x.from <= r && x.to >= r)[depth - 1];
@@ -95,7 +97,7 @@ export function loadGas({tabs, props = {}, now = Date.now()}) {
   const fetches = [];
   const triggers = [];
   let clock = now;
-  const respond = (code = 200, text = "{}") => ({getResponseCode: () => code, getContentText: () => text});
+  const respond = (code = 200, text = "{}") => ({getResponseCode: () => code, getContentText: () => text, getBlob: () => ({getBytes: () => signed(Buffer.from(text))})});
   const ctx = {
     console, Date: class extends Date { constructor(...a) { a.length ? super(...a) : super(clock); } static now() { return clock; } },
     SpreadsheetApp: {openById: () => ss, newConditionalFormatRule: () => builder("cf"), newDataValidation: () => builder("dv"), BorderStyle: {SOLID: "SOLID"}, GroupControlTogglePosition: {BEFORE: "BEFORE", AFTER: "AFTER"}},
@@ -113,6 +115,7 @@ export function loadGas({tabs, props = {}, now = Date.now()}) {
       base64EncodeWebSafe: (v) => bytesOf(v).toString("base64").replace(/\+/g, "-").replace(/\//g, "_"),
       base64DecodeWebSafe: (s) => { if (s.length % 4 === 1) throw new Error("Неверный base64"); return signed(Buffer.from(s.replace(/-/g, "+").replace(/_/g, "/"), "base64")); },
       newBlob: (s) => ({getBytes: () => signed(Buffer.from(s)), getDataAsString: () => Buffer.from(s).toString()}),
+      base64Encode: (v) => bytesOf(v).toString("base64"), base64Decode: (s) => signed(Buffer.from(s, "base64")),
       getUuid: randomUUID, sleep: () => {}, formatDate: () => "01.10 10:00",
     },
   };

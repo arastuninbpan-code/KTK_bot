@@ -37,14 +37,20 @@ export function bundle() {
   return text;
 }
 
+// Drive.gs — отдельный файл (загрузка на Google Диск): публикуется отдельно, см. apps_script_bot/.claspignore
+const DRIVE_SRC = join(here, "gas", "drive.gs");
+const DRIVE_OUT = join(here, "..", "apps_script_bot", "Drive.gs");
+
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const text = bundle();
+  const drive = readFileSync(DRIVE_SRC, "utf8");
   if (process.argv.includes("--check")) {
-    const cur = (() => { try { return readFileSync(OUT, "utf8"); } catch { return ""; } })();
-    if (cur !== text) { console.error("apps_script_bot/Code.gs устарел: запустите node app/build-gas.mjs"); process.exit(1); }
-    console.log("Code.gs актуален");
+    const read = (f) => { try { return readFileSync(f, "utf8"); } catch { return ""; } };
+    if (read(OUT) !== text || read(DRIVE_OUT) !== drive) { console.error("apps_script_bot/Code.gs или Drive.gs устарел: запустите node app/build-gas.mjs"); process.exit(1); }
+    console.log("Code.gs и Drive.gs актуальны");
   } else {
     writeFileSync(OUT, text);
-    console.log(`Собрано: ${OUT} (${text.split("\n").length} строк)`);
+    writeFileSync(DRIVE_OUT, drive);
+    console.log(`Собрано: ${OUT} (${text.split("\n").length} строк) и Drive.gs`);
   }
 }

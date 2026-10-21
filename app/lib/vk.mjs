@@ -7,6 +7,7 @@ const UNESCAPE = {"&lt;": "<", "&gt;": ">", "&amp;": "&"};
 /** HTML Telegram -> простой текст для ВК: <s>…</s> зачёркиваем значками, остальные теги убираем, &lt; &gt; &amp; возвращаем. */
 export function htmlToPlain(html) {
   return String(html)
+    .replace(/<a href="([^"]*)">([\s\S]*?)<\/a>/g, (_, url, t) => `${t}: ${url}`) // во ВК нет «ссылок в тексте»: пишем адрес рядом
     .replace(/<s>([\s\S]*?)<\/s>/g, (_, t) => Array.from(t.replace(/<[^>]*>/g, "")).map((c) => (c === " " ? c : c + "̶")).join(""))
     .replace(/<[^>]*>/g, "")
     .replace(/&(?:lt|gt|amp);/g, (m) => UNESCAPE[m]);

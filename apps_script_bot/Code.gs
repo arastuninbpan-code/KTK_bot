@@ -565,6 +565,25 @@ function chunkText(text, max = 3900) {
   return out;
 }
 
+// ---------- собрания: рассылка всем и пост в группу ----------
+const meetingWhen = (e) => {
+  const day = e.dateEnd ? `${dateShort(e.date)} — ${dateShort(e.dateEnd)}` : dateLong(e.date);
+  const time = timeRange(e);
+  return time ? `${day}, ${time}` : day;
+};
+const fileLines = (files) => (files || []).map((f) => `• <a href="${esc(f.url)}">${esc(f.name)}</a>`).join("\n");
+/** Уведомление о новом собрании (всем сотрудникам в личные сообщения): что, когда, где, повестка и ссылки на файлы. */
+function msgMeeting(e, note = "", files = []) {
+  const place = e.hall ? `\n📍 ${esc(cap(e.hall))}` : "";
+  return `📋 <b>Собрание: ${esc(e.title)}</b>\n🗓 ${esc(meetingWhen(e))}${place}${note ? `\n\n${esc(note)}` : ""}${files.length ? `\n\n📎 <b>Файлы</b>\n${fileLines(files)}` : ""}`;
+}
+const msgMeetingFiles = (e, files) => `📎 <b>К собранию «${esc(e.title)}» добавлены файлы</b>\n🗓 ${esc(meetingWhen(e))}\n\n${fileLines(files)}`;
+/** Текст для стены группы ВК и канала: без ссылок на файлы (они только для сотрудников), с приглашением смотреть в приложении. */
+function meetingPostText(e, note = "", hasFiles = false) {
+  const place = e.hall ? `\n📍 ${cap(e.hall)}` : "";
+  return `📋 Собрание: ${e.title}\n🗓 ${meetingWhen(e)}${place}${note ? `\n\n${note}` : ""}${hasFiles ? "\n\n📎 Материалы — в приложении для сотрудников." : ""}`;
+}
+
 // ===== lib/telegram.mjs =====
 // Разбор сообщений Telegram (отправка делается в оболочке платформы).
 
@@ -590,6 +609,7 @@ const UNESCAPE = {"&lt;": "<", "&gt;": ">", "&amp;": "&"};
 /** HTML Telegram -> простой текст для ВК: <s>…</s> зачёркиваем значками, остальные теги убираем, &lt; &gt; &amp; возвращаем. */
 function htmlToPlain(html) {
   return String(html)
+    .replace(/<a href="([^"]*)">([\s\S]*?)<\/a>/g, (_, url, t) => `${t}: ${url}`) // во ВК нет «ссылок в тексте»: пишем адрес рядом
     .replace(/<s>([\s\S]*?)<\/s>/g, (_, t) => Array.from(t.replace(/<[^>]*>/g, "")).map((c) => (c === " " ? c : c + "̶")).join(""))
     .replace(/<[^>]*>/g, "")
     .replace(/&(?:lt|gt|amp);/g, (m) => UNESCAPE[m]);
@@ -1265,13 +1285,15 @@ function editableRoles(store, table) {
   const picked = store.groups().map((g) => all.find((r) => norm(r) === norm(g.name))).filter(Boolean);
   return picked.length ? picked : all;
 }
+const avatarKey = (store) => platform.sha256hex(JSON.stringify(store.avatarsByUid())).slice(0, 10);
+const newId = () => platform.sha256hex(`${platform.randomInt(1e9)}:${platform.randomInt(1e9)}`).slice(0, 8);
 const ISO_RE = /^\d{4}-\d{2}-\d{2}$/;
 const publicUser = (u) => ({name: u.name, role: u.role, roleLabel: ROLE_LABELS[u.role], canEdit: canEdit(u.role)});
 /** Для кнопок «Подключить Telegram / ВК»: к каким каналам уже привязан человек и какой у него логин (он идёт в ссылку-подключение). */
 const connections = (store, me) => ({login: me.login, channels: [...new Set(store.chats().filter((c) => c.phone === me.phone).map((c) => c.channel))]});
 
 function handleApi(req, deps) {
-  const {store, secret, now = () => Date.now(), afterChange = () => {}, getRev = () => "", bumpRev = () => {}} = deps;
+  const {store, secret, now = () => Date.now(), afterChange = () => {}, getRev = () => "", bumpRev = () => {}, saveFile = null, announce = () => {}} = deps;
   const {method, path, body = {}, token} = req;
   try {
     // --- без входа ---
@@ -1295,18 +1317,80 @@ function handleApi(req, deps) {
 
     if (method === "GET" && path === "/api/schedule") {
       const table = store.book.get(TABS.schedule);
+      const metaMap = store.metaMap();
+      const counts = store.commentCounts();
       const events = parseEvents(table, today)
         .filter((e) => (e.dateEnd || e.date) >= addDays(today, -62)) // два месяца назад: для календаря на вкладке «Площадки»
         .sort((a, b) => (a.date + a.time).localeCompare(b.date + b.time))
         .map((e) => ({...e, rev: rev(table[e.row - 1]),
+          meta: e.id && metaMap[e.id] ? {kind: metaMap[e.id].kind, note: metaMap[e.id].note, files: metaMap[e.id].files} : {kind: "event", note: "", files: []},
+          comments: (e.id && counts[e.id] && counts[e.id].n) || 0,
           mine: Object.entries(e.roles).filter(([, names]) => names.some((n) => matchPhones(n, users).includes(me.phone))).map(([role]) => role)}));
       // площадки: список из листа «Площадки» + все, что уже вписано в события
       const venues = [...store.venues()];
       for (const e of events) if (e.hall && !venues.some((v) => norm(v) === norm(e.hall))) venues.push(e.hall);
       const editor = canEdit(me.role);
-      return {status: 200, body: {today, me: {...publicUser(me), ...connections(store, me), off: store.offDates(me.phone).filter((d) => d >= today)}, roles: editableRoles(store, table), allRoles: headerRoles(table), layout: layoutOf(table).v, rev: getRev(), events, venues, venueColors: venueColorMap(store), palette: VENUE_COLORS,
+      return {status: 200, body: {today, me: {...publicUser(me), ...connections(store, me), uid: store.uid(me.phone), off: store.offDates(me.phone).filter((d) => d >= today)}, roles: editableRoles(store, table), allRoles: headerRoles(table), layout: layoutOf(table).v, rev: getRev(), events, venues, venueColors: venueColorMap(store), palette: VENUE_COLORS,
         staff: editor ? store.staffNames() : undefined, groups: editor ? store.groups() : undefined,
-        unavailable: editor ? unavailableMap(store, today) : undefined}};
+        unavailable: editor ? unavailableMap(store, today) : undefined, avatarKey: avatarKey(store), filesReady: Boolean(saveFile)}};
+    }
+
+    // --- аватарки (из профилей ВК и Telegram): {uid: ссылка или маленькая картинка} ---
+    if (path === "/api/avatars" && method === "GET") return {status: 200, body: {items: store.avatarsByUid(), key: avatarKey(store)}};
+
+    // --- переписка по событию ---
+    const eventById = (id) => parseEvents(store.book.get(TABS.schedule), today).find((e) => id && e.id === id);
+    const shape = (c) => ({id: c.id, ts: c.ts, uid: store.uid(c.phone), name: c.name, text: c.text, files: c.files, mine: c.phone === me.phone, canDelete: c.phone === me.phone || canEdit(me.role)});
+    if (path === "/api/comments" && method === "GET") {
+      const id = String(body.event || "");
+      if (!eventById(id)) throw new HttpError(404, "Событие не найдено (возможно, его уже удалили).");
+      const since = Number(body.since) || 0;
+      return {status: 200, body: {items: store.comments(id).filter((c) => c.ts > since).map(shape)}};
+    }
+    if (path === "/api/comments" && method === "POST") {
+      const id = String(body.event || "");
+      if (!eventById(id)) throw new HttpError(404, "Событие не найдено (возможно, его уже удалили).");
+      const text = String(body.text || "").trim();
+      const files = cleanFiles(body.files);
+      if (!text && !files.length) throw new HttpError(400, "Напишите сообщение или приложите файл");
+      if (text.length > 2000) throw new HttpError(400, "Сообщение слишком длинное");
+      return {status: 200, body: {ok: true, item: shape(store.addComment(id, me, text, files))}};
+    }
+    if (path === "/api/comments" && method === "DELETE") {
+      const r = store.deleteComment(String(body.id || ""), me);
+      if (r === null) throw new HttpError(403, "Чужие сообщения удалять может только администратор или редактор.");
+      if (!r) throw new HttpError(404, "Сообщение уже удалено.");
+      return {status: 200, body: {ok: true}};
+    }
+
+    // --- файлы: загрузка на Google Диск (нужен подключённый Диск; ссылку получает тот, кому её покажет приложение) ---
+    if (path === "/api/files" && method === "POST") {
+      if (!saveFile) throw new HttpError(501, "Прикрепление файлов пока не подключено. Попросите администратора системы включить Google Диск.");
+      const data = String(body.data || "");
+      if (!data) throw new HttpError(400, "Файл пустой");
+      if (data.length > 20e6) throw new HttpError(413, "Файл слишком большой (до 14 МБ)");
+      let meta;
+      try { meta = saveFile(String(body.name || "файл").replace(/[\\/:*?"<>|\u0000-\u001f]/g, "_").slice(0, 120), String(body.mime || "application/octet-stream").slice(0, 80), data); }
+      catch (e) { throw new HttpError(502, "Не удалось сохранить файл: " + String(e.message || e).slice(0, 160)); }
+      return {status: 200, body: {ok: true, file: cleanFiles([meta])[0]}};
+    }
+    if (path === "/api/event-files" && ["POST", "DELETE"].includes(method)) {
+      if (!canEdit(me.role)) throw new HttpError(403, "Прикреплять файлы к событию могут администратор и редактор.");
+      const id = String(body.event || "");
+      const ev = eventById(id);
+      if (!ev) throw new HttpError(404, "Событие не найдено (возможно, его уже удалили).");
+      const cur = store.metaMap()[id] || {kind: "event", note: "", files: []};
+      if (method === "DELETE") {
+        store.setMeta(id, {files: cur.files.filter((f) => f.id !== String(body.fileId || ""))});
+      } else {
+        const add = cleanFiles(body.files);
+        if (!add.length) throw new HttpError(400, "Нет файла");
+        if (cur.files.length + add.length > 12) throw new HttpError(400, "К событию можно прикрепить до 12 файлов");
+        store.setMeta(id, {files: [...cur.files, ...add], author: store.uid(me.phone)});
+        if (body.notify && cur.kind === "meeting") { try { announce({kind: "files", event: ev, files: add, publish: false}); } catch (e) { console.error(String(e.message || e)); } }
+      }
+      bumpRev();
+      return {status: 200, body: {ok: true}};
     }
 
     // --- «Не могу работать»: каждый отмечает свои даты ---
@@ -1386,12 +1470,17 @@ function handleApi(req, deps) {
           throw new HttpError(409, `Площадка «${event.hall}» занята: ${c.title}${c.time ? ` (${c.time}${c.end ? "–" + c.end : ""})` : ""}`, {conflicts: clash});
         }
       }
-      const cells = buildRow(event, roles, today, layout);
+      const columns = rowColumns(table);
+      const hasId = columns.some(isIdColumn);
+      const meta = body.meta && typeof body.meta === "object" ? body.meta : null;
+      if (meta && !hasId) throw new HttpError(409, "Таблица ещё готовится (появляется служебная колонка). Повторите через минуту.");
+      const old = method === "PUT" ? parseEvents(table, today).find((e) => e.row === rowNo) : null;
+      const id = hasId ? ((old && old.id) || newId()) : "";
+      const cells = buildRow(event, columns, today, layout, id);
 
       if (method === "POST") {
         writeAt(store, table, event.date, cells, today);
       } else {
-        const old = parseEvents(table, today).find((e) => e.row === rowNo);
         if (old && old.date !== event.date) { // дата изменилась: переносим строку, чтобы лист остался по порядку
           store.book.remove(TABS.schedule, rowNo);
           writeAt(store, store.book.get(TABS.schedule), event.date, cells, today);
@@ -1399,9 +1488,18 @@ function handleApi(req, deps) {
           store.book.set(TABS.schedule, rowNo, cells);
         }
       }
+      if (meta && id) {
+        const kind = meta.kind === "meeting" ? "meeting" : "event";
+        const patch = {kind, note: String(meta.note || ""), author: store.uid(me.phone)};
+        if (meta.files !== undefined) patch.files = meta.files;
+        store.setMeta(id, patch);
+      }
       bumpRev();
       afterChange();
-      return {status: 200, body: {ok: true}};
+      if (method === "POST" && meta && id && meta.kind === "meeting" && meta.announce !== false) {
+        try { announce({kind: "meeting", event: {...event, id}, note: String(meta.note || ""), files: cleanFiles(meta.files), publish: meta.publish !== false}); } catch (e) { console.error(String(e.message || e)); }
+      }
+      return {status: 200, body: {ok: true, id}};
     }
     throw new HttpError(404, "Не найдено");
   } catch (e) {
@@ -1837,6 +1935,64 @@ function vkWallPost_(text) {
 const SENDERS = {telegram: {name: "telegram", send: tgSend_}, vk: {name: "vk", send: vkSend_}};
 
 /** Куда умеем публиковать афишу: стена группы ВК и/или Telegram-канал (если заданы свойства скрипта). */
+/**
+ * Собрание: уведомление ВСЕМ сотрудникам с доступом (в личные сообщения Telegram и ВК) и, если нужно, пост в группу ВК / канал.
+ * kind: "meeting" (новое собрание) или "files" (к собранию добавили файлы).
+ */
+// ---------- аватарки из профилей ----------
+const AVATAR_TTL_ = 7 * 24 * 3600e3; // обновляем раз в неделю
+
+/** ВК: ссылка на фото 100×100 из профиля. */
+function vkAvatar_(userId) {
+  const r = vkCall_("users.get", {user_ids: userId, fields: "photo_100"});
+  return (r && r[0] && r[0].photo_100) || "";
+}
+
+/** Telegram: маленькая (≈160 px) фотография профиля, кладём в таблицу картинкой внутри (ссылка Telegram содержит токен бота и наружу не отдаётся). */
+function tgAvatar_(userId) {
+  const base = "https://api.telegram.org/bot" + prop_("TELEGRAM_BOT_TOKEN");
+  const get = (url) => JSON.parse(fetchTimed_(url, {muteHttpExceptions: true}).getContentText());
+  const photos = get(base + "/getUserProfilePhotos?user_id=" + encodeURIComponent(userId) + "&limit=1");
+  const sizes = photos.result && photos.result.photos && photos.result.photos[0];
+  if (!sizes || !sizes.length) return "";
+  const pick = sizes.find((s) => s.width >= 120) || sizes[sizes.length - 1];
+  const file = get(base + "/getFile?file_id=" + encodeURIComponent(pick.file_id));
+  if (!file.result || !file.result.file_path) return "";
+  const blob = fetchTimed_("https://api.telegram.org/file/bot" + prop_("TELEGRAM_BOT_TOKEN") + "/" + file.result.file_path, {muteHttpExceptions: true}).getBlob();
+  const data = "data:image/jpeg;base64," + Utilities.base64Encode(blob.getBytes());
+  return data.length < 45000 ? data : ""; // в одну ячейку таблицы больше не влезает
+}
+
+/** После ответа боту: если у человека нет свежей аватарки — берём из его профиля (раз в неделю). Любая ошибка молча пропускается. */
+function refreshAvatar_(channel, ev) {
+  try {
+    const st = store_();
+    const chat = st.chats().find((c) => c.channel === channel && c.chatId === String(ev.chatId));
+    if (!chat || Date.now() - st.avatarAge(chat.phone, channel) < AVATAR_TTL_) return;
+    const photo = channel === "vk" ? vkAvatar_(ev.chatId) : tgAvatar_(ev.chatId);
+    st.setAvatar(chat.phone, channel, photo || ""); // пустое значение тоже запоминаем (нет фото) — чтобы не спрашивать при каждом сообщении
+    bumpRev_();
+  } catch (err) { console.error("Аватарка: " + String(err && err.message ? err.message : err)); }
+}
+
+function announce_(a) {
+  const st = store_();
+  const appUrl = prop_("APP_URL") || "";
+  const e = a.event;
+  const text = a.kind === "files" ? msgMeetingFiles(e, a.files || []) : msgMeeting(e, a.note || "", a.files || []);
+  const btn = appButton(appUrl ? appUrl + "#event=" + encodeURIComponent(e.id || "") : "");
+  const people = new Set(st.activeUsers().map((u) => u.phone));
+  let sent = 0;
+  st.chats().filter((c) => people.has(c.phone)).forEach((c) => {
+    try { if (SENDERS[c.channel]) { SENDERS[c.channel].send(c.chatId, text, btn); sent++; } }
+    catch (err) { if (err instanceof Gone) st.unbind(c.channel, c.chatId); else console.error(String(err && err.message ? err.message : err)); }
+  });
+  let posted = [];
+  if (a.kind === "meeting" && a.publish) { try { posted = publishers_().post(meetingPostText(e, a.note || "", (a.files || []).length > 0)); } catch (err) { console.error(String(err && err.message ? err.message : err)); } }
+  diag_("Собрание «" + e.title + "»: разослано " + sent + (posted.length ? "; " + posted.join(" ") : ""));
+  return {sent, posted};
+}
+
 function publishers_() {
   const vk = Boolean(prop_("VK_TOKEN") && prop_("VK_GROUP_ID")), tgc = prop_("TG_CHANNEL");
   return {
@@ -1874,7 +2030,7 @@ function everyMinute() {
   autoStyle_(p);
   const todayStr = todayIso(Date.now());
   if (p.getProperty("months_day") !== todayStr) { p.setProperty("months_day", todayStr); p.setProperty("regroup", "1"); } // новый день: месяц мог стать прошедшим, перекладываем вниз
-  if (p.getProperty("regroup")) { p.deleteProperty("regroup"); try { tidyStaff_(); renderPeopleList_(); syncRoleColumns_(); tidySchedule_(); syncRestoreButtons_(); fillVenueColors_(); renderOccupancy_(); } catch (err) { diag_("Таблица: ОШИБКА — " + String(err && err.message ? err.message : err)); } }
+  if (p.getProperty("regroup")) { p.deleteProperty("regroup"); try { tidyStaff_(); renderPeopleList_(); syncRoleColumns_(); ensureEventIds_(); tidySchedule_(); syncRestoreButtons_(); fillVenueColors_(); renderOccupancy_(); } catch (err) { diag_("Таблица: ОШИБКА — " + String(err && err.message ? err.message : err)); } }
   if (!dueDirty && now - last < 4 * 60e3 + 30e3) return;
   withLock_(() => {
     if (dueDirty) p.deleteProperty("dirty");
@@ -1935,12 +2091,15 @@ function apiCall_(req) {
   const call = () => handleApi({method: req.method || "GET", path: req.path, token: req.token, body: req.body || {}}, {
     store: store_(),
     secret: secret_(),
+    saveFile: typeof driveSave_ === "function" ? driveSave_ : null, // загрузка на Google Диск живёт в отдельном файле Drive.gs (включается отдельно)
+    announce: announce_,
     getRev: getRev_,
     bumpRev: bumpRev_,
     // после правки сразу рассылаем уведомления (не ждём таймера); ошибки рассылки не ломают сохранение
     afterChange: () => { PropertiesService.getScriptProperties().setProperty("regroup", "1"); try { runCycle_(); } catch (err) { console.error(String(err && err.message ? err.message : err)); } },
   });
-  const r = req.method && req.method !== "GET" ? withLock_(call) : call();
+  const lockFree = !req.method || req.method === "GET" || req.path === "/api/files"; // чтение и загрузка файла блокировку не держат
+  const r = lockFree ? call() : withLock_(call);
   return Object.assign({}, r.body, {_status: r.status});
 }
 
@@ -1958,6 +2117,7 @@ function telegramUpdate_(e) {
     try {
       if (READ_ONLY_RE_.test(ev.text || "")) run(); else withLock_(run); // чтение расписания блокировки не требует
       diag_("TG " + speed_(ev, t0));
+      refreshAvatar_("telegram", ev);
     } catch (err) {
       diag_("TG: ОШИБКА — " + (err && err.message ? err.message : (err && err.constructor && err.constructor.name) || err));
     }
@@ -2003,6 +2163,7 @@ function vkUpdate_(e) {
     const run = () => handleMessage({store: store_(), channel: SENDERS.vk, ev, appUrl: prop_("APP_URL") || "", now: Date.now(), publishers: publishers_(), log: diag_, lookupName: () => vkName_(ev.chatId)});
     if (READ_ONLY_RE_.test(ev.text || "")) run(); else withLock_(run); // чтение расписания блокировки не требует
     diag_("VK: сообщение от " + ev.chatId + " обработано, ответ отправлен. " + speed_(ev, t0));
+    refreshAvatar_("vk", ev);
   } catch (err) {
     diag_("VK: ОШИБКА — " + (err && err.message ? err.message : (err && err.constructor && err.constructor.name) || err));
   }
@@ -2075,6 +2236,7 @@ function styleSheets() {
   dropAllCaches_(); // «Сотрудники» только что поменялись: дальше читаем их заново
   renderPeopleList_();
   syncRoleColumns_();
+  ensureEventIds_();
   styleSchedule_(ss.getSheetByName(TABS.schedule));
   styleVenues_(ss.getSheetByName(TABS.venues));
   const chats = ss.getSheetByName(TABS.chats);
@@ -2349,7 +2511,7 @@ function groupMonths_(sheet, fresh) {
   });
 }
 
-const STYLE_VERSION_ = "14"; // поднимайте, когда меняется оформление: таблица перестроится сама при ближайшем срабатывании таймера
+const STYLE_VERSION_ = "15"; // поднимайте, когда меняется оформление: таблица перестроится сама при ближайшем срабатывании таймера
 
 /** После обновления кода один раз оформляет таблицу сама (то же, что ручной запуск styleSheets). */
 function autoStyle_(p) {
@@ -2627,26 +2789,109 @@ function fillVenueColors_() {
 }
 
 /**
- * Должности = колонки-группы в «Сотрудниках». Если администратор добавил новую группу, в «Расписании» появляется колонка с таким названием
- * (справа от последней), и в приложении на неё можно выбирать людей. Уже существующие колонки и данные в них не трогаем.
+ * Должности = колонки-группы в «Сотрудниках».
+ *  • Переименовали группу — в «Расписании» переименуется её колонка, все назначенные люди остаются (это не новая должность).
+ *  • Добавили группу — в «Расписании» появляется новая колонка справа.
+ *  • Удалили группу — колонка в «Расписании» и данные в ней остаются (ничего не стираем).
+ * Названия групп запоминаются в свойстве GROUP_NAMES, по ним отличается «переименовали» от «добавили».
  */
 function syncRoleColumns_() {
   const sheet = SpreadsheetApp.openById(prop_("SHEET_ID")).getSheetByName(TABS.schedule);
   if (!sheet || sheet.getLastColumn() < 1) return false;
-  const head = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getDisplayValues()[0].map((x) => String(x).trim());
+  const readHead = () => sheet.getRange(1, 1, 1, sheet.getLastColumn()).getDisplayValues()[0].map((x) => String(x).trim());
+  let head = readHead();
   if (layoutOf([head]).v !== 2) return false;
+  const p = PropertiesService.getScriptProperties();
+  const names = store_().groups().map((g) => g.name);
+  let prev = null;
+  try { prev = JSON.parse(p.getProperty("GROUP_NAMES") || "null"); } catch (e) { prev = null; }
+  const indexOfName = (n) => head.findIndex((x) => x && !x.startsWith(RESTORE_MARK) && norm(x) === norm(n));
+  let changed = false;
+  const rename = (from, to) => {
+    const i = indexOfName(from);
+    if (i < 0 || indexOfName(to) >= 0) return;
+    sheet.getRange(1, i + 1).setNumberFormat("@").setValue(to);
+    head = readHead();
+    changed = true;
+  };
+  if (Array.isArray(prev) && prev.length === names.length) {
+    names.forEach((n, i) => { if (norm(prev[i]) !== norm(n)) rename(prev[i], n); }); // та же колонка, новое название
+  } else if (!prev) {
+    // первое включение: чиним уже случившийся «дубль» (группу переименовали, а в расписании остался старый столбец и добавился пустой новый)
+    const history = ["Актёры", "Техника", "Зал"].map(norm);
+    const nowSet = new Set(names.map(norm));
+    const idxs = head.map((x, i) => i).filter((i) => head[i] && !head[i].startsWith(RESTORE_MARK) && i >= 5 && !isIdColumn(head[i]));
+    const orphans = idxs.filter((i) => history.indexOf(norm(head[i])) >= 0 && !nowSet.has(norm(head[i])));
+    const lastRow = Math.max(sheet.getLastRow(), 1);
+    const isEmpty = (i) => lastRow < 2 || sheet.getRange(2, i + 1, lastRow - 1, 1).getDisplayValues().every(([v]) => String(v).trim() === "");
+    const fresh = idxs.filter((i) => nowSet.has(norm(head[i])) && history.indexOf(norm(head[i])) < 0 && isEmpty(i));
+    if (orphans.length === 1 && fresh.length === 1) {
+      const to = head[fresh[0]];
+      sheet.deleteColumn(fresh[0] + 1); // пустой «лишний» столбец убираем
+      head = readHead();
+      const from = head[orphans[0] > fresh[0] ? orphans[0] - 1 : orphans[0]];
+      const i = head.findIndex((x) => x === from);
+      sheet.getRange(1, i + 1).setNumberFormat("@").setValue(to); // а в старом остаются все данные, он просто получает новое название
+      head = readHead();
+      changed = true;
+    }
+  }
   const have = new Set(head.filter((x) => x && !x.startsWith(RESTORE_MARK)).map((x) => norm(x)));
-  const missing = store_().groups().map((g) => g.name).filter((n) => !have.has(norm(n)));
-  if (!missing.length) return false;
-  let at = 0;
-  head.forEach((x, i) => { if (x && !x.startsWith(RESTORE_MARK)) at = i + 1; });
-  const btn = head.findIndex((x) => x.startsWith(RESTORE_MARK));
-  if (btn >= 0 && btn === at) sheet.getRange(1, btn + 1).clear(); // красная кнопка стояла на этом месте: ближайшая проверка поставит её правее
-  sheet.getRange(1, at + 1, 1, missing.length).setNumberFormat("@").setValues([missing]);
+  const missing = names.filter((n) => !have.has(norm(n)));
+  if (missing.length) {
+    let at = 0;
+    head.forEach((x, i) => { if (x && !x.startsWith(RESTORE_MARK)) at = i + 1; });
+    const btn = head.findIndex((x) => x.startsWith(RESTORE_MARK));
+    if (btn >= 0 && btn === at) sheet.getRange(1, btn + 1).clear(); // красная кнопка стояла на этом месте: ближайшая проверка поставит её правее
+    sheet.getRange(1, at + 1, 1, missing.length).setNumberFormat("@").setValues([missing]);
+    changed = true;
+  }
+  p.setProperty("GROUP_NAMES", JSON.stringify(names));
+  if (!changed) return false;
   styleSchedule_(sheet);
   dropAllCaches_();
   bumpRev_();
   return true;
+}
+
+/**
+ * Служебная колонка «ID» (скрытая) в «Расписании»: у каждого события свой короткий номер, по нему находятся комментарии, файлы и тип «Собрание».
+ * Добавляется справа сама; строкам без номера (например, вписанным руками) номера выдаются при ближайшей проверке.
+ */
+function ensureEventIds_() {
+  const sheet = SpreadsheetApp.openById(prop_("SHEET_ID")).getSheetByName(TABS.schedule);
+  if (!sheet || sheet.getLastColumn() < 1) return false;
+  const head = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getDisplayValues()[0].map((x) => String(x).trim());
+  if (layoutOf([head]).v !== 2) return false;
+  let changed = false;
+  if (!head.some((x) => isIdColumn(x))) {
+    let at = 0;
+    head.forEach((x, i) => { if (x && !x.startsWith(RESTORE_MARK)) at = i + 1; });
+    const btn = head.findIndex((x) => x.startsWith(RESTORE_MARK));
+    if (btn >= 0 && btn === at) sheet.getRange(1, btn + 1).clear();
+    sheet.getRange(1, at + 1).setNumberFormat("@").setValue("ID");
+    styleHeaderRange_(sheet.getRange(1, at + 1));
+    sheet.setColumnWidth(at + 1, 80);
+    sheet.hideColumns(at + 1);
+    dropAllCaches_();
+    changed = true;
+  }
+  const book = new GasBook();
+  const table = book.get(TABS.schedule);
+  const col = rowColumns(table).findIndex((c) => isIdColumn(c));
+  if (col < 0) return changed;
+  const vcol = col + layoutOf(table).roleStart + 1; // номер колонки в «каноническом» виде (учитывает переставленные колонки)
+  const events = parseEvents(table, todayIso(Date.now()));
+  const used = new Set(events.map((e) => e.id).filter(Boolean));
+  events.filter((e) => !e.id).forEach((e) => {
+    let id;
+    do { id = Utilities.getUuid().replace(/-/g, "").slice(0, 8); } while (used.has(id));
+    used.add(id);
+    book.setCell(TABS.schedule, e.row, vcol, id);
+    changed = true;
+  });
+  if (changed) { dropAllCaches_(); bumpRev_(); }
+  return changed;
 }
 
 /** Колонки с людьми в «Расписании» (всё правее «Площадки») — выпадающие списки сотрудников. Вписать другое можно, но клетка получит отметку. */
@@ -2659,7 +2904,7 @@ function applyPeopleValidation_(sheet) {
   if (!plan) return;
   const rule = SpreadsheetApp.newDataValidation().requireValueInRange(people.getRange("A2:A1000"), true).setAllowInvalid(true).build();
   const rows = Math.max(sheet.getMaxRows() - 1, 1);
-  plan.perm.slice(5).forEach((col) => sheet.getRange(2, col + 1, rows, 1).setDataValidation(rule));
+  plan.perm.slice(5).filter((col) => !isIdColumn(head[col])).forEach((col) => sheet.getRange(2, col + 1, rows, 1).setDataValidation(rule));
 }
 
 const OCC_COL_ = 4; // таблица занятости лежит в листе «Площадки» правее названий: колонки D–H

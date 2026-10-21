@@ -172,3 +172,22 @@ export function chunkText(text, max = 3900) {
   if (cur) out.push(cur);
   return out;
 }
+
+// ---------- собрания: рассылка всем и пост в группу ----------
+const meetingWhen = (e) => {
+  const day = e.dateEnd ? `${dateShort(e.date)} — ${dateShort(e.dateEnd)}` : dateLong(e.date);
+  const time = timeRange(e);
+  return time ? `${day}, ${time}` : day;
+};
+const fileLines = (files) => (files || []).map((f) => `• <a href="${esc(f.url)}">${esc(f.name)}</a>`).join("\n");
+/** Уведомление о новом собрании (всем сотрудникам в личные сообщения): что, когда, где, повестка и ссылки на файлы. */
+export function msgMeeting(e, note = "", files = []) {
+  const place = e.hall ? `\n📍 ${esc(cap(e.hall))}` : "";
+  return `📋 <b>Собрание: ${esc(e.title)}</b>\n🗓 ${esc(meetingWhen(e))}${place}${note ? `\n\n${esc(note)}` : ""}${files.length ? `\n\n📎 <b>Файлы</b>\n${fileLines(files)}` : ""}`;
+}
+export const msgMeetingFiles = (e, files) => `📎 <b>К собранию «${esc(e.title)}» добавлены файлы</b>\n🗓 ${esc(meetingWhen(e))}\n\n${fileLines(files)}`;
+/** Текст для стены группы ВК и канала: без ссылок на файлы (они только для сотрудников), с приглашением смотреть в приложении. */
+export function meetingPostText(e, note = "", hasFiles = false) {
+  const place = e.hall ? `\n📍 ${cap(e.hall)}` : "";
+  return `📋 Собрание: ${e.title}\n🗓 ${meetingWhen(e)}${place}${note ? `\n\n${note}` : ""}${hasFiles ? "\n\n📎 Материалы — в приложении для сотрудников." : ""}`;
+}
