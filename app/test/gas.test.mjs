@@ -679,3 +679,15 @@ test("удалили все события текущего месяца: шап
   g.run("tidySchedule_()");
   assert.equal(sch.getDataRange().getDisplayValues().filter((r) => r[0] === "ОКТЯБРЬ 2026").length, 1, "шапка не дублируется");
 });
+
+test("событие можно создать совсем без сотрудников (и без времени, и с пустыми списками должностей)", () => {
+  const g = G();
+  g.run("styleSheets()"); g.run("store_().ensureLogins()");
+  const t = api(g, {method: "POST", path: "/api/login", body: {login: g.run("store_().users().find((u) => u.phone === '9000000001').login")}}).token;
+  for (const [title, roles, time] of [["Без людей", {}, ""], ["Пустые списки", {"Актёры": [], "Техника": []}, "10:00"]]) {
+    const r = api(g, {method: "POST", path: "/api/events", token: t, body: {event: {title, date: "2026-10-21", dateEnd: "", time, end: "", hall: "", roles}}});
+    assert.equal(r._status, 200, title);
+  }
+  const s = api(g, {method: "GET", path: "/api/schedule", token: t});
+  assert.deepEqual(s.events.filter((e) => /Без людей|Пустые списки/.test(e.title)).map((e) => Object.keys(e.roles).length), [0, 0]);
+});

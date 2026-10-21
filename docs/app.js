@@ -706,7 +706,7 @@ function editor(e) {
         h("label", {class: "field", style: "flex:1"}, h("span", {}, "Окончание"), end)),
       draft.extra.length ? h("div", {class: "hint-line"}, "Ещё время в таблице: " + draft.extra.join(", ")) : null,
       h("div", {class: "field"}, h("span", {}, "Площадка"), hallChips, warn),
-      h("div", {class: "field"}, h("span", {}, "Кто занят"), ...roleBlocks, warnOff),
+      h("div", {class: "field"}, h("span", {}, "Кто занят"), h("div", {class: "hint-line"}, "Необязательно: можно создать событие без сотрудников и назначить их позже."), ...roleBlocks, warnOff),
       err,
       h("div", {class: "actions"}, h("button", {class: "btn light", onclick: () => close()}, "Отмена"), save)));
   };
