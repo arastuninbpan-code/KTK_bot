@@ -261,7 +261,7 @@ const SENDERS = {telegram: {name: "telegram", send: tgSend_}, vk: {name: "vk", s
 /** Куда умеем публиковать афишу: стена группы ВК и/или Telegram-канал (если заданы свойства скрипта). */
 /**
  * Собрание: уведомление ВСЕМ сотрудникам с доступом (в личные сообщения Telegram и ВК) и, если нужно, пост в группу ВК / канал.
- * kind: "meeting" (новое собрание) или "files" (к собранию добавили файлы).
+ * Текст собрания (повестка / текст приложенного документа) уходит текстом.
  */
 // ---------- аватарки из профилей ----------
 const AVATAR_TTL_ = 7 * 24 * 3600e3; // обновляем раз в неделю
@@ -303,7 +303,7 @@ function announce_(a) {
   const st = store_();
   const appUrl = prop_("APP_URL") || "";
   const e = a.event;
-  const text = a.kind === "files" ? msgMeetingFiles(e, a.files || []) : msgMeeting(e, a.note || "", a.files || []);
+  const text = msgMeeting(e, a.note || "");
   const btn = appButton(appUrl ? appUrl + "#event=" + encodeURIComponent(e.id || "") : "");
   const people = new Set(st.activeUsers().map((u) => u.phone));
   let sent = 0;
@@ -312,7 +312,7 @@ function announce_(a) {
     catch (err) { if (err instanceof Gone) st.unbind(c.channel, c.chatId); else console.error(String(err && err.message ? err.message : err)); }
   });
   let posted = [];
-  if (a.kind === "meeting" && a.publish) { try { posted = publishers_().post(meetingPostText(e, a.note || "", (a.files || []).length > 0)); } catch (err) { console.error(String(err && err.message ? err.message : err)); } }
+  if (a.kind === "meeting" && a.publish) { try { posted = publishers_().post(meetingPostText(e, a.note || "")); } catch (err) { console.error(String(err && err.message ? err.message : err)); } }
   diag_("Собрание «" + e.title + "»: разослано " + sent + (posted.length ? "; " + posted.join(" ") : ""));
   return {sent, posted};
 }
@@ -415,14 +415,13 @@ function apiCall_(req) {
   const call = () => handleApi({method: req.method || "GET", path: req.path, token: req.token, body: req.body || {}}, {
     store: store_(),
     secret: secret_(),
-    saveFile: typeof driveSave_ === "function" ? driveSave_ : null, // загрузка на Google Диск живёт в отдельном файле Drive.gs (включается отдельно)
     announce: announce_,
     getRev: getRev_,
     bumpRev: bumpRev_,
     // после правки сразу рассылаем уведомления (не ждём таймера); ошибки рассылки не ломают сохранение
     afterChange: () => { PropertiesService.getScriptProperties().setProperty("regroup", "1"); try { runCycle_(); } catch (err) { console.error(String(err && err.message ? err.message : err)); } },
   });
-  const lockFree = !req.method || req.method === "GET" || req.path === "/api/files"; // чтение и загрузка файла блокировку не держат
+  const lockFree = !req.method || req.method === "GET"; // чтение блокировку не держит
   const r = lockFree ? call() : withLock_(call);
   return Object.assign({}, r.body, {_status: r.status});
 }

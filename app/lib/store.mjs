@@ -2,24 +2,15 @@
 import {normPhone, phonesIn} from "./core.mjs";
 import {platform} from "./platform.mjs";
 
-export const TABS = {schedule: "Расписание", staff: "Сотрудники", venues: "Площадки", chats: "Подписчики", requests: "_заявки", people: "_люди", off: "_недоступность", comments: "_комментарии", meta: "_события", avatars: "_аватары", state: "_служебное", lock: "_замок"};
+export const TABS = {schedule: "Расписание", staff: "Сотрудники", venues: "Площадки", chats: "Подписчики", requests: "_заявки", people: "_люди", off: "_недоступность", comments: "_комментарии", meta: "_события", avatars: "_аватары", photos: "_фото", state: "_служебное", lock: "_замок"};
 export const REQUESTS_HEADER = ["Канал", "ID чата", "Телефон"];
-export const COMMENT_HEADER = ["ID события", "ID", "Время", "Телефон", "Имя", "Текст", "Файлы"];
-export const META_HEADER = ["ID события", "Тип", "Описание", "Файлы", "Автор", "Создано"];
+export const COMMENT_HEADER = ["ID события", "ID", "Время", "Телефон", "Имя", "Текст", "Фото"];
+export const META_HEADER = ["ID события", "Тип", "Описание", "—", "Автор", "Создано"];
 export const AVATAR_HEADER = ["Телефон", "Канал", "Фото", "Обновлено"];
-/** Файл в сообщении/событии: храним только известные поля, ссылка — только на Google Диск (чужие адреса в приложение не пускаем). */
-export function cleanFiles(list) {
-  const out = [];
-  for (const f of Array.isArray(list) ? list : []) {
-    if (!f || typeof f !== "object") continue;
-    const url = String(f.url || "");
-    if (!/^https:\/\/(drive|docs)\.google\.com\//.test(url)) continue;
-    const thumb = /^https:\/\/(drive|docs|lh\d)\.(google|googleusercontent)\.com\//.test(String(f.thumb || "")) ? String(f.thumb) : "";
-    out.push({id: String(f.id || "").slice(0, 100), name: String(f.name || "файл").slice(0, 120), mime: String(f.mime || "").slice(0, 80), size: Math.max(0, Math.round(Number(f.size) || 0)), url, thumb});
-    if (out.length >= 8) break;
-  }
-  return out;
-}
+/** Фото в сообщении переписки: храним только короткие номера (сами картинки лежат в скрытом служебном листе кусками). */
+export const cleanPhotoIds = (list) => [...new Set((Array.isArray(list) ? list : []).map(String).filter((id) => /^[0-9a-f]{12}$/.test(id)))].slice(0, 4);
+export const PHOTO_HEADER = ["ID фото", "Часть", "Данные"];
+const PHOTO_CHUNK = 40000; // в ячейку таблицы помещается до 50 000 знаков
 const parseJson = (t, fallback) => { try { const v = JSON.parse(t); return v == null ? fallback : v; } catch { return fallback; } };
 export const OFF_HEADER = ["Телефон", "ФИО", "Дата"];
 export const VENUES_HEADER = ["Площадка", "Заметка", "Цвет"];
@@ -221,7 +212,7 @@ export class Store {
     for (const r of this.book.get(TABS.meta).slice(1)) {
       const id = String(r[0] || "").trim();
       if (!id) continue;
-      out[id] = {kind: String(r[1] || "") === "meeting" ? "meeting" : "event", note: String(r[2] || ""), files: cleanFiles(parseJson(r[3], [])), author: String(r[4] || ""), created: Number(r[5]) || 0, row: 0};
+      out[id] = {kind: String(r[1] || "") === "meeting" ? "meeting" : "event", note: String(r[2] || ""), author: String(r[4] || ""), created: Number(r[5]) || 0, row: 0};
     }
     return out;
   }
@@ -234,8 +225,8 @@ export class Store {
     const cur = at >= 0 ? rows[at] : [eventId, "event", "", "[]", "", String(this.now())];
     const next = [eventId,
       patch.kind ? (patch.kind === "meeting" ? "meeting" : "event") : String(cur[1] || "event"),
-      patch.note !== undefined ? String(patch.note).slice(0, 4000) : String(cur[2] || ""),
-      patch.files !== undefined ? JSON.stringify(cleanFiles(patch.files)) : String(cur[3] || "[]"),
+      patch.note !== undefined ? String(patch.note).slice(0, 12000) : String(cur[2] || ""),
+      "[]",
       patch.author !== undefined ? String(patch.author) : String(cur[4] || ""),
       String(cur[5] || this.now())];
     if (at >= 0) this.book.set(TABS.meta, at + 1, next); else this.book.append(TABS.meta, next);
@@ -246,7 +237,7 @@ export class Store {
     if (!this.book.has(TABS.comments)) return [];
     return this.book.get(TABS.comments).slice(1)
       .filter((r) => String(r[0] || "").trim() === eventId)
-      .map((r) => ({id: String(r[1] || ""), ts: Number(r[2]) || 0, phone: normPhone(r[3] || ""), name: String(r[4] || ""), text: String(r[5] || ""), files: cleanFiles(parseJson(r[6], []))}))
+      .map((r) => ({id: String(r[1] || ""), ts: Number(r[2]) || 0, phone: normPhone(r[3] || ""), name: String(r[4] || ""), text: String(r[5] || ""), photos: cleanPhotoIds(parseJson(r[6], []))}))
       .sort((a, b) => a.ts - b.ts);
   }
 
@@ -263,10 +254,10 @@ export class Store {
     return out;
   }
 
-  addComment(eventId, user, text, files = []) {
+  addComment(eventId, user, text, photos = []) {
     this.book.ensure(TABS.comments, COMMENT_HEADER);
-    const c = {id: platform.sha256hex(`${eventId}:${user.phone}:${this.now()}:${platform.randomInt(1e9)}`).slice(0, 12), ts: this.now(), phone: user.phone, name: user.name, text: String(text || "").trim().slice(0, 2000), files: cleanFiles(files)};
-    this.book.append(TABS.comments, [eventId, c.id, String(c.ts), c.phone, c.name, c.text, JSON.stringify(c.files)]);
+    const c = {id: platform.sha256hex(`${eventId}:${user.phone}:${this.now()}:${platform.randomInt(1e9)}`).slice(0, 12), ts: this.now(), phone: user.phone, name: user.name, text: String(text || "").trim().slice(0, 2000), photos: cleanPhotoIds(photos)};
+    this.book.append(TABS.comments, [eventId, c.id, String(c.ts), c.phone, c.name, c.text, JSON.stringify(c.photos)]);
     return c;
   }
 
@@ -279,6 +270,21 @@ export class Store {
     if (normPhone(rows[at][3] || "") !== user.phone && !canEdit(user.role)) return null;
     this.book.remove(TABS.comments, at + 1);
     return true;
+  }
+
+  // --- фото из переписки: сжатая картинка (base64) режется на куски по ячейкам скрытого листа «_фото» ---
+  addPhoto(base64) {
+    this.book.ensure(TABS.photos, PHOTO_HEADER);
+    const id = platform.sha256hex(`${base64.length}:${this.now()}:${platform.randomInt(1e9)}`).slice(0, 12);
+    for (let i = 0, n = 0; i < base64.length; i += PHOTO_CHUNK, n++) this.book.append(TABS.photos, [id, String(n), base64.slice(i, i + PHOTO_CHUNK)]);
+    return id;
+  }
+
+  /** Картинка целиком (data-ссылка) или "" если такой нет. */
+  photo(id) {
+    if (!this.book.has(TABS.photos)) return "";
+    const parts = this.book.get(TABS.photos).slice(1).filter((r) => String(r[0] || "") === id).sort((a, b) => Number(a[1]) - Number(b[1]));
+    return parts.length ? "data:image/jpeg;base64," + parts.map((r) => String(r[2] || "")).join("") : "";
   }
 
   // --- аватарки: из профиля ВК (ссылка) и Telegram (маленькая картинка внутри). Ключ — телефон ---

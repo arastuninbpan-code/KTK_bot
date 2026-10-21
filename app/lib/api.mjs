@@ -2,7 +2,7 @@
 import {makeToken, readToken} from "./auth.mjs";
 import {addDays, buildRow, daysOf, findConflicts, headerRoles, isIdColumn, layoutOf, rowColumns, matchPhones, norm, parseDate, parseEvents, todayIso, validateEvent} from "./core.mjs";
 import {platform} from "./platform.mjs";
-import {canEdit, cleanFiles, colorName, ROLE_LABELS, TABS, VENUE_COLORS} from "./store.mjs";
+import {canEdit, cleanPhotoIds, colorName, ROLE_LABELS, TABS, VENUE_COLORS} from "./store.mjs";
 
 class HttpError extends Error {
   constructor(status, message, extra = {}) { super(message); this.status = status; this.extra = extra; }
@@ -53,7 +53,7 @@ const publicUser = (u) => ({name: u.name, role: u.role, roleLabel: ROLE_LABELS[u
 const connections = (store, me) => ({login: me.login, channels: [...new Set(store.chats().filter((c) => c.phone === me.phone).map((c) => c.channel))]});
 
 export function handleApi(req, deps) {
-  const {store, secret, now = () => Date.now(), afterChange = () => {}, getRev = () => "", bumpRev = () => {}, saveFile = null, announce = () => {}} = deps;
+  const {store, secret, now = () => Date.now(), afterChange = () => {}, getRev = () => "", bumpRev = () => {}, announce = () => {}} = deps;
   const {method, path, body = {}, token} = req;
   try {
     // --- без входа ---
@@ -83,7 +83,7 @@ export function handleApi(req, deps) {
         .filter((e) => (e.dateEnd || e.date) >= addDays(today, -62)) // два месяца назад: для календаря на вкладке «Площадки»
         .sort((a, b) => (a.date + a.time).localeCompare(b.date + b.time))
         .map((e) => ({...e, rev: rev(table[e.row - 1]),
-          meta: e.id && metaMap[e.id] ? {kind: metaMap[e.id].kind, note: metaMap[e.id].note, files: metaMap[e.id].files} : {kind: "event", note: "", files: []},
+          meta: e.id && metaMap[e.id] ? {kind: metaMap[e.id].kind, note: metaMap[e.id].note} : {kind: "event", note: ""},
           comments: (e.id && counts[e.id] && counts[e.id].n) || 0,
           mine: Object.entries(e.roles).filter(([, names]) => names.some((n) => matchPhones(n, users).includes(me.phone))).map(([role]) => role)}));
       // площадки: список из листа «Площадки» + все, что уже вписано в события
@@ -92,7 +92,7 @@ export function handleApi(req, deps) {
       const editor = canEdit(me.role);
       return {status: 200, body: {today, me: {...publicUser(me), ...connections(store, me), uid: store.uid(me.phone), off: store.offDates(me.phone).filter((d) => d >= today)}, roles: editableRoles(store, table), allRoles: headerRoles(table), layout: layoutOf(table).v, rev: getRev(), events, venues, venueColors: venueColorMap(store), palette: VENUE_COLORS,
         staff: editor ? store.staffNames() : undefined, groups: editor ? store.groups() : undefined,
-        unavailable: editor ? unavailableMap(store, today) : undefined, avatarKey: avatarKey(store), filesReady: Boolean(saveFile)}};
+        unavailable: editor ? unavailableMap(store, today) : undefined, avatarKey: avatarKey(store)}};
     }
 
     // --- аватарки (из профилей ВК и Telegram): {uid: ссылка или маленькая картинка} ---
@@ -100,7 +100,7 @@ export function handleApi(req, deps) {
 
     // --- переписка по событию ---
     const eventById = (id) => parseEvents(store.book.get(TABS.schedule), today).find((e) => id && e.id === id);
-    const shape = (c) => ({id: c.id, ts: c.ts, uid: store.uid(c.phone), name: c.name, text: c.text, files: c.files, mine: c.phone === me.phone, canDelete: c.phone === me.phone || canEdit(me.role)});
+    const shape = (c) => ({id: c.id, ts: c.ts, uid: store.uid(c.phone), name: c.name, text: c.text, photos: c.photos, mine: c.phone === me.phone, canDelete: c.phone === me.phone || canEdit(me.role)});
     if (path === "/api/comments" && method === "GET") {
       const id = String(body.event || "");
       if (!eventById(id)) throw new HttpError(404, "Событие не найдено (возможно, его уже удалили).");
@@ -111,10 +111,10 @@ export function handleApi(req, deps) {
       const id = String(body.event || "");
       if (!eventById(id)) throw new HttpError(404, "Событие не найдено (возможно, его уже удалили).");
       const text = String(body.text || "").trim();
-      const files = cleanFiles(body.files);
-      if (!text && !files.length) throw new HttpError(400, "Напишите сообщение или приложите файл");
+      const photos = cleanPhotoIds(body.photos);
+      if (!text && !photos.length) throw new HttpError(400, "Напишите сообщение или приложите фото");
       if (text.length > 2000) throw new HttpError(400, "Сообщение слишком длинное");
-      return {status: 200, body: {ok: true, item: shape(store.addComment(id, me, text, files))}};
+      return {status: 200, body: {ok: true, item: shape(store.addComment(id, me, text, photos))}};
     }
     if (path === "/api/comments" && method === "DELETE") {
       const r = store.deleteComment(String(body.id || ""), me);
@@ -123,34 +123,18 @@ export function handleApi(req, deps) {
       return {status: 200, body: {ok: true}};
     }
 
-    // --- файлы: загрузка на Google Диск (нужен подключённый Диск; ссылку получает тот, кому её покажет приложение) ---
-    if (path === "/api/files" && method === "POST") {
-      if (!saveFile) throw new HttpError(501, "Прикрепление файлов пока не подключено. Попросите администратора системы включить Google Диск.");
-      const data = String(body.data || "");
-      if (!data) throw new HttpError(400, "Файл пустой");
-      if (data.length > 20e6) throw new HttpError(413, "Файл слишком большой (до 14 МБ)");
-      let meta;
-      try { meta = saveFile(String(body.name || "файл").replace(/[\\/:*?"<>|\u0000-\u001f]/g, "_").slice(0, 120), String(body.mime || "application/octet-stream").slice(0, 80), data); }
-      catch (e) { throw new HttpError(502, "Не удалось сохранить файл: " + String(e.message || e).slice(0, 160)); }
-      return {status: 200, body: {ok: true, file: cleanFiles([meta])[0]}};
+    // --- фото в переписке: уже сжатая в приложении картинка (JPEG, base64) хранится в скрытом листе; наружу (боты, группа) не уходит ---
+    if (path === "/api/photos" && method === "POST") {
+      const data = String(body.data || "").replace(/^data:image\/jpeg;base64,/, "");
+      if (!/^[A-Za-z0-9+/=]+$/.test(data) || data.length < 100) throw new HttpError(400, "Это не похоже на фото");
+      if (data.length > 160000) throw new HttpError(413, "Фото слишком большое. Попробуйте ещё раз: приложение само уменьшит его.");
+      return {status: 200, body: {ok: true, id: store.addPhoto(data)}};
     }
-    if (path === "/api/event-files" && ["POST", "DELETE"].includes(method)) {
-      if (!canEdit(me.role)) throw new HttpError(403, "Прикреплять файлы к событию могут администратор и редактор.");
-      const id = String(body.event || "");
-      const ev = eventById(id);
-      if (!ev) throw new HttpError(404, "Событие не найдено (возможно, его уже удалили).");
-      const cur = store.metaMap()[id] || {kind: "event", note: "", files: []};
-      if (method === "DELETE") {
-        store.setMeta(id, {files: cur.files.filter((f) => f.id !== String(body.fileId || ""))});
-      } else {
-        const add = cleanFiles(body.files);
-        if (!add.length) throw new HttpError(400, "Нет файла");
-        if (cur.files.length + add.length > 12) throw new HttpError(400, "К событию можно прикрепить до 12 файлов");
-        store.setMeta(id, {files: [...cur.files, ...add], author: store.uid(me.phone)});
-        if (body.notify && cur.kind === "meeting") { try { announce({kind: "files", event: ev, files: add, publish: false}); } catch (e) { console.error(String(e.message || e)); } }
-      }
-      bumpRev();
-      return {status: 200, body: {ok: true}};
+    if (path === "/api/photos" && method === "GET") {
+      const id = String(body.id || "");
+      const data = /^[0-9a-f]{12}$/.test(id) ? store.photo(id) : "";
+      if (!data) throw new HttpError(404, "Фото не найдено");
+      return {status: 200, body: {data}};
     }
 
     // --- «Не могу работать»: каждый отмечает свои даты ---
@@ -261,13 +245,12 @@ export function handleApi(req, deps) {
       if (meta && id) {
         const kind = meta.kind === "meeting" ? "meeting" : "event";
         const patch = {kind, note: String(meta.note || ""), author: store.uid(me.phone)};
-        if (meta.files !== undefined) patch.files = meta.files;
         store.setMeta(id, patch);
       }
       bumpRev();
       afterChange();
       if (method === "POST" && meta && id && meta.kind === "meeting" && meta.announce !== false) {
-        try { announce({kind: "meeting", event: {...event, id}, note: String(meta.note || ""), files: cleanFiles(meta.files), publish: meta.publish !== false}); } catch (e) { console.error(String(e.message || e)); }
+        try { announce({kind: "meeting", event: {...event, id}, note: String(meta.note || ""), publish: meta.publish !== false}); } catch (e) { console.error(String(e.message || e)); }
       }
       return {status: 200, body: {ok: true, id}};
     }

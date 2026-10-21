@@ -5,7 +5,7 @@ const WD = ["Вс", "Пн", "Вт", "Ср", "Чт", "Пт", "Сб"];
 // цвета меток разделов (Администратор, Гардероб, Касса…): по порядку колонок таблицы, из палитры
 const TAG_COLORS = [["#0A96DC", "#fff"], ["#F2961E", "#fff"], ["#F04E4A", "#fff"], ["#F4C79A", "#1B3560"], ["#1B3560", "#fff"], ["#D4F1FC", "#1B3560"]];
 
-const state = {token: localStorage.getItem("ktk_token") || "", me: null, events: [], roles: [], allRoles: [], staff: [], venues: [], venueColors: {}, palette: [], groups: [], layout: 2, rev: "", today: "", day: "", calMonth: "", tab: "all", ready: false, offline: false, savedAt: 0, unavailable: {}, avatars: {}, avatarKey: "", filesReady: false};
+const state = {token: localStorage.getItem("ktk_token") || "", me: null, events: [], roles: [], allRoles: [], staff: [], venues: [], venueColors: {}, palette: [], groups: [], layout: 2, rev: "", today: "", day: "", calMonth: "", tab: "all", ready: false, offline: false, savedAt: 0, unavailable: {}, avatars: {}, avatarKey: ""};
 const root = document.getElementById("root");
 
 // ---------- разметка без innerHTML ----------
@@ -394,40 +394,113 @@ async function loadAvatars(key) {
   } catch (_) { /* нет связи — останутся прошлые */ }
 }
 
-// ---------- файлы: выбор, сжатие фото, загрузка ----------
-const MAX_FILE = 12 * 1024 * 1024;
-const fileIcon = (mime) => (/^image\//.test(mime) ? "🖼" : /pdf/.test(mime) ? "📕" : /word|document/.test(mime) ? "📄" : /sheet|excel/.test(mime) ? "📊" : /presentation|powerpoint/.test(mime) ? "📽" : "📎");
-const sizeText = (n) => (n > 1048576 ? (n / 1048576).toFixed(1).replace(".", ",") + " МБ" : Math.max(1, Math.round(n / 1024)) + " КБ");
+// ---------- фото в переписке и текст из документа ----------
+const PHOTO_MAX_CHARS = 150000; // сколько знаков base64 принимает сервер (≈110 КБ картинки)
 const toBase64 = (blob) => new Promise((res, rej) => { const r = new FileReader(); r.onload = () => res(String(r.result).split(",")[1] || ""); r.onerror = () => rej(new Error("Не удалось прочитать файл")); r.readAsDataURL(blob); });
 
-/** Фото уменьшаем до 1600 px и сжимаем: быстрее грузится и влезает в таблицу/Диск. Остальные файлы — как есть (до 12 МБ). */
-async function prepareFile(file) {
-  let blob = file, name = file.name || "файл", mime = file.type || "application/octet-stream";
-  if (/^image\/(jpeg|png|webp)$/.test(mime) && file.size > 250 * 1024 && window.createImageBitmap) {
-    try {
-      const bmp = await createImageBitmap(file);
-      const k = Math.min(1, 1600 / Math.max(bmp.width, bmp.height));
-      const c = document.createElement("canvas"); c.width = Math.round(bmp.width * k); c.height = Math.round(bmp.height * k);
-      c.getContext("2d").drawImage(bmp, 0, 0, c.width, c.height);
-      const small = await new Promise((res) => c.toBlob(res, "image/jpeg", 0.82));
-      if (small && small.size < file.size) { blob = small; mime = "image/jpeg"; name = name.replace(/\.[^.]+$/, "") + ".jpg"; }
-    } catch (_) { /* оставляем исходный файл */ }
+/** Фото сжимаем до размера, который помещается в хранилище: уменьшаем сторону и качество, пока не влезет. */
+async function compressPhoto(file) {
+  if (!/^image\//.test(file.type || "")) throw new Error(`«${file.name || "файл"}» — не фото. В переписку можно прикладывать только фотографии.`);
+  let bmp;
+  try { bmp = await createImageBitmap(file); } catch (_) { throw new Error("Не удалось открыть фото. Попробуйте другое."); }
+  for (const side of [1280, 1024, 800, 640, 480]) {
+    const k = Math.min(1, side / Math.max(bmp.width, bmp.height));
+    const c = document.createElement("canvas"); c.width = Math.max(1, Math.round(bmp.width * k)); c.height = Math.max(1, Math.round(bmp.height * k));
+    c.getContext("2d").drawImage(bmp, 0, 0, c.width, c.height);
+    for (const q of [0.78, 0.64, 0.5, 0.4]) {
+      const blob = await new Promise((res) => c.toBlob(res, "image/jpeg", q));
+      if (blob && Math.ceil(blob.size * 4 / 3) <= PHOTO_MAX_CHARS) return {blob, preview: URL.createObjectURL(blob), name: file.name};
+    }
   }
-  if (blob.size > MAX_FILE) throw new Error(`«${name}» слишком большой (${sizeText(blob.size)}). Можно до 12 МБ.`);
-  return {name, mime, blob, preview: /^image\//.test(mime) ? URL.createObjectURL(blob) : ""};
+  throw new Error("Фото не удалось уменьшить. Попробуйте другое.");
 }
-async function uploadFile(p) {
-  const r = await api("POST", "/api/files", {name: p.name, mime: p.mime, data: await toBase64(p.blob)});
-  return r.file;
+async function uploadPhoto(p) {
+  const r = await api("POST", "/api/photos", {data: await toBase64(p.blob)});
+  return r.id;
+}
+const photoCache = new Map(); // номер -> data-ссылка (в памяти страницы)
+async function photoData(id) {
+  if (photoCache.has(id)) return photoCache.get(id);
+  const r = await api("GET", "/api/photos", {id});
+  photoCache.set(id, r.data);
+  return r.data;
+}
+/** Фото из переписки: пока грузится — серая заглушка; по нажатию открывается крупно. */
+function photoEl(id, preview) {
+  const img = h("img", {alt: "Фото", class: "chatimg"});
+  const box = h("button", {class: "mimg", "aria-label": "Открыть фото", onclick: () => { if (img.src) showPhoto(img.src); }}, img);
+  if (preview) img.src = preview;
+  else photoData(id).then((d) => { img.src = d; }).catch(() => { box.classList.add("broken"); img.alt = "Фото не загрузилось"; });
+  return box;
+}
+function showPhoto(src) {
+  const {close} = overlay(h("div", {class: "lightbox", onclick: () => close()}, h("img", {src, alt: "Фото"}), h("button", {class: "lbclose", "aria-label": "Закрыть"}, "×")), {center: true});
 }
 /** Окно выбора файла телефона/компьютера. */
-function chooseFiles(multiple, cb) {
-  const input = h("input", {type: "file", multiple: multiple, style: "display:none"});
+function chooseFiles(multiple, cb, accept = "") {
+  const input = h("input", {type: "file", multiple: multiple, accept: accept || null, style: "display:none"});
   input.addEventListener("change", () => { const list = [...input.files]; input.remove(); if (list.length) cb(list); });
   document.body.append(input); input.click();
 }
-const fileChip = (f, extra) => h("a", {class: "fchip", href: f.url, target: "_blank", rel: "noopener", download: f.local ? f.name : null},
-  h("span", {class: "fi"}, fileIcon(f.mime)), h("span", {class: "fn"}, f.name, h("small", {}, sizeText(f.size))), extra || null);
+
+// ----- текст из документа (docx / odt / txt / md): читается прямо на телефоне, никуда не загружается -----
+const u16 = (v, o) => v.getUint16(o, true), u32 = (v, o) => v.getUint32(o, true);
+/** Достаёт один файл из zip-архива (docx и odt — это zip). Нужны только «хранение» и deflate; распаковка средствами браузера. */
+async function unzipEntry(buf, wanted) {
+  const v = new DataView(buf), bytes = new Uint8Array(buf);
+  let eocd = -1;
+  for (let i = buf.byteLength - 22; i >= Math.max(0, buf.byteLength - 70000); i--) if (u32(v, i) === 0x06054b50) { eocd = i; break; }
+  if (eocd < 0) throw new Error("Это не документ Word/ODT");
+  let p = u32(v, eocd + 16);
+  const count = u16(v, eocd + 10);
+  for (let n = 0; n < count && u32(v, p) === 0x02014b50; n++) {
+    const method = u16(v, p + 10), csize = u32(v, p + 20), nlen = u16(v, p + 28), elen = u16(v, p + 30), clen = u16(v, p + 32), local = u32(v, p + 42);
+    const name = new TextDecoder().decode(bytes.subarray(p + 46, p + 46 + nlen));
+    if (name === wanted) {
+      const start = local + 30 + u16(v, local + 26) + u16(v, local + 28);
+      const data = bytes.subarray(start, start + csize);
+      if (method === 0) return new TextDecoder().decode(data);
+      if (method !== 8 || typeof DecompressionStream === "undefined") throw new Error("Этот браузер не умеет открывать такие документы. Сохраните документ как .txt или вставьте текст вручную.");
+      const stream = new Blob([data]).stream().pipeThrough(new DecompressionStream("deflate-raw"));
+      return new TextDecoder().decode(await new Response(stream).arrayBuffer());
+    }
+    p += 46 + nlen + elen + clen;
+  }
+  throw new Error("В документе не нашлось текста");
+}
+/** Абзацы из XML документа: docx — w:p/w:t, odt — text:p/text:h. */
+function xmlParagraphs(xml, para, run) {
+  const doc = new DOMParser().parseFromString(xml, "application/xml");
+  const out = [];
+  const walk = (node) => {
+    let text = "";
+    for (const c of node.childNodes) {
+      if (c.nodeType === 3) { if (run === "odt") text += c.nodeValue; continue; }
+      const t = c.localName;
+      if (run === "docx" && t === "t") text += c.textContent;
+      else if (t === "tab") text += "\t";
+      else if (t === "br" || t === "line-break") text += "\n";
+      else if (t === "s") text += " ".repeat(+c.getAttribute("text:c") || 1);
+      else text += walk(c);
+    }
+    return text;
+  };
+  const all = [...doc.getElementsByTagName("*")].filter((n) => n.localName === para || (run === "odt" && n.localName === "h"));
+  for (const n of all) { if (n.parentNode && [...(n.getElementsByTagName("*"))].some((x) => x.localName === para)) continue; out.push(walk(n).replace(/[ \t]+$/g, "")); }
+  return out;
+}
+async function extractDocText(file) {
+  if (file.size > 6 * 1024 * 1024) throw new Error("Документ слишком большой (больше 6 МБ).");
+  const name = String(file.name || "").toLowerCase();
+  let paragraphs;
+  if (/\.(txt|md|csv|log)$/.test(name) || /^text\//.test(file.type || "")) paragraphs = (await file.text()).split(/\r?\n/);
+  else if (/\.docx$/.test(name)) paragraphs = xmlParagraphs(await unzipEntry(await file.arrayBuffer(), "word/document.xml"), "p", "docx");
+  else if (/\.odt$/.test(name)) paragraphs = xmlParagraphs(await unzipEntry(await file.arrayBuffer(), "content.xml"), "p", "odt");
+  else throw new Error("Умею читать документы Word (.docx), .odt и текстовые (.txt). Для PDF откройте файл и скопируйте текст в описание.");
+  const text = paragraphs.join("\n").replace(/\n{3,}/g, "\n\n").trim();
+  if (!text) throw new Error("В документе нет текста.");
+  return text;
+}
 
 // ---------- переписка по событию ----------
 const dayLabel = (ts) => {
@@ -456,11 +529,11 @@ function chatSheet(e) {
   const ta = h("textarea", {class: "input chat-input", rows: "1", placeholder: "Сообщение", "aria-label": "Сообщение",
     oninput: () => { ta.style.height = "auto"; ta.style.height = Math.min(ta.scrollHeight, 120) + "px"; }});
   const sendBtn = h("button", {class: "send", "aria-label": "Отправить", onclick: () => send()}, icon("plane"));
-  const attachBtn = h("button", {class: "clip", "aria-label": "Прикрепить фото или файл", onclick: () => {
-    if (!state.filesReady) return toast("Файлы пока не подключены. Попросите администратора системы включить Google Диск.", {bad: true});
-    chooseFiles(true, async (list) => { for (const f of list.slice(0, 5 - attach.length)) { try { attach.push(await prepareFile(f)); } catch (err) { toast(err.message, {bad: true}); } } paintChips(); });
-  }}, "📎");
-  const paintChips = () => chips.replaceChildren(...attach.map((a, i) => h("span", {class: "achip"}, a.preview ? h("img", {src: a.preview, alt: ""}) : fileIcon(a.mime), h("em", {}, a.name), h("button", {"aria-label": "Убрать", onclick: () => { attach.splice(i, 1); paintChips(); }}, "×"))));
+  const attachBtn = h("button", {class: "clip", "aria-label": "Прикрепить фото", onclick: () => {
+    if (attach.length >= 4) return toast("К сообщению можно приложить до 4 фото", {bad: true});
+    chooseFiles(true, async (list) => { for (const f of list.slice(0, 4 - attach.length)) { try { attach.push(await compressPhoto(f)); } catch (err) { toast(err.message, {bad: true}); } } paintChips(); }, "image/*");
+  }}, "📷");
+  const paintChips = () => chips.replaceChildren(...attach.map((a, i) => h("span", {class: "achip"}, h("img", {src: a.preview, alt: ""}), h("button", {"aria-label": "Убрать фото", onclick: () => { attach.splice(i, 1); paintChips(); }}, "×"))));
   const stick = () => { msgs.scrollTop = msgs.scrollHeight; };
   const paint = (toBottom) => {
     const nearBottom = msgs.scrollHeight - msgs.scrollTop - msgs.clientHeight < 80;
@@ -469,9 +542,7 @@ function chatSheet(e) {
     for (const m of items) {
       const day = dayLabel(m.ts);
       if (day !== lastDay) { nodes.push(h("div", {class: "dsep"}, h("span", {}, day))); lastDay = day; }
-      const files = (m.files || []).map((f) => (/^image\//.test(f.mime) && (f.thumb || f.url)
-        ? h("a", {class: "mimg", href: f.local ? f.url : f.url, target: "_blank", rel: "noopener"}, h("img", {src: f.thumb || f.url, alt: f.name, loading: "lazy", referrerpolicy: "no-referrer"}))
-        : fileChip(f)));
+      const files = (m.photos || []).map((id, i) => photoEl(id, m.previews && m.previews[i]));
       const status = m.pending ? " · отправляется…" : m.failed ? " · не отправлено, нажмите, чтобы повторить" : "";
       nodes.push(h("div", {class: "msg" + (m.mine ? " mine" : "") + (m.failed ? " failed" : "") + (m.pending ? " pending" : ""), onclick: m.failed ? () => retry(m) : null},
         m.mine ? null : avatarEl(m.uid, m.name, "sm"),
@@ -499,9 +570,9 @@ function chatSheet(e) {
     chatQueue.push(async () => {
       m.pending = true; m.failed = false; paint();
       try {
-        const metas = [];
-        for (const a of m._prep || []) metas.push(await uploadFile(a));
-        const r = await api("POST", "/api/comments", {event: e.id, text: m.text, files: metas});
+        const ids = [];
+        for (const a of m._prep || []) ids.push(await uploadPhoto(a));
+        const r = await api("POST", "/api/comments", {event: e.id, text: m.text, photos: ids});
         items = items.filter((x) => x !== m);
         merge([r.item]); paint();
         e.comments = (e.comments || 0) + 1;
@@ -516,7 +587,7 @@ function chatSheet(e) {
     if (offlineNow()) return toast("Нет интернета: сообщение можно отправить, когда появится сеть", {bad: true});
     const prep = attach;
     const m = {id: "tmp" + Date.now(), ts: Date.now(), uid: state.me.uid, name: state.me.name, text, mine: true, pending: true, canDelete: false,
-      files: prep.map((a) => ({name: a.name, mime: a.mime, size: a.blob.size, thumb: a.preview, url: a.preview, local: true})), _prep: prep};
+      photos: prep.map((_, i) => "local" + i), previews: prep.map((a) => a.preview), _prep: prep};
     attach = []; ta.value = ""; ta.style.height = "auto"; paintChips();
     items.push(m); paint(true); push(m);
   };
@@ -540,10 +611,6 @@ function eventDetails(e) {
   const hex = e.hall ? hexOfHall(e.hall) : null;
   const when = e.dateEnd ? `${dayTitle(e.date)} — ${dayTitle(e.dateEnd)}` : dayTitle(e.date);
   const roles = Object.entries(e.roles || {});
-  const files = (e.meta && e.meta.files) || [];
-  const filesBlock = files.length || (canEdit && state.filesReady) ? h("div", {class: "field"}, h("span", {}, "Файлы"),
-    ...files.map((f) => fileChip(f, canEdit ? h("button", {class: "fdel", "aria-label": "Убрать файл", onclick: (ev) => { ev.preventDefault(); ev.stopPropagation(); removeEventFile(e, f); }}, "×") : null)),
-    canEdit && state.filesReady && e.id ? h("button", {class: "link", onclick: () => attachToEvent(e)}, "+ Прикрепить файл") : null) : null;
   const {close} = overlay(sheet(
     h("h2", {}, e.title),
     h("div", {class: "dmeta"},
@@ -552,33 +619,12 @@ function eventDetails(e) {
       e.hall ? h("div", {class: "drow"}, h("span", {}, "Площадка"), h("b", {class: "vtag", style: `background:${hex};color:${inkOn(hex)}`}, cap(e.hall))) : null),
     e.meta && e.meta.kind === "meeting" ? h("div", {class: "meet-tag"}, "📋 Собрание") : null,
     e.meta && e.meta.note ? h("p", {class: "meet-note"}, e.meta.note) : null,
-    filesBlock,
     e.mine && e.mine.length ? h("div", {class: "note ok"}, icon("check"), h("span", {}, "Вы заняты: " + e.mine.map(roleText).join(", "))) : null,
     roles.length ? h("div", {class: "field"}, h("span", {}, "Кто занят"), h("ul", {class: "roles"}, roles.map(([role, names]) => h("li", {class: (e.mine || []).includes(role) ? "me" : ""}, tag(role), h("div", {class: "n"}, names.join(", ")))))) : h("div", {class: "hint-line"}, "Людей на событие пока не назначили"),
     h("button", {class: "btn chat-open", onclick: () => { close(); chatSheet(e); }}, "💬 Обсуждение" + (e.comments ? ` · ${e.comments}` : "")),
     h("div", {class: "actions"},
       canEdit ? h("button", {class: "btn light", onclick: () => { close(); confirmDialog("Удалить событие?", `«${e.title}» пропадёт из расписания, а сотрудникам придёт сообщение об отмене.`, "Удалить", () => remove(e)); }}, icon("trash"), "Удалить") : null,
       canEdit ? h("button", {class: "btn", onclick: () => { close(); editor(e); }}, icon("pencil"), "Редактировать") : h("button", {class: "btn", onclick: () => close()}, "Закрыть"))));
-}
-
-/** Прикрепить файл к событию (администратор и редактор). Для собрания всем уходит уведомление «добавлен файл». */
-function attachToEvent(e) {
-  chooseFiles(true, async (list) => {
-    if (offlineNow()) return toast("Нет интернета: прикрепить можно, когда появится сеть", {bad: true});
-    toast("Загружаю файл…", {plane: true});
-    try {
-      const metas = [];
-      for (const f of list.slice(0, 5)) metas.push(await uploadFile(await prepareFile(f)));
-      await api("POST", "/api/event-files", {event: e.id, files: metas, notify: true});
-      toast(e.meta && e.meta.kind === "meeting" ? "Файл прикреплён, всем ушло уведомление" : "Файл прикреплён", {plane: true});
-      await load(false, true);
-    } catch (err) { toast(err.message, {bad: true}); }
-  });
-}
-function removeEventFile(e, f) {
-  confirmDialog("Убрать файл?", `«${f.name}» пропадёт из события (сам файл на Google Диске останется).`, "Убрать", async () => {
-    try { await api("DELETE", "/api/event-files", {event: e.id, fileId: f.id}); toast("Файл убран"); await load(false, true); } catch (err) { toast(err.message, {bad: true}); }
-  });
 }
 
 function plaque(e) {
@@ -805,7 +851,7 @@ async function load(manual = false, force = false) {
   loading = true;
   try {
     const d = await api("GET", "/api/schedule");
-    const next = {me: d.me, events: d.events, roles: d.roles, allRoles: d.allRoles || d.roles, staff: d.staff || [], venues: d.venues || [], venueColors: d.venueColors || {}, palette: d.palette || [], unavailable: d.unavailable || {}, filesReady: Boolean(d.filesReady), groups: d.groups || [], layout: d.layout || 2, rev: d.rev || "", today: d.today};
+    const next = {me: d.me, events: d.events, roles: d.roles, allRoles: d.allRoles || d.roles, staff: d.staff || [], venues: d.venues || [], venueColors: d.venueColors || {}, palette: d.palette || [], unavailable: d.unavailable || {}, groups: d.groups || [], layout: d.layout || 2, rev: d.rev || "", today: d.today};
     Object.assign(state, next, {ready: true, offline: false, savedAt: Date.now()});
     if (d.avatarKey && d.avatarKey !== state.avatarKey) loadAvatars(d.avatarKey); // аватарки меняются редко: грузим только при смене ключа
     try { localStorage.setItem("ktk_cache", JSON.stringify({...next, savedAt: state.savedAt})); } catch (_) {}
@@ -842,7 +888,7 @@ function remove(e) {
 /** Сохранение события: сразу показываем его в списке, на сервер отправляем в очереди. */
 function saveEventOptimistic(orig, event, force, meta) {
   const mine = Object.entries(event.roles).filter(([, names]) => names.includes(state.me.name)).map(([role]) => role);
-  const local = {...event, mine, rev: "tmp", pending: true, row: orig ? orig.row : -Date.now(), id: orig ? orig.id : "", comments: orig ? orig.comments : 0, meta: meta || (orig && orig.meta) || {kind: "event", note: "", files: []}};
+  const local = {...event, mine, rev: "tmp", pending: true, row: orig ? orig.row : -Date.now(), id: orig ? orig.id : "", comments: orig ? orig.comments : 0, meta: meta || (orig && orig.meta) || {kind: "event", note: ""}};
   if (orig) state.events = state.events.map((x) => (x.row === orig.row ? local : x)); else state.events.push(local);
   sortEvents(); render(); toast(orig ? "Сохраняю…" : "Добавляю…", {plane: true});
   enqueue(async () => {
@@ -856,8 +902,8 @@ function editor(e) {
   if (e && e.pending) return toast("Событие ещё сохраняется, подождите секунду", {bad: true});
   const times = e && e.time ? e.time.split(/,\s*/) : [];
   const draft = e
-    ? {row: e.row, rev: e.rev, kind: (e.meta && e.meta.kind) || "event", note: (e.meta && e.meta.note) || "", files: ((e.meta && e.meta.files) || []).slice(), publish: false, title: e.title, date: e.date, dateEnd: e.dateEnd || "", time: times[0] || "", extra: times.slice(1), end: e.end || "", hall: e.hall || "", roles: JSON.parse(JSON.stringify(e.roles))}
-    : {kind: "event", note: "", files: [], publish: true, title: "", date: state.today, dateEnd: "", time: "", extra: [], end: "", hall: "", roles: {}};
+    ? {row: e.row, rev: e.rev, kind: (e.meta && e.meta.kind) || "event", note: (e.meta && e.meta.note) || "", publish: false, title: e.title, date: e.date, dateEnd: e.dateEnd || "", time: times[0] || "", extra: times.slice(1), end: e.end || "", hall: e.hall || "", roles: JSON.parse(JSON.stringify(e.roles))}
+    : {kind: "event", note: "", publish: true, title: "", date: state.today, dateEnd: "", time: "", extra: [], end: "", hall: "", roles: {}};
   const {ov, close} = overlay("");
   const paint = () => {
     const venues = [...new Set([...state.venues, draft.hall].filter(Boolean))];
@@ -888,19 +934,21 @@ function editor(e) {
     const meeting = draft.kind === "meeting";
     const kindSwitch = h("div", {class: "seg2", role: "tablist"},
       [["event", "Событие"], ["meeting", "📋 Собрание"]].map(([k, label]) => h("button", {class: "segb" + (draft.kind === k ? " on" : ""), role: "tab", "aria-selected": String(draft.kind === k), onclick: () => { draft.kind = k; paint(); }}, label)));
-    const note = h("textarea", {class: "input", rows: "3", placeholder: "О чём собрание, повестка, что подготовить (необязательно)", oninput: (ev) => (draft.note = ev.target.value)}, draft.note);
+    const note = h("textarea", {class: "input", rows: "6", placeholder: "О чём собрание, повестка, что подготовить. Можно вставить текст или взять его из документа ниже.", oninput: (ev) => (draft.note = ev.target.value)}, draft.note);
     note.value = draft.note;
-    const fileList = h("div", {class: "files"}, ...draft.files.map((f, i) => fileChip(f, h("button", {class: "fdel", "aria-label": "Убрать файл", onclick: (ev) => { ev.preventDefault(); ev.stopPropagation(); draft.files.splice(i, 1); paint(); }}, "×"))),
-      draft.uploading ? h("div", {class: "hint-line"}, "Загружаю файл…") : null,
-      h("button", {class: "btn light attach", disabled: !state.filesReady || draft.uploading, onclick: () => chooseFiles(true, async (list) => {
-        if (offlineNow()) return toast("Нет интернета: файл можно приложить, когда появится сеть", {bad: true});
-        draft.uploading = true; paint();
-        try { for (const f of list.slice(0, 5)) draft.files.push(await uploadFile(await prepareFile(f))); } catch (er) { toast(er.message, {bad: true}); }
-        draft.uploading = false; paint();
-      })}, "📎 Прикрепить файл"),
-      state.filesReady ? null : h("div", {class: "hint-line"}, "Файлы пока не подключены: попросите администратора системы включить Google Диск."));
+    const docBtn = h("button", {class: "btn light attach", disabled: Boolean(draft.reading), onclick: () => chooseFiles(false, async ([f]) => {
+      draft.reading = true; paint();
+      try {
+        const text = await extractDocText(f);
+        draft.note = draft.note.trim() ? draft.note.trim() + "\n\n" + text : text;
+        toast(`Текст из «${f.name}» добавлен в описание`, {plane: true});
+      } catch (er) { toast(er.message, {bad: true}); }
+      draft.reading = false; paint();
+    }, ".docx,.odt,.txt,.md,text/plain")}, draft.reading ? "Читаю документ…" : "📄 Взять текст из документа");
+    const docHint = h("div", {class: "hint-line"}, "Прикрепите документ Word (.docx), .odt или .txt: его текст попадёт в описание, а оттуда в группу ВК и в личные сообщения всем сотрудникам. Перед отправкой текст можно поправить." + (draft.note.length > 3500 ? " Текст длинный: он уйдёт несколькими сообщениями." : ""));
+    const fileList = h("div", {class: "files"}, docBtn, docHint);
     const announceBox = !draft.row ? h("label", {class: "check"}, h("input", {type: "checkbox", checked: draft.publish, onchange: (ev) => (draft.publish = ev.target.checked)}), h("span", {}, "Выложить в группу ВК и канал (всем сотрудникам уведомление в личные сообщения придёт в любом случае)")) : null;
-    const meetingBlock = meeting ? h("div", {class: "meetblock"}, h("label", {class: "field"}, h("span", {}, "Описание"), note), h("div", {class: "field"}, h("span", {}, "Файлы"), fileList), announceBox) : null;
+    const meetingBlock = meeting ? h("div", {class: "meetblock"}, h("label", {class: "field"}, h("span", {}, "Текст собрания"), note), h("div", {class: "field"}, h("span", {}, "Документ"), fileList), announceBox) : null;
     const save = h("button", {class: "btn", disabled: Boolean(draft.uploading)}, draft.row ? "Сохранить" : (meeting ? "Создать собрание" : "Создать"));
     const doSave = (force) => {
       err.textContent = "";
@@ -911,8 +959,8 @@ function editor(e) {
       if (badPeople.length) { err.textContent = "Не могут работать в эти дни: " + badPeople.join(", ") + ". Уберите их или смените дату."; return; }
       if (!force && clash.length) { confirmDialog("Площадка занята", `Площадка занята: ${clash.map((c) => `${c.title} (${timeLabel(c)})`).join("; ")}. Сохранить всё равно?`, "Сохранить", () => doSave(true)); return; }
       close();
-      const meta = draft.kind === "meeting" || (e && e.meta && (e.meta.kind === "meeting" || e.meta.note || (e.meta.files || []).length))
-        ? {kind: draft.kind, note: draft.note.trim(), files: draft.files, publish: draft.publish} : null;
+      const meta = draft.kind === "meeting" || (e && e.meta && (e.meta.kind === "meeting" || e.meta.note))
+        ? {kind: draft.kind, note: draft.note.trim(), publish: draft.publish} : null;
       saveEventOptimistic(e, event, force || clash.length > 0, meta);
     };
     save.addEventListener("click", () => doSave(false));

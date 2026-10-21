@@ -784,33 +784,32 @@ test("служебная колонка ID: появляется скрытой,
   assert.ok(s.events.every((e) => /^[0-9a-f]{8}$/.test(e.id)));
 });
 
-test("собрание: рассылка всем с доступом в Telegram и ВК + пост в группу; файлы идут через Диск, комментарии работают", () => {
+test("собрание: текст документа уходит всем с доступом в Telegram и ВК личными сообщениями и постом в группу ВК; комментарии работают", () => {
   const g = GV({STYLE_VER: "15", APP_URL: "https://app.test"});
   g.run("styleSheets()"); g.run("store_().ensureLogins()");
   tg(g, msg(5, "", {user_id: 5, phone_number: "9000000002"})); // Петрова в Telegram
-  vk(g, vkMsg(77, "", {}), "hook");
-  vk(g, vkMsg(77, "89000000003"), "hook"); // Сидорова в ВК (у неё есть доступ в тестовой таблице?)
+  vk(g, vkMsg(77, "89000000001"), "hook"); // Иванова в ВК
   const login = g.run("store_().users().find((u) => u.phone === '9000000001').login");
   const t = api(g, {method: "POST", path: "/api/login", body: {login}}).token;
-  g.run("function driveSave_(name, mime, data) { return {id: 'f1', name: name, mime: mime, size: data.length, url: 'https://drive.google.com/file/d/f1/view', thumb: ''}; }");
-  const up = api(g, {method: "POST", path: "/api/files", token: t, body: {name: "Протокол.pdf", mime: "application/pdf", data: "QUJD"}});
-  assert.equal(up._status, 200);
   const before = g.fetches.length;
-  const r = api(g, {method: "POST", path: "/api/events", token: t, body: {event: {title: "Собрание труппы", date: "2026-10-12", dateEnd: "", time: "18:00", end: "", hall: "", roles: {}}, meta: {kind: "meeting", note: "Повестка: сезон", files: [up.file], publish: true}}});
+  const doc = "Повестка: сезон\n1. Афиша\n2. Репетиции";
+  const r = api(g, {method: "POST", path: "/api/events", token: t, body: {event: {title: "Собрание труппы", date: "2026-10-12", dateEnd: "", time: "18:00", end: "", hall: "", roles: {}}, meta: {kind: "meeting", note: doc, publish: true}}});
   assert.equal(r._status, 200);
   const sent = g.fetches.slice(before);
   const tgMeet = sent.find((f) => f.url.endsWith("/sendMessage") && String(f.body.chat_id) === "5" && /Собрание: Собрание труппы/.test(f.body.text));
   assert.ok(tgMeet, "Telegram: личное сообщение о собрании");
-  assert.match(tgMeet.body.text, /Повестка: сезон/);
-  assert.match(tgMeet.body.text, /<a href="https:\/\/drive\.google\.com\/file\/d\/f1\/view">Протокол\.pdf<\/a>/);
+  assert.match(tgMeet.body.text, /Повестка: сезон\n1\. Афиша/);
+  assert.ok(sent.some((f) => f.url.endsWith("/messages.send") && String(f.body.user_id) === "77" && /Повестка: сезон/.test(f.body.message)), "ВК: личное сообщение с текстом");
   const wall = sent.find((f) => f.url.endsWith("/wall.post"));
   assert.ok(wall, "пост на стене группы ВК");
-  assert.ok(!/drive\.google/.test(wall.body.message), "ссылки на файлы на стену не попадают");
-  assert.match(wall.body.message, /Собрание: Собрание труппы/);
-  // комментарии
+  assert.match(wall.body.message, /Собрание: Собрание труппы[\s\S]*Повестка: сезон/);
+  // комментарии и фото
   const ev = api(g, {method: "GET", path: "/api/schedule", token: t}).events.find((e) => e.title === "Собрание труппы");
-  assert.equal(api(g, {method: "POST", path: "/api/comments", token: t, body: {event: ev.id, text: "Всем привет"}})._status, 200);
-  assert.equal(api(g, {method: "GET", path: "/api/comments", token: t, body: {event: ev.id}}).items.length, 1);
+  const ph = api(g, {method: "POST", path: "/api/photos", token: t, body: {data: "QUJD".repeat(40)}});
+  assert.equal(ph._status, 200);
+  assert.equal(api(g, {method: "POST", path: "/api/comments", token: t, body: {event: ev.id, text: "Всем привет", photos: [ph.id]}})._status, 200);
+  const list = api(g, {method: "GET", path: "/api/comments", token: t, body: {event: ev.id}}).items;
+  assert.deepEqual([list.length, list[0].photos.length], [1, 1]);
 });
 
 test("аватарки: после сообщения боту берётся фото из профиля (ВК — ссылка, Telegram — картинка), раз в неделю", () => {

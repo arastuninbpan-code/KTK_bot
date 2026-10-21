@@ -7,55 +7,53 @@ import {MemoryBook} from "../lib/memory-book.mjs";
 
 const NOW = msk(1, 10);
 const V2 = [["Дата", "Начало", "Конец", "Событие", "Площадка", "Касса", "ID"]];
-function make({withId = true, files = true} = {}) {
+function make({withId = true} = {}) {
   const sched = withId ? V2 : [V2[0].slice(0, 6)];
   const book = new MemoryBook({[TABS.schedule]: sched.map((r) => r.slice()), [TABS.staff]: STAFF});
   const store = new Store(book, {secret: "t", now: () => NOW});
   const announced = [];
-  const saved = [];
-  const deps = {store, secret: "s", now: () => NOW, announce: (a) => announced.push(a),
-    ...(files ? {saveFile: (name, mime, data) => { saved.push({name, mime, size: data.length}); return {id: "f" + saved.length, name, mime, size: data.length, url: "https://drive.google.com/file/d/f" + saved.length + "/view", thumb: ""}; }} : {})};
+  const deps = {store, secret: "s", now: () => NOW, announce: (a) => announced.push(a)};
   const call = (method, path, token, body = {}) => handleApi({method, path, token, body}, deps);
   store.ensureLogins();
   const login = (phone) => handleApi({method: "POST", path: "/api/login", body: {login: store.users().find((u) => u.phone === phone).login}}, deps).body.token;
-  return {book, store, call, login, announced, saved};
+  return {book, store, call, login, announced};
 }
 const MEETING = {title: "Собрание труппы", date: "2026-10-12", dateEnd: "", time: "18:00", end: "", hall: "", roles: {}};
-const FILE = {id: "d1", name: "Протокол.docx", mime: "application/vnd.openxmlformats-officedocument.wordprocessingml.document", size: 1234, url: "https://drive.google.com/file/d/d1/view", thumb: ""};
+const JPEG = "/9j/4AAQSkZJRgABAQEASABIAAD/" + "A".repeat(200); // правдоподобная base64-строка
 
-test("собрание: создаётся с описанием и файлом, получает ID, рассылка вызывается один раз", () => {
+test("собрание: создаётся с текстом документа, получает ID, рассылка вызывается один раз и несёт этот текст", () => {
   const t = make();
   const admin = t.login("9000000001");
-  const r = t.call("POST", "/api/events", admin, {event: MEETING, meta: {kind: "meeting", note: "Повестка: сезон", files: [FILE, {...FILE, id: "evil", url: "https://evil.example/x"}], publish: true}});
+  const doc = "Повестка собрания\n1. Афиша на ноябрь\n2. Репетиции";
+  const r = t.call("POST", "/api/events", admin, {event: MEETING, meta: {kind: "meeting", note: doc, publish: true}});
   assert.equal(r.status, 200);
   assert.match(r.body.id, /^[0-9a-f]{8}$/);
   assert.equal(t.announced.length, 1);
-  assert.equal(t.announced[0].kind, "meeting");
-  assert.equal(t.announced[0].publish, true);
-  assert.equal(t.announced[0].event.id, r.body.id);
-  assert.deepEqual(t.announced[0].files.map((f) => f.id), ["d1"], "чужие адреса отбрасываются");
+  assert.deepEqual([t.announced[0].kind, t.announced[0].publish, t.announced[0].note, t.announced[0].event.id], ["meeting", true, doc, r.body.id]);
   const s = t.call("GET", "/api/schedule", admin).body;
   const ev = s.events.find((e) => e.title === "Собрание труппы");
-  assert.equal(ev.id, r.body.id);
-  assert.deepEqual([ev.meta.kind, ev.meta.note, ev.meta.files.length, ev.comments], ["meeting", "Повестка: сезон", 1, 0]);
+  assert.deepEqual([ev.id, ev.meta.kind, ev.meta.note, ev.comments], [r.body.id, "meeting", doc, 0]);
   assert.equal(s.me.uid.length, 10);
   // обычное событие без meta ничего не рассылает, но ID получает
   const r2 = t.call("POST", "/api/events", admin, {event: {...MEETING, title: "Репетиция", date: "2026-10-13"}});
   assert.equal(t.announced.length, 1);
   assert.match(r2.body.id, /^[0-9a-f]{8}$/);
   // правка сохраняет ID и не рассылает снова
-  const row = s.events.find((e) => e.title === "Собрание труппы");
-  const put = t.call("PUT", "/api/events/" + row.row, admin, {rev: row.rev, event: {...MEETING, title: "Собрание труппы (перенос)"}, meta: {kind: "meeting", note: "Новая повестка"}});
+  const put = t.call("PUT", "/api/events/" + ev.row, admin, {rev: ev.rev, event: {...MEETING, title: "Собрание труппы (перенос)"}, meta: {kind: "meeting", note: "Новая повестка"}});
   assert.equal(put.status, 200);
   assert.equal(put.body.id, r.body.id);
   assert.equal(t.announced.length, 1);
   assert.equal(t.call("GET", "/api/schedule", admin).body.events.find((e) => e.id === r.body.id).meta.note, "Новая повестка");
+  // рассылку можно отключить для группы, но не для сотрудников: флаг publish только про группу
+  const r3 = t.call("POST", "/api/events", admin, {event: {...MEETING, title: "Совещание", date: "2026-10-14"}, meta: {kind: "meeting", note: "x", publish: false}});
+  assert.equal(t.announced.at(-1).publish, false);
+  assert.equal(r3.status, 200);
   // без служебной колонки ID метаданные не принимаются
   const t2 = make({withId: false});
   assert.equal(t2.call("POST", "/api/events", t2.login("9000000001"), {event: MEETING, meta: {kind: "meeting"}}).status, 409);
 });
 
-test("переписка по событию: читать и писать может любой сотрудник, удалять чужое — только редактор/админ; вложения только с Google Диска", () => {
+test("переписка по событию: читать и писать может любой сотрудник, удалять чужое — только редактор/админ; к сообщению можно приложить до 4 фото", () => {
   const t = make();
   const admin = t.login("9000000001");
   const reader = t.login("9000000002");
@@ -68,9 +66,11 @@ test("переписка по событию: читать и писать мо�
   assert.equal(a.mine, true);
   assert.equal(a.name, "Петрова Л.Н.");
   assert.ok(!("phone" in a), "телефон наружу не отдаём");
-  t.call("POST", "/api/comments", admin, {event: id, text: "", files: [FILE, {url: "https://evil.example/a"}]});
+  const pid = t.call("POST", "/api/photos", admin, {data: JPEG}).body.id;
+  t.call("POST", "/api/comments", admin, {event: id, text: "", photos: [pid, "не-номер", pid, "0123456789ab"]});
   const list = t.call("GET", "/api/comments", reader, {event: id}).body.items;
-  assert.deepEqual(list.map((c) => [c.name, c.mine, c.files.length]), [["Петрова Л.Н.", true, 0], ["Иванова М.В.", false, 1]]);
+  assert.deepEqual(list.map((c) => [c.name, c.mine, c.photos.length]), [["Петрова Л.Н.", true, 0], ["Иванова М.В.", false, 2]]);
+  assert.deepEqual(list[1].photos, [pid, "0123456789ab"], "мусор и повторы отброшены");
   assert.deepEqual(list.map((c) => c.canDelete), [true, false]);
   assert.equal(t.call("GET", "/api/comments", reader, {event: id, since: list[0].ts}).body.items.length, 1, "только новое");
   assert.equal(t.call("DELETE", "/api/comments", reader, {id: list[1].id}).status, 403, "читатель чужое не удалит");
@@ -79,23 +79,20 @@ test("переписка по событию: читать и писать мо�
   assert.equal(t.call("GET", "/api/schedule", reader).body.events.find((e) => e.id === id).comments, 1);
 });
 
-test("файлы: без подключённого Диска понятная ошибка; с Диском — загрузка; прикрепить к событию может только редактор", () => {
-  const off = make({files: false});
-  assert.equal(off.call("POST", "/api/files", off.login("9000000001"), {name: "a.pdf", mime: "application/pdf", data: "QQ=="}).status, 501);
+test("фото: принимаются только сжатые JPEG (base64), хранятся кусками в скрытом листе и отдаются обратно целиком", () => {
   const t = make();
-  const admin = t.login("9000000001");
   const reader = t.login("9000000002");
-  const up = t.call("POST", "/api/files", reader, {name: "фото/1.jpg", mime: "image/jpeg", data: "QUJD"});
-  assert.equal(up.status, 200);
-  assert.equal(t.saved[0].name, "фото_1.jpg", "в имени файла нет косых черт");
-  assert.equal(t.call("POST", "/api/files", reader, {name: "x", mime: "x", data: ""}).status, 400);
-  const id = t.call("POST", "/api/events", admin, {event: MEETING, meta: {kind: "meeting", announce: false}}).body.id;
-  assert.equal(t.call("POST", "/api/event-files", reader, {event: id, files: [up.body.file]}).status, 403);
-  assert.equal(t.call("POST", "/api/event-files", admin, {event: id, files: [up.body.file], notify: true}).status, 200);
-  assert.equal(t.announced.at(-1).kind, "files");
-  assert.equal(t.call("GET", "/api/schedule", reader).body.events.find((e) => e.id === id).meta.files.length, 1);
-  assert.equal(t.call("DELETE", "/api/event-files", admin, {event: id, fileId: up.body.file.id}).status, 200);
-  assert.equal(t.call("GET", "/api/schedule", reader).body.events.find((e) => e.id === id).meta.files.length, 0);
+  assert.equal(t.call("POST", "/api/photos", reader, {data: ""}).status, 400);
+  assert.equal(t.call("POST", "/api/photos", reader, {data: "<script>alert(1)</script>" + "A".repeat(200)}).status, 400, "не base64");
+  assert.equal(t.call("POST", "/api/photos", reader, {data: "A".repeat(170000)}).status, 413, "слишком большое");
+  const big = "QUJD".repeat(25000); // 100 000 знаков -> три куска по ячейкам
+  const r = t.call("POST", "/api/photos", reader, {data: "data:image/jpeg;base64," + big});
+  assert.equal(r.status, 200);
+  assert.equal(t.book.get(TABS.photos).length - 1, 3, "три куска в скрытом листе");
+  assert.equal(t.call("GET", "/api/photos", reader, {id: r.body.id}).body.data, "data:image/jpeg;base64," + big);
+  assert.equal(t.call("GET", "/api/photos", reader, {id: "000000000000"}).status, 404);
+  assert.equal(t.call("GET", "/api/photos", reader, {id: "../x"}).status, 404);
+  assert.equal(t.call("GET", "/api/photos", "мусор", {id: r.body.id}).status, 401, "без входа фото не отдаются");
 });
 
 test("аватарки: ключ — короткий код человека, у кого два канала — берётся свежее; ключ меняется при обновлении", () => {

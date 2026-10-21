@@ -28,27 +28,25 @@
   const toMin = (t) => { const m = /^(\d{1,2}):(\d{2})$/.exec(t || ""); return m ? +m[1] * 60 + +m[2] : null; };
   const slots = (e) => { const s = String(e.time || "").split(/,\s*/).map(toMin).filter((x) => x !== null); if (e.dateEnd || !s.length) return [[0, 1440]]; const en = s.length === 1 ? toMin(e.end) : null; return s.map((a) => [a, en !== null && en > a ? en : a + 120]); };
   const clashes = (c) => c.hall ? events.filter((e) => e.row !== c.row && key(e.hall) === key(c.hall) && e.date <= (c.dateEnd || c.date) && c.date <= (e.dateEnd || e.date) && slots(e).some(([a, b]) => slots(c).some(([x, y]) => a < y && x < b))) : [];
-  const metas = {}, chat = {}; // демо: метаданные событий и переписка живут в памяти страницы
-  const view = (u) => events.slice().sort((a, b) => (a.date + a.time).localeCompare(b.date + b.time)).map((e) => ({...e, id: "d" + e.row, meta: metas["d" + e.row] || {kind: "event", note: "", files: []}, comments: (chat["d" + e.row] || []).length, mine: Object.entries(e.roles).filter(([, n]) => n.includes(u.name)).map(([r]) => r)}));
+  const metas = {}, chat = {}, photos = {}; // демо: метаданные событий и переписка живут в памяти страницы
+  const view = (u) => events.slice().sort((a, b) => (a.date + a.time).localeCompare(b.date + b.time)).map((e) => ({...e, id: "d" + e.row, meta: metas["d" + e.row] || {kind: "event", note: ""}, comments: (chat["d" + e.row] || []).length, mine: Object.entries(e.roles).filter(([, n]) => n.includes(u.name)).map(([r]) => r)}));
   window.KTK_DEMO = {
     call(method, path, body, token) {
       if (method === "POST" && path === "/api/login") { const k = String(body.login).toUpperCase(); return users[k] ? {status: 200, data: {token: "demo:" + k, user: users[k]}} : {status: 401, data: {error: "В демо-режиме логины: ADMIN (админ) и READER (читатель)"}}; }
       const u = users[String(token).replace("demo:", "")];
       if (!u) return {status: 401, data: {error: "Нужно войти"}};
       if (path === "/api/ping") return {status: 200, data: {rev: String(rev), changed: (body || {}).rev !== String(rev)}};
-      if (method === "GET") return {status: 200, data: {today: iso(0), me: {...u, off: offDates[u.name] || []}, unavailable: u.canEdit ? offDates : undefined, roles: [A, G, K, M, S], layout: 2, rev: String(rev), filesReady: true, avatarKey: "demo", events: view(u), venues, venueColors, palette: PALETTE, staff: u.canEdit ? STAFF : undefined, groups: u.canEdit ? GROUPS : undefined}};
+      if (method === "GET" && path === "/api/schedule") return {status: 200, data: {today: iso(0), me: {...u, off: offDates[u.name] || []}, unavailable: u.canEdit ? offDates : undefined, roles: [A, G, K, M, S], layout: 2, rev: String(rev), avatarKey: "demo", events: view(u), venues, venueColors, palette: PALETTE, staff: u.canEdit ? STAFF : undefined, groups: u.canEdit ? GROUPS : undefined}};
       if (path === "/api/avatars") return {status: 200, data: {items: {}, key: "demo"}};
-      if (path === "/api/files") return {status: 200, data: {ok: true, file: {id: "f" + Math.random().toString(36).slice(2, 8), name: body.name, mime: body.mime, size: Math.round(body.data.length * 0.75), url: /^image\//.test(body.mime) ? "data:" + body.mime + ";base64," + body.data : "https://drive.google.com/file/d/demo/view", thumb: /^image\//.test(body.mime) ? "data:" + body.mime + ";base64," + body.data : ""}}};
+      if (path === "/api/photos") {
+        if (method === "POST") { const id = Math.random().toString(16).slice(2, 14).padEnd(12, "0"); photos[id] = "data:image/jpeg;base64," + String(body.data).replace(/^data:image\/jpeg;base64,/, ""); return {status: 200, data: {ok: true, id}}; }
+        return photos[body.id] ? {status: 200, data: {data: photos[body.id]}} : {status: 404, data: {error: "Фото не найдено"}};
+      }
       if (path === "/api/comments") {
         const list = chat[body.event] || (chat[body.event] = []);
         if (method === "GET") return {status: 200, data: {items: list.filter((c) => c.ts > (Number(body.since) || 0)).map((c) => ({...c, mine: c.name === u.name, canDelete: c.name === u.name || u.canEdit}))}};
-        if (method === "POST") { const c = {id: "c" + Math.random().toString(36).slice(2, 8), ts: Date.now(), uid: u.login || "x", name: u.name, text: body.text || "", files: body.files || []}; list.push(c); return {status: 200, data: {ok: true, item: {...c, mine: true, canDelete: true}}}; }
+        if (method === "POST") { const c = {id: "c" + Math.random().toString(36).slice(2, 8), ts: Date.now(), uid: u.login || "x", name: u.name, text: body.text || "", photos: body.photos || []}; list.push(c); return {status: 200, data: {ok: true, item: {...c, mine: true, canDelete: true}}}; }
         const k = Object.keys(chat).find((x) => chat[x].some((c) => c.id === body.id)); if (k) chat[k] = chat[k].filter((c) => c.id !== body.id); return {status: 200, data: {ok: true}};
-      }
-      if (path === "/api/event-files") {
-        const m = metas[body.event] || (metas[body.event] = {kind: "event", note: "", files: []});
-        if (method === "POST") m.files.push(...body.files); else m.files = m.files.filter((f) => f.id !== body.fileId);
-        rev++; return {status: 200, data: {ok: true}};
       }
       if (path === "/api/off" && method === "POST") {
         const cur = new Set(offDates[u.name] || []);
@@ -70,7 +68,7 @@
       const clash = body.force ? [] : clashes({...body.event, row: method === "PUT" ? row : -1});
       if (clash.length) return {status: 409, data: {error: `Площадка «${body.event.hall}» занята: ${clash[0].title} (${clash[0].time}${clash[0].end ? "–" + clash[0].end : ""})`, conflicts: clash}};
       const ev = {...body.event, rev: "d" + Math.random()};
-      if (method === "POST") { events.push({...ev, row: ++seq}); if (body.meta) metas["d" + seq] = {kind: body.meta.kind, note: body.meta.note || "", files: body.meta.files || []}; }
+      if (method === "POST") { events.push({...ev, row: ++seq}); if (body.meta) metas["d" + seq] = {kind: body.meta.kind, note: body.meta.note || ""}; }
       else Object.assign(events.find((e) => e.row === row), ev);
       rev++;
       return {status: 200, data: {ok: true}};

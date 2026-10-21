@@ -587,17 +587,15 @@ const meetingWhen = (e) => {
   const time = timeRange(e);
   return time ? `${day}, ${time}` : day;
 };
-const fileLines = (files) => (files || []).map((f) => `• <a href="${esc(f.url)}">${esc(f.name)}</a>`).join("\n");
-/** Уведомление о новом собрании (всем сотрудникам в личные сообщения): что, когда, где, повестка и ссылки на файлы. */
-function msgMeeting(e, note = "", files = []) {
+/** Уведомление о новом собрании (всем сотрудникам в личные сообщения): что, когда, где и текст документа/повестки. */
+function msgMeeting(e, note = "") {
   const place = e.hall ? `\n📍 ${esc(cap(e.hall))}` : "";
-  return `📋 <b>Собрание: ${esc(e.title)}</b>\n🗓 ${esc(meetingWhen(e))}${place}${note ? `\n\n${esc(note)}` : ""}${files.length ? `\n\n📎 <b>Файлы</b>\n${fileLines(files)}` : ""}`;
+  return `📋 <b>Собрание: ${esc(e.title)}</b>\n🗓 ${esc(meetingWhen(e))}${place}${note ? `\n\n${esc(note)}` : ""}`;
 }
-const msgMeetingFiles = (e, files) => `📎 <b>К собранию «${esc(e.title)}» добавлены файлы</b>\n🗓 ${esc(meetingWhen(e))}\n\n${fileLines(files)}`;
-/** Текст для стены группы ВК и канала: без ссылок на файлы (они только для сотрудников), с приглашением смотреть в приложении. */
-function meetingPostText(e, note = "", hasFiles = false) {
+/** Текст для стены группы ВК и канала. */
+function meetingPostText(e, note = "") {
   const place = e.hall ? `\n📍 ${cap(e.hall)}` : "";
-  return `📋 Собрание: ${e.title}\n🗓 ${meetingWhen(e)}${place}${note ? `\n\n${note}` : ""}${hasFiles ? "\n\n📎 Материалы — в приложении для сотрудников." : ""}`;
+  return `📋 Собрание: ${e.title}\n🗓 ${meetingWhen(e)}${place}${note ? `\n\n${note}` : ""}`;
 }
 
 // ===== lib/telegram.mjs =====
@@ -761,24 +759,15 @@ function occupancyRows(events, today) {
 // ===== lib/store.mjs =====
 // Хранилище поверх таблицы: сотрудники и роли, чаты, снимок расписания, коды входа, блокировка.
 
-const TABS = {schedule: "Расписание", staff: "Сотрудники", venues: "Площадки", chats: "Подписчики", requests: "_заявки", people: "_люди", off: "_недоступность", comments: "_комментарии", meta: "_события", avatars: "_аватары", state: "_служебное", lock: "_замок"};
+const TABS = {schedule: "Расписание", staff: "Сотрудники", venues: "Площадки", chats: "Подписчики", requests: "_заявки", people: "_люди", off: "_недоступность", comments: "_комментарии", meta: "_события", avatars: "_аватары", photos: "_фото", state: "_служебное", lock: "_замок"};
 const REQUESTS_HEADER = ["Канал", "ID чата", "Телефон"];
-const COMMENT_HEADER = ["ID события", "ID", "Время", "Телефон", "Имя", "Текст", "Файлы"];
-const META_HEADER = ["ID события", "Тип", "Описание", "Файлы", "Автор", "Создано"];
+const COMMENT_HEADER = ["ID события", "ID", "Время", "Телефон", "Имя", "Текст", "Фото"];
+const META_HEADER = ["ID события", "Тип", "Описание", "—", "Автор", "Создано"];
 const AVATAR_HEADER = ["Телефон", "Канал", "Фото", "Обновлено"];
-/** Файл в сообщении/событии: храним только известные поля, ссылка — только на Google Диск (чужие адреса в приложение не пускаем). */
-function cleanFiles(list) {
-  const out = [];
-  for (const f of Array.isArray(list) ? list : []) {
-    if (!f || typeof f !== "object") continue;
-    const url = String(f.url || "");
-    if (!/^https:\/\/(drive|docs)\.google\.com\//.test(url)) continue;
-    const thumb = /^https:\/\/(drive|docs|lh\d)\.(google|googleusercontent)\.com\//.test(String(f.thumb || "")) ? String(f.thumb) : "";
-    out.push({id: String(f.id || "").slice(0, 100), name: String(f.name || "файл").slice(0, 120), mime: String(f.mime || "").slice(0, 80), size: Math.max(0, Math.round(Number(f.size) || 0)), url, thumb});
-    if (out.length >= 8) break;
-  }
-  return out;
-}
+/** Фото в сообщении переписки: храним только короткие номера (сами картинки лежат в скрытом служебном листе кусками). */
+const cleanPhotoIds = (list) => [...new Set((Array.isArray(list) ? list : []).map(String).filter((id) => /^[0-9a-f]{12}$/.test(id)))].slice(0, 4);
+const PHOTO_HEADER = ["ID фото", "Часть", "Данные"];
+const PHOTO_CHUNK = 40000; // в ячейку таблицы помещается до 50 000 знаков
 const parseJson = (t, fallback) => { try { const v = JSON.parse(t); return v == null ? fallback : v; } catch { return fallback; } };
 const OFF_HEADER = ["Телефон", "ФИО", "Дата"];
 const VENUES_HEADER = ["Площадка", "Заметка", "Цвет"];
@@ -980,7 +969,7 @@ class Store {
     for (const r of this.book.get(TABS.meta).slice(1)) {
       const id = String(r[0] || "").trim();
       if (!id) continue;
-      out[id] = {kind: String(r[1] || "") === "meeting" ? "meeting" : "event", note: String(r[2] || ""), files: cleanFiles(parseJson(r[3], [])), author: String(r[4] || ""), created: Number(r[5]) || 0, row: 0};
+      out[id] = {kind: String(r[1] || "") === "meeting" ? "meeting" : "event", note: String(r[2] || ""), author: String(r[4] || ""), created: Number(r[5]) || 0, row: 0};
     }
     return out;
   }
@@ -993,8 +982,8 @@ class Store {
     const cur = at >= 0 ? rows[at] : [eventId, "event", "", "[]", "", String(this.now())];
     const next = [eventId,
       patch.kind ? (patch.kind === "meeting" ? "meeting" : "event") : String(cur[1] || "event"),
-      patch.note !== undefined ? String(patch.note).slice(0, 4000) : String(cur[2] || ""),
-      patch.files !== undefined ? JSON.stringify(cleanFiles(patch.files)) : String(cur[3] || "[]"),
+      patch.note !== undefined ? String(patch.note).slice(0, 12000) : String(cur[2] || ""),
+      "[]",
       patch.author !== undefined ? String(patch.author) : String(cur[4] || ""),
       String(cur[5] || this.now())];
     if (at >= 0) this.book.set(TABS.meta, at + 1, next); else this.book.append(TABS.meta, next);
@@ -1005,7 +994,7 @@ class Store {
     if (!this.book.has(TABS.comments)) return [];
     return this.book.get(TABS.comments).slice(1)
       .filter((r) => String(r[0] || "").trim() === eventId)
-      .map((r) => ({id: String(r[1] || ""), ts: Number(r[2]) || 0, phone: normPhone(r[3] || ""), name: String(r[4] || ""), text: String(r[5] || ""), files: cleanFiles(parseJson(r[6], []))}))
+      .map((r) => ({id: String(r[1] || ""), ts: Number(r[2]) || 0, phone: normPhone(r[3] || ""), name: String(r[4] || ""), text: String(r[5] || ""), photos: cleanPhotoIds(parseJson(r[6], []))}))
       .sort((a, b) => a.ts - b.ts);
   }
 
@@ -1022,10 +1011,10 @@ class Store {
     return out;
   }
 
-  addComment(eventId, user, text, files = []) {
+  addComment(eventId, user, text, photos = []) {
     this.book.ensure(TABS.comments, COMMENT_HEADER);
-    const c = {id: platform.sha256hex(`${eventId}:${user.phone}:${this.now()}:${platform.randomInt(1e9)}`).slice(0, 12), ts: this.now(), phone: user.phone, name: user.name, text: String(text || "").trim().slice(0, 2000), files: cleanFiles(files)};
-    this.book.append(TABS.comments, [eventId, c.id, String(c.ts), c.phone, c.name, c.text, JSON.stringify(c.files)]);
+    const c = {id: platform.sha256hex(`${eventId}:${user.phone}:${this.now()}:${platform.randomInt(1e9)}`).slice(0, 12), ts: this.now(), phone: user.phone, name: user.name, text: String(text || "").trim().slice(0, 2000), photos: cleanPhotoIds(photos)};
+    this.book.append(TABS.comments, [eventId, c.id, String(c.ts), c.phone, c.name, c.text, JSON.stringify(c.photos)]);
     return c;
   }
 
@@ -1038,6 +1027,21 @@ class Store {
     if (normPhone(rows[at][3] || "") !== user.phone && !canEdit(user.role)) return null;
     this.book.remove(TABS.comments, at + 1);
     return true;
+  }
+
+  // --- фото из переписки: сжатая картинка (base64) режется на куски по ячейкам скрытого листа «_фото» ---
+  addPhoto(base64) {
+    this.book.ensure(TABS.photos, PHOTO_HEADER);
+    const id = platform.sha256hex(`${base64.length}:${this.now()}:${platform.randomInt(1e9)}`).slice(0, 12);
+    for (let i = 0, n = 0; i < base64.length; i += PHOTO_CHUNK, n++) this.book.append(TABS.photos, [id, String(n), base64.slice(i, i + PHOTO_CHUNK)]);
+    return id;
+  }
+
+  /** Картинка целиком (data-ссылка) или "" если такой нет. */
+  photo(id) {
+    if (!this.book.has(TABS.photos)) return "";
+    const parts = this.book.get(TABS.photos).slice(1).filter((r) => String(r[0] || "") === id).sort((a, b) => Number(a[1]) - Number(b[1]));
+    return parts.length ? "data:image/jpeg;base64," + parts.map((r) => String(r[2] || "")).join("") : "";
   }
 
   // --- аватарки: из профиля ВК (ссылка) и Telegram (маленькая картинка внутри). Ключ — телефон ---
@@ -1309,7 +1313,7 @@ const publicUser = (u) => ({name: u.name, role: u.role, roleLabel: ROLE_LABELS[u
 const connections = (store, me) => ({login: me.login, channels: [...new Set(store.chats().filter((c) => c.phone === me.phone).map((c) => c.channel))]});
 
 function handleApi(req, deps) {
-  const {store, secret, now = () => Date.now(), afterChange = () => {}, getRev = () => "", bumpRev = () => {}, saveFile = null, announce = () => {}} = deps;
+  const {store, secret, now = () => Date.now(), afterChange = () => {}, getRev = () => "", bumpRev = () => {}, announce = () => {}} = deps;
   const {method, path, body = {}, token} = req;
   try {
     // --- без входа ---
@@ -1339,7 +1343,7 @@ function handleApi(req, deps) {
         .filter((e) => (e.dateEnd || e.date) >= addDays(today, -62)) // два месяца назад: для календаря на вкладке «Площадки»
         .sort((a, b) => (a.date + a.time).localeCompare(b.date + b.time))
         .map((e) => ({...e, rev: rev(table[e.row - 1]),
-          meta: e.id && metaMap[e.id] ? {kind: metaMap[e.id].kind, note: metaMap[e.id].note, files: metaMap[e.id].files} : {kind: "event", note: "", files: []},
+          meta: e.id && metaMap[e.id] ? {kind: metaMap[e.id].kind, note: metaMap[e.id].note} : {kind: "event", note: ""},
           comments: (e.id && counts[e.id] && counts[e.id].n) || 0,
           mine: Object.entries(e.roles).filter(([, names]) => names.some((n) => matchPhones(n, users).includes(me.phone))).map(([role]) => role)}));
       // площадки: список из листа «Площадки» + все, что уже вписано в события
@@ -1348,7 +1352,7 @@ function handleApi(req, deps) {
       const editor = canEdit(me.role);
       return {status: 200, body: {today, me: {...publicUser(me), ...connections(store, me), uid: store.uid(me.phone), off: store.offDates(me.phone).filter((d) => d >= today)}, roles: editableRoles(store, table), allRoles: headerRoles(table), layout: layoutOf(table).v, rev: getRev(), events, venues, venueColors: venueColorMap(store), palette: VENUE_COLORS,
         staff: editor ? store.staffNames() : undefined, groups: editor ? store.groups() : undefined,
-        unavailable: editor ? unavailableMap(store, today) : undefined, avatarKey: avatarKey(store), filesReady: Boolean(saveFile)}};
+        unavailable: editor ? unavailableMap(store, today) : undefined, avatarKey: avatarKey(store)}};
     }
 
     // --- аватарки (из профилей ВК и Telegram): {uid: ссылка или маленькая картинка} ---
@@ -1356,7 +1360,7 @@ function handleApi(req, deps) {
 
     // --- переписка по событию ---
     const eventById = (id) => parseEvents(store.book.get(TABS.schedule), today).find((e) => id && e.id === id);
-    const shape = (c) => ({id: c.id, ts: c.ts, uid: store.uid(c.phone), name: c.name, text: c.text, files: c.files, mine: c.phone === me.phone, canDelete: c.phone === me.phone || canEdit(me.role)});
+    const shape = (c) => ({id: c.id, ts: c.ts, uid: store.uid(c.phone), name: c.name, text: c.text, photos: c.photos, mine: c.phone === me.phone, canDelete: c.phone === me.phone || canEdit(me.role)});
     if (path === "/api/comments" && method === "GET") {
       const id = String(body.event || "");
       if (!eventById(id)) throw new HttpError(404, "Событие не найдено (возможно, его уже удалили).");
@@ -1367,10 +1371,10 @@ function handleApi(req, deps) {
       const id = String(body.event || "");
       if (!eventById(id)) throw new HttpError(404, "Событие не найдено (возможно, его уже удалили).");
       const text = String(body.text || "").trim();
-      const files = cleanFiles(body.files);
-      if (!text && !files.length) throw new HttpError(400, "Напишите сообщение или приложите файл");
+      const photos = cleanPhotoIds(body.photos);
+      if (!text && !photos.length) throw new HttpError(400, "Напишите сообщение или приложите фото");
       if (text.length > 2000) throw new HttpError(400, "Сообщение слишком длинное");
-      return {status: 200, body: {ok: true, item: shape(store.addComment(id, me, text, files))}};
+      return {status: 200, body: {ok: true, item: shape(store.addComment(id, me, text, photos))}};
     }
     if (path === "/api/comments" && method === "DELETE") {
       const r = store.deleteComment(String(body.id || ""), me);
@@ -1379,34 +1383,18 @@ function handleApi(req, deps) {
       return {status: 200, body: {ok: true}};
     }
 
-    // --- файлы: загрузка на Google Диск (нужен подключённый Диск; ссылку получает тот, кому её покажет приложение) ---
-    if (path === "/api/files" && method === "POST") {
-      if (!saveFile) throw new HttpError(501, "Прикрепление файлов пока не подключено. Попросите администратора системы включить Google Диск.");
-      const data = String(body.data || "");
-      if (!data) throw new HttpError(400, "Файл пустой");
-      if (data.length > 20e6) throw new HttpError(413, "Файл слишком большой (до 14 МБ)");
-      let meta;
-      try { meta = saveFile(String(body.name || "файл").replace(/[\\/:*?"<>|\u0000-\u001f]/g, "_").slice(0, 120), String(body.mime || "application/octet-stream").slice(0, 80), data); }
-      catch (e) { throw new HttpError(502, "Не удалось сохранить файл: " + String(e.message || e).slice(0, 160)); }
-      return {status: 200, body: {ok: true, file: cleanFiles([meta])[0]}};
+    // --- фото в переписке: уже сжатая в приложении картинка (JPEG, base64) хранится в скрытом листе; наружу (боты, группа) не уходит ---
+    if (path === "/api/photos" && method === "POST") {
+      const data = String(body.data || "").replace(/^data:image\/jpeg;base64,/, "");
+      if (!/^[A-Za-z0-9+/=]+$/.test(data) || data.length < 100) throw new HttpError(400, "Это не похоже на фото");
+      if (data.length > 160000) throw new HttpError(413, "Фото слишком большое. Попробуйте ещё раз: приложение само уменьшит его.");
+      return {status: 200, body: {ok: true, id: store.addPhoto(data)}};
     }
-    if (path === "/api/event-files" && ["POST", "DELETE"].includes(method)) {
-      if (!canEdit(me.role)) throw new HttpError(403, "Прикреплять файлы к событию могут администратор и редактор.");
-      const id = String(body.event || "");
-      const ev = eventById(id);
-      if (!ev) throw new HttpError(404, "Событие не найдено (возможно, его уже удалили).");
-      const cur = store.metaMap()[id] || {kind: "event", note: "", files: []};
-      if (method === "DELETE") {
-        store.setMeta(id, {files: cur.files.filter((f) => f.id !== String(body.fileId || ""))});
-      } else {
-        const add = cleanFiles(body.files);
-        if (!add.length) throw new HttpError(400, "Нет файла");
-        if (cur.files.length + add.length > 12) throw new HttpError(400, "К событию можно прикрепить до 12 файлов");
-        store.setMeta(id, {files: [...cur.files, ...add], author: store.uid(me.phone)});
-        if (body.notify && cur.kind === "meeting") { try { announce({kind: "files", event: ev, files: add, publish: false}); } catch (e) { console.error(String(e.message || e)); } }
-      }
-      bumpRev();
-      return {status: 200, body: {ok: true}};
+    if (path === "/api/photos" && method === "GET") {
+      const id = String(body.id || "");
+      const data = /^[0-9a-f]{12}$/.test(id) ? store.photo(id) : "";
+      if (!data) throw new HttpError(404, "Фото не найдено");
+      return {status: 200, body: {data}};
     }
 
     // --- «Не могу работать»: каждый отмечает свои даты ---
@@ -1517,13 +1505,12 @@ function handleApi(req, deps) {
       if (meta && id) {
         const kind = meta.kind === "meeting" ? "meeting" : "event";
         const patch = {kind, note: String(meta.note || ""), author: store.uid(me.phone)};
-        if (meta.files !== undefined) patch.files = meta.files;
         store.setMeta(id, patch);
       }
       bumpRev();
       afterChange();
       if (method === "POST" && meta && id && meta.kind === "meeting" && meta.announce !== false) {
-        try { announce({kind: "meeting", event: {...event, id}, note: String(meta.note || ""), files: cleanFiles(meta.files), publish: meta.publish !== false}); } catch (e) { console.error(String(e.message || e)); }
+        try { announce({kind: "meeting", event: {...event, id}, note: String(meta.note || ""), publish: meta.publish !== false}); } catch (e) { console.error(String(e.message || e)); }
       }
       return {status: 200, body: {ok: true, id}};
     }
@@ -1970,7 +1957,7 @@ const SENDERS = {telegram: {name: "telegram", send: tgSend_}, vk: {name: "vk", s
 /** Куда умеем публиковать афишу: стена группы ВК и/или Telegram-канал (если заданы свойства скрипта). */
 /**
  * Собрание: уведомление ВСЕМ сотрудникам с доступом (в личные сообщения Telegram и ВК) и, если нужно, пост в группу ВК / канал.
- * kind: "meeting" (новое собрание) или "files" (к собранию добавили файлы).
+ * Текст собрания (повестка / текст приложенного документа) уходит текстом.
  */
 // ---------- аватарки из профилей ----------
 const AVATAR_TTL_ = 7 * 24 * 3600e3; // обновляем раз в неделю
@@ -2012,7 +1999,7 @@ function announce_(a) {
   const st = store_();
   const appUrl = prop_("APP_URL") || "";
   const e = a.event;
-  const text = a.kind === "files" ? msgMeetingFiles(e, a.files || []) : msgMeeting(e, a.note || "", a.files || []);
+  const text = msgMeeting(e, a.note || "");
   const btn = appButton(appUrl ? appUrl + "#event=" + encodeURIComponent(e.id || "") : "");
   const people = new Set(st.activeUsers().map((u) => u.phone));
   let sent = 0;
@@ -2021,7 +2008,7 @@ function announce_(a) {
     catch (err) { if (err instanceof Gone) st.unbind(c.channel, c.chatId); else console.error(String(err && err.message ? err.message : err)); }
   });
   let posted = [];
-  if (a.kind === "meeting" && a.publish) { try { posted = publishers_().post(meetingPostText(e, a.note || "", (a.files || []).length > 0)); } catch (err) { console.error(String(err && err.message ? err.message : err)); } }
+  if (a.kind === "meeting" && a.publish) { try { posted = publishers_().post(meetingPostText(e, a.note || "")); } catch (err) { console.error(String(err && err.message ? err.message : err)); } }
   diag_("Собрание «" + e.title + "»: разослано " + sent + (posted.length ? "; " + posted.join(" ") : ""));
   return {sent, posted};
 }
@@ -2124,14 +2111,13 @@ function apiCall_(req) {
   const call = () => handleApi({method: req.method || "GET", path: req.path, token: req.token, body: req.body || {}}, {
     store: store_(),
     secret: secret_(),
-    saveFile: typeof driveSave_ === "function" ? driveSave_ : null, // загрузка на Google Диск живёт в отдельном файле Drive.gs (включается отдельно)
     announce: announce_,
     getRev: getRev_,
     bumpRev: bumpRev_,
     // после правки сразу рассылаем уведомления (не ждём таймера); ошибки рассылки не ломают сохранение
     afterChange: () => { PropertiesService.getScriptProperties().setProperty("regroup", "1"); try { runCycle_(); } catch (err) { console.error(String(err && err.message ? err.message : err)); } },
   });
-  const lockFree = !req.method || req.method === "GET" || req.path === "/api/files"; // чтение и загрузка файла блокировку не держат
+  const lockFree = !req.method || req.method === "GET"; // чтение блокировку не держит
   const r = lockFree ? call() : withLock_(call);
   return Object.assign({}, r.body, {_status: r.status});
 }
