@@ -9,10 +9,11 @@ const state = {token: localStorage.getItem("ktk_token") || "", me: null, events:
 const root = document.getElementById("root");
 
 // ---------- разметка без innerHTML ----------
+const BOOL_ATTRS = new Set(["disabled", "checked", "selected", "hidden", "inert", "readonly", "required", "autofocus"]);
 const h = (tag, attrs = {}, ...kids) => {
   const el = document.createElement(tag);
   for (const [k, v] of Object.entries(attrs || {})) {
-    if (v === false || v == null) continue;
+    if (v === false || v == null || (BOOL_ATTRS.has(k) && !v)) continue; // disabled: 0 и т.п. не должно включать атрибут
     if (k === "class") el.className = v;
     else if (k.startsWith("on")) el.addEventListener(k.slice(2), v);
     else el.setAttribute(k, v === true ? "" : v);
@@ -124,6 +125,41 @@ async function api(method, path, body) {
   if (status >= 400) { const e = new Error(data.error || "Ошибка"); e.status = status; e.data = data; throw e; }
   return data;
 }
+
+// ---------- «сразу и красиво»: изменения показываем мгновенно, а на сервер они уходят следом по очереди ----------
+// Ждать ответа Google не нужно: правка уже на экране. Если сервер отказал — покажем причину и вернём то, что у него на самом деле.
+const opQueue = [];
+let opRunning = false, opsRan = false, opsPending = 0;
+function enqueue(run) {
+  opsPending++;
+  opQueue.push(run);
+  pumpQueue();
+}
+async function pumpQueue() {
+  if (opRunning) return;
+  opRunning = true;
+  opsRan = false;
+  while (opQueue.length) {
+    const run = opQueue.shift();
+    try { await run(); } catch (e) { if (state.token) toast(e.message || "Не удалось сохранить", {bad: true}); }
+    opsRan = true;
+    opsPending--;
+  }
+  opRunning = false;
+  if (state.token) await load(false, true); // сверяемся с сервером: строки получают настоящие номера, отклонённое откатывается
+}
+/** Событие, которое правим/удаляем, на сервере могло сменить номер строки (предыдущие правки из очереди): находим его заново по содержимому. */
+async function resolveTarget(orig) {
+  if (!orig) return null;
+  if (orig.pending) throw new Error("Событие ещё сохранялось. Повторите через секунду.");
+  if (!opsRan) return orig;
+  const d = await api("GET", "/api/schedule");
+  const found = d.events.find((x) => x.rev === orig.rev && x.title === orig.title);
+  if (!found) throw new Error("Событие уже изменили. Обновите страницу и повторите.");
+  return found;
+}
+const sortEvents = () => state.events.sort((a, b) => (a.date + (a.time || "")).localeCompare(b.date + (b.time || "")));
+const offlineNow = () => state.offline || navigator.onLine === false;
 
 function logout() {
   try { localStorage.removeItem("ktk_token"); localStorage.removeItem("ktk_cache"); } catch (_) {}
@@ -263,7 +299,7 @@ function eventCard(e) {
   const urgent = isSoon(e);
   const hex = e.hall ? hexOfHall(e.hall) : "";
   const outline = hex && !urgent ? `border-color:${hex};box-shadow:3px 3px 0 ${hex}` : ""; // обводка цвета площадки
-  return h("button", {class: "ev" + (e.mine.length ? " mine" : "") + (urgent ? " urgent" : ""), style: outline, onclick: () => (canEdit ? actionSheet(e) : eventDetails(e)), "aria-label": `${canEdit ? "Изменить" : "Открыть"}: ${e.title}`},
+  return h("button", {class: "ev" + (e.mine.length ? " mine" : "") + (urgent ? " urgent" : ""), style: outline, onclick: () => (e.pending ? toast("Ещё сохраняется…") : canEdit ? actionSheet(e) : eventDetails(e)), "aria-label": `${canEdit ? "Изменить" : "Открыть"}: ${e.title}`},
     time,
     h("div", {}, h("h3", {}, e.title), range, hall, roles.length ? list : null),
     canEdit ? h("span", {class: "edit-hint"}, icon("pencil")) : (e.mine.length ? h("span", {class: "pill mine-tag"}, "вы") : null),
@@ -415,9 +451,13 @@ function addVenueSheet(onAdded) {
   const add = h("button", {class: "btn", onclick: async () => {
     const name = input.value.trim().split(/\s+/).join(" ");
     if (!name) { err.textContent = "Введите название"; return; }
-    add.disabled = true;
-    try { await api("POST", "/api/venues", {name, color}); close(); toast("Площадка добавлена", {plane: true}); await load(); if (onAdded) onAdded(name); }
-    catch (e) { err.textContent = e.message; add.disabled = false; }
+    if (offlineNow()) { err.textContent = "Нет интернета: добавить можно, когда появится сеть."; return; }
+    close();
+    if (!state.venues.some((v) => hallKey(v) === hallKey(name))) state.venues.push(name);
+    state.venueColors[name] = ((state.palette || []).find((c) => c.name === color) || {}).hex || FALLBACK_HEX;
+    render(); toast("Добавляю площадку…", {plane: true});
+    if (onAdded) onAdded(name);
+    enqueue(async () => { await api("POST", "/api/venues", {name, color}); toast("Площадка добавлена", {plane: true}); });
   }}, "Добавить");
   const {close} = overlay(sheet(h("h2", {}, "Новая площадка"), h("label", {class: "field"}, h("span", {}, "Название"), input),
     h("div", {class: "field"}, h("span", {}, "Цвет"), pick), err,
@@ -431,9 +471,12 @@ function venueSheet(name) {
   const palette = state.palette || [];
   const current = (palette.find((c) => c.hex === hexOfHall(name)) || {}).name || "";
   const body = h("div", {});
-  const paint = (sel) => body.replaceChildren(swatches(sel, async (color) => {
+  const paint = (sel) => body.replaceChildren(swatches(sel, (color) => {
+    if (offlineNow()) return toast("Нет интернета: цвет можно сменить, когда появится сеть", {bad: true});
     paint(color);
-    try { await api("PUT", "/api/venues", {name, color}); toast("Цвет сохранён"); await load(); } catch (e) { toast(e.message, {bad: true}); paint(current); }
+    state.venueColors[name] = (palette.find((c) => c.name === color) || {}).hex || FALLBACK_HEX;
+    render(); // календарь за панелью перекрашивается сразу
+    enqueue(async () => { await api("PUT", "/api/venues", {name, color}); toast("Цвет сохранён"); });
   }));
   const {close} = overlay(sheet(h("h2", {}, cap(name)), h("div", {class: "field"}, h("span", {}, "Цвет"), body),
     h("div", {class: "actions"},
@@ -442,8 +485,13 @@ function venueSheet(name) {
   paint(current);
 }
 
-async function removeVenue(name) {
-  try { await api("DELETE", "/api/venues", {name}); toast("Площадка убрана"); await load(); } catch (e) { toast(e.message, {bad: true}); }
+function removeVenue(name) {
+  if (offlineNow()) return toast("Нет интернета: убрать площадку можно, когда появится сеть", {bad: true});
+  if (state.events.some((e) => hallKey(e.hall) === hallKey(name) && upcoming(e))) return toast("На этой площадке есть будущие события. Сначала перенесите их.", {bad: true});
+  state.venues = state.venues.filter((v) => hallKey(v) !== hallKey(name));
+  delete state.venueColors[name];
+  render(); toast("Убираю площадку…");
+  enqueue(async () => { await api("DELETE", "/api/venues", {name}); toast("Площадка убрана"); });
 }
 
 /** Плашка «нет интернета»: показываем последнее, что удалось загрузить, и когда это было. */
@@ -502,13 +550,12 @@ function profileSheet() {
     info.textContent = n ? `Отмечено дней: ${n}. На эти дни вас нельзя будет назначить на событие.` : "Нажимайте на даты, когда не можете работать. Синий кружок — день, когда у вас уже есть смена.";
     save.disabled = !dirty();
   };
-  save.addEventListener("click", async () => {
-    save.disabled = true;
-    try {
-      const r = await api("POST", "/api/off", {add: [...off].filter((d) => !orig.has(d)), remove: [...orig].filter((d) => !off.has(d))});
-      state.me.off = r.off;
-      close(); toast("Сохранено: отмеченные дни учтутся при составлении расписания", {plane: true}); load();
-    } catch (e) { toast(e.message, {bad: true}); save.disabled = false; }
+  save.addEventListener("click", () => {
+    if (offlineNow()) return toast("Нет интернета: сохранить можно, когда появится сеть", {bad: true});
+    const add = [...off].filter((d) => !orig.has(d)), remove = [...orig].filter((d) => !off.has(d));
+    state.me.off = [...off].sort();
+    close(); toast("Сохраняю…", {plane: true});
+    enqueue(async () => { await api("POST", "/api/off", {add, remove}); toast("Сохранено: отмеченные дни учтутся при составлении расписания", {plane: true}); });
   });
   const {close} = overlay(sheet(
     h("div", {class: "profhead"}, h("img", {class: "avatar big", src: "avatar.webp", alt: ""}), h("div", {}, h("h2", {}, me.name), h("span", {class: "badge " + me.role}, me.roleLabel))),
@@ -549,9 +596,10 @@ function render() {
 }
 
 let loading = false;
-async function load(manual = false) {
+async function load(manual = false, force = false) {
   if (!state.token) return render();
   if (loading) return;
+  if (opsPending > 0 && !force) return; // идёт отправка правок: подгрузка стёрла бы то, что на экране
   if (navigator.onLine === false && state.ready) { setOffline(true); if (manual) toast("Нет интернета: показано последнее сохранённое", {bad: true}); return; }
   loading = true;
   try {
@@ -577,11 +625,33 @@ function actionSheet(e) {
     h("button", {class: "option danger", onclick: () => { close(); confirmDialog("Удалить событие?", `«${e.title}» пропадёт из расписания, а сотрудникам придёт сообщение об отмене.`, "Удалить", () => remove(e)); }}, h("span", {class: "ic"}, icon("trash")), "Удалить")));
 }
 
-async function remove(e) {
-  try { await api("DELETE", `/api/events/${e.row}`, {rev: e.rev}); toast("Событие удалено, сотрудникам ушло сообщение", {plane: true}); await load(); } catch (err) { toast(err.message, {bad: true}); if (err.status === 409) load(); }
+function remove(e) {
+  if (e.pending) return toast("Событие ещё сохраняется, подождите секунду", {bad: true});
+  if (offlineNow()) return toast("Нет интернета: удалить можно, когда появится сеть", {bad: true});
+  state.events = state.events.filter((x) => x.row !== e.row);
+  render(); toast("Удаляю…", {plane: true});
+  enqueue(async () => {
+    const t = await resolveTarget(e);
+    await api("DELETE", `/api/events/${t.row}`, {rev: t.rev});
+    toast("Событие удалено, сотрудникам ушло сообщение", {plane: true});
+  });
+}
+
+/** Сохранение события: сразу показываем его в списке, на сервер отправляем в очереди. */
+function saveEventOptimistic(orig, event, force) {
+  const mine = Object.entries(event.roles).filter(([, names]) => names.includes(state.me.name)).map(([role]) => role);
+  const local = {...event, mine, rev: "tmp", pending: true, row: orig ? orig.row : -Date.now()};
+  if (orig) state.events = state.events.map((x) => (x.row === orig.row ? local : x)); else state.events.push(local);
+  sortEvents(); render(); toast(orig ? "Сохраняю…" : "Добавляю…", {plane: true});
+  enqueue(async () => {
+    const t = await resolveTarget(orig);
+    await api(orig ? "PUT" : "POST", orig ? `/api/events/${t.row}` : "/api/events", {event, rev: t && t.rev, force: force || undefined});
+    toast(orig ? "Сохранено, сотрудникам ушло сообщение" : "Событие добавлено, сотрудникам ушло сообщение", {plane: true});
+  });
 }
 
 function editor(e) {
+  if (e && e.pending) return toast("Событие ещё сохраняется, подождите секунду", {bad: true});
   const times = e && e.time ? e.time.split(/,\s*/) : [];
   const draft = e
     ? {row: e.row, rev: e.rev, title: e.title, date: e.date, dateEnd: e.dateEnd || "", time: times[0] || "", extra: times.slice(1), end: e.end || "", hall: e.hall || "", roles: JSON.parse(JSON.stringify(e.roles))}
@@ -614,18 +684,16 @@ function editor(e) {
           h("button", {class: "chip add", onclick: () => picker(role, names, (sel) => { if (sel.length) draft.roles[role] = sel; else delete draft.roles[role]; paint(); }, {row: draft.row, date: draft.date, dateEnd: draft.dateEnd, time: [draft.time, ...draft.extra].filter(Boolean).join(", "), end: draft.end})}, "+ добавить")));
     });
     const save = h("button", {class: "btn"}, draft.row ? "Сохранить" : "Создать");
-    const doSave = async (force) => {
+    const doSave = (force) => {
       err.textContent = "";
       const event = {title: draft.title.trim(), date: draft.date, dateEnd: draft.dateEnd || "", time: [draft.time, ...draft.extra].filter(Boolean).join(", "), end: draft.end, hall: draft.hall, roles: draft.roles};
-      save.disabled = true;
-      try {
-        await api(draft.row ? "PUT" : "POST", draft.row ? `/api/events/${draft.row}` : "/api/events", {event, rev: draft.rev, force: force || undefined});
-        close(); toast(draft.row ? "Сохранено, сотрудникам ушло сообщение" : "Событие добавлено, сотрудникам ушло сообщение", {plane: true}); await load();
-      } catch (er) {
-        save.disabled = false;
-        if (er.data && er.data.conflicts) confirmDialog("Площадка занята", er.message + ". Сохранить всё равно?", "Сохранить", () => doSave(true));
-        else { err.textContent = er.message; if (er.status === 409) load(); }
-      }
+      if (!event.title) { err.textContent = "Введите название"; return; }
+      if (!event.date) { err.textContent = "Укажите дату"; return; }
+      if (offlineNow()) { err.textContent = "Нет интернета: сохранить можно, когда появится сеть."; return; }
+      if (badPeople.length) { err.textContent = "Не могут работать в эти дни: " + badPeople.join(", ") + ". Уберите их или смените дату."; return; }
+      if (!force && clash.length) { confirmDialog("Площадка занята", `Площадка занята: ${clash.map((c) => `${c.title} (${timeLabel(c)})`).join("; ")}. Сохранить всё равно?`, "Сохранить", () => doSave(true)); return; }
+      close();
+      saveEventOptimistic(e, event, force || clash.length > 0);
     };
     save.addEventListener("click", () => doSave(false));
     ov.replaceChildren(sheet(h("h2", {}, draft.row ? "Редактировать событие" : "Новое событие"),
@@ -667,10 +735,10 @@ function picker(role, selected, onDone, ctx = {}) {
     const names = state.staff.filter((n) => n.toLowerCase().includes(q));
     list.replaceChildren(...names.map((n) => {
       const off = blockedDays(n, days);
-      const locked = off.length && !sel.includes(n); // отметил «не могу» — выбрать нельзя (а если уже стоял на событии, можно только снять)
+      const locked = Boolean(off.length) && !sel.includes(n); // отметил «не могу» — выбрать нельзя (а если уже стоял на событии, можно только снять)
       const busy = locked ? [] : busyWith(n, cand);
       const note = off.length ? "не может: " + off.map((d) => shortDate(d)).join(", ") : busy.length ? "уже занят(а): " + busy.map((e) => `${e.title}, ${timeLabel(e)}`).join("; ") : "";
-      return h("button", {class: "pick" + (sel.includes(n) ? " on" : "") + (locked ? " off" : "") + (busy.length ? " warnp" : ""), disabled: locked, "aria-disabled": String(Boolean(locked)),
+      return h("button", {class: "pick" + (sel.includes(n) ? " on" : "") + (locked ? " off" : "") + (busy.length ? " warnp" : ""), disabled: locked, "aria-disabled": String(locked),
         onclick: () => { sel = sel.includes(n) ? sel.filter((x) => x !== n) : [...sel, n]; fill(); }},
         h("span", {class: "box"}, sel.includes(n) ? icon("check") : null), h("span", {class: "pn"}, n, note ? h("small", {}, note) : null));
     }), ...(names.length ? [] : [h("div", {class: "empty"}, "Никого не нашли")]));
@@ -697,7 +765,7 @@ if (state.token) load();
 
 // Раз в несколько секунд спрашиваем сервер «версия данных изменилась?» (дёшево: таблицу он при этом не читает) и подгружаем новое.
 async function poll() {
-  if (!state.token || !state.ready || document.hidden || loading || navigator.onLine === false) return;
+  if (!state.token || !state.ready || document.hidden || loading || opsPending > 0 || navigator.onLine === false) return;
   try { const r = await api("GET", "/api/ping", {rev: state.rev}); if (r.changed || state.offline) await load(); } catch (_) { /* нет связи — молча ждём следующий раз */ }
 }
 setInterval(poll, 8000);
