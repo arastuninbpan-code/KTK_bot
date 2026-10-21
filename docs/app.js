@@ -543,14 +543,15 @@ function chatSheet(e) {
       const day = dayLabel(m.ts);
       if (day !== lastDay) { nodes.push(h("div", {class: "dsep"}, h("span", {}, day))); lastDay = day; }
       const files = (m.photos || []).map((id, i) => photoEl(id, m.previews && m.previews[i]));
-      const status = m.pending ? " · отправляется…" : m.failed ? " · не отправлено, нажмите, чтобы повторить" : "";
-      nodes.push(h("div", {class: "msg" + (m.mine ? " mine" : "") + (m.failed ? " failed" : "") + (m.pending ? " pending" : ""), onclick: m.failed ? () => retry(m) : null},
+      // пока сообщение уходит на сервер, оно выглядит как обычное отправленное: пользователю не важно, как система доставляет его в фоне
+      const status = m.failed ? " · не отправлено, нажмите, чтобы повторить" : "";
+      nodes.push(h("div", {class: "msg" + (m.mine ? " mine" : "") + (m.failed ? " failed" : ""), onclick: m.failed ? () => retry(m) : null},
         m.mine ? null : avatarEl(m.uid, m.name, "sm"),
         h("div", {class: "bubble"},
           m.mine ? null : h("b", {class: "mname"}, m.name),
           m.text ? h("p", {}, m.text) : null,
           files.length ? h("div", {class: "mfiles"}, ...files) : null,
-          h("small", {class: "mtime"}, clockOf(m.ts) + status, m.canDelete && !m.pending && !m.failed ? h("button", {class: "mdel", "aria-label": "Удалить сообщение", onclick: (ev) => { ev.stopPropagation(); confirmDialog("Удалить сообщение?", "Оно пропадёт у всех.", "Удалить", () => del(m)); }}, "удалить") : null))));
+          h("small", {class: "mtime"}, clockOf(m.ts) + status, m.canDelete && !m.failed ? h("button", {class: "mdel", "aria-label": "Удалить сообщение", onclick: (ev) => { ev.stopPropagation(); confirmDialog("Удалить сообщение?", "Оно пропадёт у всех.", "Удалить", () => del(m)); }}, "удалить") : null))));
     }
     if (!items.length) nodes.push(h("div", {class: "empty small"}, h("div", {}, "Сообщений пока нет. Напишите первым: например, сможете ли вы быть на событии.")));
     msgs.replaceChildren(...nodes);
@@ -568,15 +569,18 @@ function chatSheet(e) {
   };
   const push = (m) => {
     chatQueue.push(async () => {
-      m.pending = true; m.failed = false; paint();
+      m.pending = true; m.failed = false;
+      if (m.wasFailed) { m.wasFailed = false; paint(); }
       try {
         const ids = [];
         for (const a of m._prep || []) ids.push(await uploadPhoto(a));
         const r = await api("POST", "/api/comments", {event: e.id, text: m.text, photos: ids});
-        items = items.filter((x) => x !== m);
-        merge([r.item]); paint();
+        // тихо подменяем «временные» данные настоящими, не перерисовывая пузырь (фото остаются те же, что были на экране)
+        Object.assign(m, r.item, {pending: false, failed: false, previews: m.previews, photos: r.item.photos});
+        items = items.filter((x) => x === m || x.id !== m.id);
+        lastTs = Math.max(lastTs, m.ts);
         e.comments = (e.comments || 0) + 1;
-      } catch (err) { m.pending = false; m.failed = true; toast(err.message, {bad: true}); paint(); }
+      } catch (err) { m.pending = false; m.failed = true; m.wasFailed = true; toast(err.message, {bad: true}); paint(); }
     });
     pumpChat();
   };
@@ -593,6 +597,7 @@ function chatSheet(e) {
   };
   const del = async (m) => {
     items = items.filter((x) => x.id !== m.id); paint();
+    if (String(m.id).startsWith("tmp")) return;
     try { await api("DELETE", "/api/comments", {id: m.id}); e.comments = Math.max(0, (e.comments || 1) - 1); } catch (err) { toast(err.message, {bad: true}); poll(); }
   };
   const title = h("div", {class: "chathead"}, h("b", {}, e.title), h("small", {}, `${shortDate(e.date)} · ${timeLabel(e)}`));
