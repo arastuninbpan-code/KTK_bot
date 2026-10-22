@@ -111,7 +111,7 @@ test("скорость: повторный запрос расписания н�
     [TABS.meta]: [["ID события", "Тип", "Описание", "—", "Автор", "Создано"], ["a1", "meeting", "x", "", "u", "1"]],
     [TABS.comments]: [["ID события", "ID", "Время", "Телефон", "Имя", "Текст", "Фото"], ["a1", "c1", "1", "9000000001", "И", "привет", "[]"]],
     [TABS.avatars]: [["Телефон", "Канал", "Фото", "Обновлено"], ["9000000001", "telegram", "http://x", "1"]]};
-  const g = loadGas({tabs, props: {SHEET_ID: "x", STYLE_VER: "20", TOP_ROWS_DONE: "1", TEST_USERS: "1", OWNER_PHONE: "9000000001"}, now: NOW});
+  const g = loadGas({tabs, props: {SHEET_ID: "x", STYLE_VER: "21", TOP_ROWS_DONE: "1", TEST_USERS: "1", OWNER_PHONE: "9000000001"}, now: NOW});
   const call = (req) => JSON.parse(g.run(`doPost(${JSON.stringify({postData: {contents: JSON.stringify(req)}})}).getContent()`));
   g.run("store_().ensureLogins()");
   const login = g.run('store_().users().find((u) => u.phone === "9000000001").login');

@@ -30,7 +30,7 @@ test("несколько изменений у человека за раз — 
 
 test("скрипт Google: правки из приложения подряд дают ОДНО сообщение; если приложение закрыли — разошлёт минутный таймер", () => {
   const tabs = {[TABS.schedule]: [HEAD], [TABS.staff]: STAFF, "Подписчики": [["Канал", "ID чата", "Телефон", "ФИО"], ["telegram", "6", "9000000002", "Петрова Л.Н."]]};
-  const g = loadGas({tabs, props: {SHEET_ID: "x", STYLE_VER: "20", TOP_ROWS_DONE: "1", TELEGRAM_BOT_TOKEN: "TOKEN", WEBHOOK_SECRET: "hook", APP_URL: APP, OWNER_PHONE: "9000000001"}, now: NOW});
+  const g = loadGas({tabs, props: {SHEET_ID: "x", STYLE_VER: "21", TOP_ROWS_DONE: "1", TELEGRAM_BOT_TOKEN: "TOKEN", WEBHOOK_SECRET: "hook", APP_URL: APP, OWNER_PHONE: "9000000001"}, now: NOW});
   const call = (req) => JSON.parse(g.run(`doPost(${JSON.stringify({postData: {contents: JSON.stringify(req)}})}).getContent()`));
   g.run("store_().ensureLogins()");
   const token = call({method: "POST", path: "/api/login", body: {login: g.run('store_().users().find((u) => u.phone === "9000000001").login')}}).token;

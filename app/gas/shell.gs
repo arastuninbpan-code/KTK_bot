@@ -779,6 +779,7 @@ function styleSchedule_(sheet) {
   const lastRow = Math.max(2, sheet.getLastRow());
   const cols = Math.max(2, sheet.getLastColumn());
   const all = sheet.getRange(2, 1, lastRow - 1, cols);
+  try { sheet.getRange(2, 1, lastRow - 1, Math.max(sheet.getMaxColumns(), cols)).breakApart(); } catch (e) { /* объединений нет */ } // строки месяцев объединены на прежнюю ширину (колонку убрали или добавили): объединяем заново
   all.setBackground(C.white).setFontColor(C.navy).setWrap(true).setVerticalAlignment("top").setNumberFormat("@")
     .setBorder(true, true, true, true, true, true, "#9CB6D3", SpreadsheetApp.BorderStyle.SOLID);
   styleHeader_(sheet, cols);
@@ -807,6 +808,10 @@ function styleSchedule_(sheet) {
     sheet.setColumnWidth(1, 120);
     sheet.setColumnWidth(2, 260);
     for (let c = 3; c <= cols; c++) sheet.setColumnWidth(c, 160);
+  }
+  const maxC = sheet.getMaxColumns();
+  if (maxC > cols) { // справа от таблицы не должно оставаться «хвоста» от удалённой колонки (шапки, списков, цвета)
+    try { const tail = sheet.getRange(1, cols + 1, sheet.getMaxRows(), maxC - cols); tail.breakApart(); tail.clear(); tail.clearDataValidations(); } catch (e) { diag_("Хвост справа: " + String(e && e.message ? e.message : e)); }
   }
   sheet.setConditionalFormatRules(scheduleRules_(sheet));
   groupMonths_(sheet, true);
@@ -1062,7 +1067,7 @@ function seedTestUsers_(p) {
   } catch (err) { diag_("Тестовые пользователи: ОШИБКА — " + String(err && err.message ? err.message : err)); }
 }
 
-const STYLE_VERSION_ = "20"; // поднимайте, когда меняется оформление: таблица перестроится сама при ближайшем срабатывании таймера
+const STYLE_VERSION_ = "21"; // поднимайте, когда меняется оформление: таблица перестроится сама при ближайшем срабатывании таймера
 
 /** После обновления кода один раз оформляет таблицу сама (то же, что ручной запуск styleSheets). */
 function autoStyle_(p) {
@@ -1449,6 +1454,17 @@ function syncRoleColumns_() {
     });
     drop.sort((a, b) => b - a).forEach((i) => sheet.deleteColumn(i + 1));
     if (drop.length) { head = readHead(); changed = true; diag_("Убраны пустые старые должности: " + drop.length); }
+  }
+  { // пустые колонки без названия в конце таблицы (остались после удаления вида сотрудников) убираем
+    let h2 = readHead();
+    const lastRow2 = Math.max(sheet.getLastRow(), 1);
+    for (let i = h2.length - 1; i >= 5; i--) {
+      if (h2[i] !== "") break;
+      const empty = lastRow2 < 2 || sheet.getRange(2, i + 1, lastRow2 - 1, 1).getDisplayValues().every((r) => String(r[0]).trim() === "");
+      if (!empty) break;
+      sheet.deleteColumn(i + 1);
+      changed = true;
+    }
   }
   p.setProperty("GROUP_NAMES", JSON.stringify(names));
   try { p.setProperty("SCHED_HEAD", JSON.stringify(readHead())); } catch (e) { /* не обязательно */ }
