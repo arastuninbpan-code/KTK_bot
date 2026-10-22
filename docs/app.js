@@ -105,6 +105,7 @@ function toast(text, {bad = false, plane = false} = {}) {
 }
 
 // ---------- запросы к серверу ----------
+const UPDATING_MSG = "Сервер Google сейчас обновляется. Повторим через несколько секунд.";
 async function api(method, path, body) {
   let status, data;
   if (window.KTK_DEMO) {
@@ -129,7 +130,7 @@ async function api(method, path, body) {
       err.offline = true;
       throw err;
     }
-    try { data = JSON.parse(raw); } catch (e) { throw new Error("Сервер ответил не так, как ждали (код " + r.status + "): " + raw.replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").slice(0, 160)); }
+    try { data = JSON.parse(raw); } catch (e) { const er = new Error(UPDATING_MSG); er.transient = true; throw er; } // страница ошибки Google (обычно во время обновления сервера)
     status = data._status || (data && data.error ? 500 : (r.ok ? 200 : r.status));
   } else {
     const r = await fetch(method === "GET" && body ? path + "?" + new URLSearchParams(body) : path, {method, headers: {"Content-Type": "application/json", ...(state.token ? {Authorization: "Bearer " + state.token} : {})}, body: method === "GET" ? undefined : JSON.stringify(body || {})});
@@ -137,7 +138,11 @@ async function api(method, path, body) {
     status = r.status;
   }
   if (status === 401 && state.token) { logout(true); throw new Error("Войдите заново"); }
-  if (status >= 400) { const e = new Error(data.error || "Ошибка"); e.status = status; e.data = data; throw e; }
+  if (status >= 400) {
+    const msg = String(data.error || "Ошибка");
+    const transient = /^Google ответил не так|^Воркер не дождался Google/.test(msg); // сервер Google обновляется или не успел ответить: это временно
+    const e = new Error(transient ? UPDATING_MSG : msg); e.status = status; e.data = data; if (transient) e.transient = true; throw e;
+  }
   return data;
 }
 
@@ -235,7 +240,7 @@ async function pumpQueue() {
     catch (e) {
       if (!state.token) break;
       if (retryable(e)) {
-        if (!e.offline) op.tries = (op.tries || 0) + 1;
+        if (!e.offline && !e.transient) op.tries = (op.tries || 0) + 1; // пока сервер обновляется, правки ждут сколько нужно
         if ((op.tries || 0) < 6) { saveQueue(); drained = false; retryTimer = setTimeout(pumpQueue, retryMs); retryMs = Math.min(retryMs * 1.7, 30000); break; }
       }
       queue.shift(); saveQueue(); // отказ: правка не принята
@@ -1108,6 +1113,7 @@ async function load(manual = false, force = false) {
     if (manual) toast("Обновлено");
   } catch (e) {
     if (!state.token) return; // 401: api() уже вернул на экран входа
+    if (e.transient && state.ready) { if (manual) toast(e.message, {bad: true}); setTimeout(() => load(), 8000); return; } // сервер обновляется: показываем то, что есть, и тихо пробуем снова
     if (e.offline && state.ready) { setOffline(true); if (manual) toast(e.message, {bad: true}); return; } // нет сети: остаёмся на последних сохранённых данных
     toast(e.message, {bad: true});
     if (!state.ready) root.replaceChildren(h("div", {class: "loading"}, h("div", {class: "empty"}, cloud(), h("h3", {}, "Не удалось загрузить"), h("p", {}, e.message),
