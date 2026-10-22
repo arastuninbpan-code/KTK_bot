@@ -207,3 +207,16 @@ export function meetingPostText(e, note = "") {
   const place = e.hall ? `\n📍 ${cap(e.hall)}` : "";
   return `📋 Собрание: ${e.title}\n🗓 ${meetingWhen(e)}${place}${note ? `\n\n${note}` : ""}`;
 }
+
+// ---- подтверждение смены: две кнопки под уведомлением ----
+export const ACK_LABELS = {ok: "✅ Увидел(а)", no: "🚫 Не могу"};
+/** Подпись кнопки; выбранная помечена галочкой. */
+export const ackLabel = (status, chosen) => ACK_LABELS[status] + (chosen === status ? " ✓" : "");
+export const ackCallback = (status, eventId) => `ack:${status}:${eventId}`;
+/** "ack:ok:4284e0ea" -> {status, eventId} или null. */
+export function parseAck(data) {
+  const m = /^ack:(ok|no):([0-9a-f]{8})$/.exec(String(data || ""));
+  return m ? {status: m[1], eventId: m[2]} : null;
+}
+export const ackToast = {ok: "Отмечено: вы увидели ✅", no: "Отмечено: вы не можете 🚫. Администратору сообщили."};
+export const msgAckNo = (name, e) => `⚠️ <b>${esc(name)}</b> отметил(а), что <b>не может</b>:\n${esc(e.title || "Смена")}, ${e.date.slice(8, 10)}.${e.date.slice(5, 7)}${e.time ? " " + esc(e.time) : ""}${e.hall ? " · " + esc(e.hall) : ""}`;

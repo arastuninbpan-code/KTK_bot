@@ -2,10 +2,11 @@
 import {makeToken, readToken} from "./auth.mjs";
 import {addDays, buildRow, daysOf, findConflicts, headerRoles, isIdColumn, layoutOf, rowColumns, matchPhones, norm, parseDate, parseEvents, todayIso, validateEvent} from "./core.mjs";
 import {platform} from "./platform.mjs";
+import {recordAck} from "./bot.mjs";
 import {archiveLine, buildReport, checkParams, parseArchive, reportCsv} from "./report.mjs";
 import {canEdit, cleanPhotoIds, colorName, ROLE_LABELS, TABS, VENUE_COLORS} from "./store.mjs";
 
-export const SERVER_VERSION = "2026.10.22-16"; // меняется при каждом выпуске; приложение показывает её в профиле
+export const SERVER_VERSION = "2026.10.22-17"; // меняется при каждом выпуске; приложение показывает её в профиле
 
 class HttpError extends Error {
   constructor(status, message, extra = {}) { super(message); this.status = status; this.extra = extra; }
@@ -56,7 +57,7 @@ const publicUser = (u) => ({name: u.name, role: u.role, roleLabel: ROLE_LABELS[u
 const connections = (store, me) => ({login: me.login, channels: [...new Set(store.chats().filter((c) => c.phone === me.phone).map((c) => c.channel))]});
 
 export function handleApi(req, deps) {
-  const {store, secret, now = () => Date.now(), afterChange = () => {}, getRev = () => "", bumpRev = () => {}, announce = () => {}, afterVenues = () => {}, saveReport = () => ({number: 0})} = deps;
+  const {store, secret, now = () => Date.now(), afterChange = () => {}, getRev = () => "", bumpRev = () => {}, announce = () => {}, senders = {}, appUrl = "", afterVenues = () => {}, saveReport = () => ({number: 0})} = deps;
   const {method, path, body = {}, token} = req;
   try {
     // --- без входа ---
@@ -82,12 +83,16 @@ export function handleApi(req, deps) {
       const table = store.book.get(TABS.schedule);
       const metaMap = store.metaMap();
       const counts = store.commentCounts();
+      const ackMap = store.ackMap();
+      const nameOf = new Map(users.map((u) => [u.phone, u.name]));
       const events = parseEvents(table, today)
         .filter((e) => (e.dateEnd || e.date) >= addDays(today, -62)) // два месяца назад: для календаря на вкладке «Площадки»
         .sort((a, b) => (a.date + a.time).localeCompare(b.date + b.time))
         .map((e) => ({...e, rev: rev(table[e.row - 1]),
           meta: e.id && metaMap[e.id] ? {kind: metaMap[e.id].kind, note: metaMap[e.id].note} : {kind: "event", note: ""},
           comments: (e.id && counts[e.id] && counts[e.id].n) || 0,
+          myAck: (e.id && ackMap[e.id] && ackMap[e.id][me.phone]) || undefined, // моя отметка: ok / no
+          acks: canEdit(me.role) && e.id && ackMap[e.id] ? Object.fromEntries(Object.entries(ackMap[e.id]).map(([ph, st]) => [nameOf.get(ph) || ph, st])) : undefined, // у администраторов: кто что отметил
           mine: Object.entries(e.roles).filter(([, names]) => names.some((n) => matchPhones(n, users).includes(me.phone))).map(([role]) => role)}));
       // площадки: список из листа «Площадки» + все, что уже вписано в события
       const venues = [...store.venues()];
@@ -110,6 +115,16 @@ export function handleApi(req, deps) {
       if (body.save) out.saved = saveReport(report, me.name);
       if (body.csv) out.csv = reportCsv(report);
       return {status: 200, body: out};
+    }
+
+    // --- «увидел(а)» / «не могу» на событии (то же, что кнопки под уведомлением в мессенджере) ---
+    if (path === "/api/ack" && method === "POST") {
+      const st = body.status === "no" ? "no" : body.status === "ok" ? "ok" : "";
+      if (!st || !/^[0-9a-f]{8}$/.test(String(body.event || ""))) throw new HttpError(400, "Не указано событие или отметка");
+      const r = recordAck({store, user: me, status: st, eventId: String(body.event), appUrl, senders, now: now(), log: console});
+      if (!r.ok) throw new HttpError(409, r.toast);
+      if (r.changed) bumpRev();
+      return {status: 200, body: {ok: true, status: st}};
     }
 
     // --- аватарки (из профилей ВК и Telegram): {uid: ссылка или маленькая картинка} ---

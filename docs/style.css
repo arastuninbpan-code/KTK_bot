@@ -436,3 +436,15 @@ img { -webkit-user-drag: none; -webkit-touch-callout: none; }
 .nowtag::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: #fff; animation: blink 1.2s ease-in-out infinite; }
 @keyframes blink { 50% { opacity: .25; } }
 @media (prefers-reduced-motion: reduce) { .ev.live { animation: none; } }
+
+/* отметки «увидел(а)» / «не могу» */
+.ack { display: inline-flex; align-items: center; justify-content: center; width: 17px; height: 17px; margin-left: 5px; border-radius: 50%; font-size: 11px; font-weight: 900; line-height: 1; color: #fff; vertical-align: 1px; }
+.ack.ok { background: #1AA064; }
+.ack.no { background: var(--coral); }
+.ackbar { margin: 12px 0 4px; }
+.ackbar > span { display: block; margin: 0 0 6px 2px; font-size: 13px; font-weight: 900; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; }
+.ackbtns { display: flex; gap: 10px; }
+.ackbtn { flex: 1; padding: 11px 8px; border: var(--line); border-radius: 14px; background: #fff; font-weight: 900; font-size: 15px; color: var(--navy); box-shadow: 3px 3px 0 var(--navy); }
+.ackbtn:active { transform: translate(3px, 3px); box-shadow: 0 0 0 var(--navy); }
+.ackbtn.ok.on { background: #1AA064; color: #fff; border-color: #11704a; box-shadow: 3px 3px 0 #11704a; }
+.ackbtn.no.on { background: var(--coral); color: #fff; box-shadow: 3px 3px 0 #9c2f2c; }

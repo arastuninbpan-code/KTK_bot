@@ -3,8 +3,9 @@ import {normPhone, phonesIn} from "./core.mjs";
 import {platform} from "./platform.mjs";
 import {ARCHIVE_HEADER, DELETED_HEADER} from "./report.mjs";
 
-export const TABS = {schedule: "Расписание", staff: "Сотрудники", venues: "Площадки", reports: "Отчёты", archive: "Архив", deleted: "_удалённое", chats: "Подписчики", requests: "_заявки", people: "_люди", off: "_недоступность", comments: "_комментарии", meta: "_события", avatars: "_аватары", photos: "_фото", state: "_служебное", lock: "_замок"};
+export const TABS = {schedule: "Расписание", staff: "Сотрудники", venues: "Площадки", reports: "Отчёты", archive: "Архив", deleted: "_удалённое", acks: "_подтверждения", chats: "Подписчики", requests: "_заявки", people: "_люди", off: "_недоступность", comments: "_комментарии", meta: "_события", avatars: "_аватары", photos: "_фото", state: "_служебное", lock: "_замок"};
 export const REQUESTS_HEADER = ["Канал", "ID чата", "Телефон"];
+export const ACK_HEADER = ["ID события", "Телефон", "Статус", "Время", "Имя"];
 export const COMMENT_HEADER = ["ID события", "ID", "Время", "Телефон", "Имя", "Текст", "Фото"];
 export const META_HEADER = ["ID события", "Тип", "Описание", "—", "Автор", "Создано"];
 export const AVATAR_HEADER = ["Телефон", "Канал", "Фото", "Обновлено"];
@@ -443,6 +444,33 @@ export class Store {
   }
 
   /** Всем сотрудникам без логина выдаёт случайный (6 знаков, без похожих букв и цифр). Возвращает число выданных. */
+  /** Отметки сотрудников «увидел(а)» / «не могу» на событиях: [{eventId, phone, status: "ok"|"no", ts, name}]. */
+  acks() {
+    if (!this.book.has(TABS.acks)) return [];
+    return this.book.get(TABS.acks).slice(1)
+      .map((r) => ({eventId: String(r[0] || ""), phone: normPhone(r[1] || ""), status: String(r[2] || "") === "no" ? "no" : "ok", ts: Number(r[3]) || 0, name: String(r[4] || "")}))
+      .filter((a) => a.eventId && a.phone);
+  }
+  /** {ID события: {телефон: "ok"|"no"}} */
+  ackMap() {
+    const out = {};
+    for (const a of this.acks()) (out[a.eventId] ||= {})[a.phone] = a.status;
+    return out;
+  }
+  /** Записывает отметку (одна на человека и событие; можно передумать). -> true, если статус изменился. */
+  setAck(eventId, user, status) {
+    this.book.ensure(TABS.acks, ACK_HEADER);
+    const st = status === "no" ? "no" : "ok";
+    const rows = this.book.get(TABS.acks);
+    const at = rows.findIndex((r, i) => i > 0 && String(r[0] || "") === eventId && normPhone(r[1] || "") === user.phone);
+    const line = [eventId, user.phone, st, String(this.now()), user.name || ""];
+    if (at >= 0) {
+      if (String(rows[at][2] || "") === st) return false;
+      this.book.set(TABS.acks, at + 1, line);
+    } else this.book.append(TABS.acks, line);
+    return true;
+  }
+
   /** Удалённое событие не пропадает насовсем: его копия остаётся в скрытом листе «_удалённое». */
   archiveDeleted(line, by) {
     this.book.ensure(TABS.deleted, DELETED_HEADER);

@@ -37,7 +37,7 @@ function secret_() {
 // Чтение листа из таблицы — самое медленное место (около 0,4 с на лист). Часто нужные листы держим в кэше Google и
 // сбрасываем при любой правке: скриптом (GasBook), на сайте (тоже через GasBook) и руками (onSheetChange).
 const PLAN_KIND_ = {[TABS.staff]: "staff", [TABS.schedule]: "schedule"};
-const CACHED_TABS_ = [TABS.schedule, TABS.staff, TABS.venues, TABS.chats, TABS.requests, TABS.off, TABS.meta, TABS.comments, TABS.avatars]; // каждый запрос расписания читает и их: без кеша это лишние ~0,5 с на лист
+const CACHED_TABS_ = [TABS.schedule, TABS.staff, TABS.venues, TABS.chats, TABS.requests, TABS.off, TABS.meta, TABS.comments, TABS.avatars, TABS.acks]; // каждый запрос расписания читает и их: без кеша это лишние ~0,5 с на лист
 const CACHE_TTL_ = 600; // запас: даже если сброс почему-то не сработал, через 10 минут данные обновятся
 const CACHE_PART_ = 30000; // значение в кэше Google ограничено 100 КБ, режем на куски
 
@@ -263,6 +263,17 @@ const store_ = () => new Store(new GasBook(), {secret: secret_(), owner: owner_(
 let netMs_ = 0; // сколько миллисекунд ушло на обращения к Telegram/ВК за текущий запуск (для журнала скорости)
 const fetchTimed_ = (url, opts) => { const t = Date.now(); try { return UrlFetchApp.fetch(url, opts); } finally { netMs_ += Date.now() - t; } };
 
+/** Кнопки под уведомлением о смене: «Увидел(а)» и «Не могу» (выбранная помечена галочкой), ниже — ссылка на приложение. */
+function tgAckRows_(eventId, chosen, button) {
+  const rows = [[{text: ackLabel("ok", chosen), callback_data: ackCallback("ok", eventId)}, {text: ackLabel("no", chosen), callback_data: ackCallback("no", eventId)}]];
+  if (button) rows.push([{text: button.text, url: button.url}]);
+  return rows;
+}
+function tgApi_(method, body) {
+  const r = fetchTimed_("https://api.telegram.org/bot" + prop_("TELEGRAM_BOT_TOKEN") + "/" + method, {method: "post", contentType: "application/json", payload: JSON.stringify(body), muteHttpExceptions: true});
+  return r.getResponseCode();
+}
+
 function tgSend_(chatId, text, options) {
   const pieces = chunkText(text);
   pieces.forEach((piece, i) => {
@@ -271,10 +282,11 @@ function tgSend_(chatId, text, options) {
       if (options === "contact") body.reply_markup = {keyboard: [[{text: "📱 Поделиться номером", request_contact: true}]], resize_keyboard: true, one_time_keyboard: true};
       else if (options === "remove") body.reply_markup = {remove_keyboard: true};
       else if (options && options.menu) body.reply_markup = {keyboard: menuRows(options.menu).map((row) => row.map((text) => ({text}))), resize_keyboard: true, is_persistent: true}; // главное меню под полем ввода
-      else if (options && (options.button || options.copy)) {
+      else if (options && (options.button || options.copy || options.ack)) {
         const rows = [];
         if (options.copy) rows.push([{text: options.copy.text, copy_text: {text: options.copy.value}}]); // кнопка «скопировать» одним нажатием
-        if (options.button) rows.push([{text: options.button.text, url: options.button.url}]);
+        if (options.ack) rows.push(...tgAckRows_(options.ack.eventId, "", options.button)); // «Увидел(а)» / «Не могу» (+ «Открыть в приложении»)
+        else if (options.button) rows.push([{text: options.button.text, url: options.button.url}]);
         body.reply_markup = {inline_keyboard: rows};
       }
     }
@@ -412,12 +424,23 @@ const bumpRev_ = () => PropertiesService.getScriptProperties().setProperty("DATA
 const SYNC_DELAY_MS = 2000; // сколько ждём тишины после правки таблицы, чтобы не рассылать недописанное
 
 /** Таймер раз в минуту: страховка (если быстрая сверка не сработала) и проверка напоминаний раз в ~5 минут. */
+const WEBHOOK_VERSION_ = "2"; // поднимайте, когда меняется набор событий Telegram (сейчас: сообщения + нажатия кнопок)
+/** После обновления один раз заново настраиваем вебхук Telegram: иначе нажатия кнопок под уведомлениями не доходят. */
+function refreshWebhook_(p) {
+  if (p.getProperty("WEBHOOK_VER") === WEBHOOK_VERSION_) return;
+  if (!prop_("TELEGRAM_BOT_TOKEN") || !(prop_("RELAY_URL") || prop_("WEBAPP_URL"))) return;
+  p.setProperty("WEBHOOK_VER", WEBHOOK_VERSION_);
+  try { setWebhook(); diag_("Telegram: вебхук обновлён (теперь доходят нажатия кнопок)"); }
+  catch (err) { diag_("Telegram: вебхук не обновился — " + String(err && err.message ? err.message : err)); }
+}
+
 function everyMinute() {
   const p = PropertiesService.getScriptProperties();
   const now = Date.now();
   const dirty = Number(p.getProperty("dirty") || 0);
   const last = Number(p.getProperty("last_cycle") || 0);
   const dueDirty = dirty && now - dirty >= 15000;
+  refreshWebhook_(p);
   autoStyle_(p);
   seedTestUsers_(p);
   const todayStr = todayIso(Date.now());
@@ -490,6 +513,8 @@ function apiCall_(req) {
     secret: secret_(),
     announce: announce_,
     saveReport: saveReport_,
+    senders: SENDERS,
+    appUrl: prop_("APP_URL") || "",
     afterVenues: () => { PropertiesService.getScriptProperties().setProperty("regroup", "1"); occupancyNow_(); }, // цвета в таблице занятости обновляются сразу
     getRev: getRev_,
     bumpRev: bumpRev_,
@@ -501,12 +526,30 @@ function apiCall_(req) {
   return Object.assign({}, r.body, {_status: r.status});
 }
 
+/** Нажали «Увидел(а)» или «Не могу» под уведомлением: записываем отметку, отвечаем и помечаем выбранную кнопку. */
+function tgAck_(cb) {
+  const a = parseAck(cb.data);
+  try {
+    if (!a) { tgApi_("answerCallbackQuery", {callback_query_id: cb.id}); return; }
+    const appUrl = prop_("APP_URL") || "";
+    const r = withLock_(() => handleAck({store: store_(), channel: SENDERS.telegram, chatId: cb.chatId, status: a.status, eventId: a.eventId, appUrl, senders: SENDERS, now: Date.now(), log: console}));
+    if (r.ok && r.changed) bumpRev_(); // приложение подхватит отметку
+    tgApi_("answerCallbackQuery", {callback_query_id: cb.id, text: String(r.toast).slice(0, 190), show_alert: !r.ok});
+    if (r.ok) tgApi_("editMessageReplyMarkup", {chat_id: cb.chatId, message_id: cb.messageId, reply_markup: {inline_keyboard: tgAckRows_(a.eventId, a.status, appUrl ? {text: "Открыть в приложении", url: appUrl} : null)}});
+  } catch (err) {
+    diag_("TG: ОШИБКА кнопки — " + (err && err.message ? err.message : err));
+    try { tgApi_("answerCallbackQuery", {callback_query_id: cb.id, text: "Не получилось, попробуйте ещё раз"}); } catch (e2) { /* ответ не обязателен */ }
+  }
+}
+
 function telegramUpdate_(e) {
   if (e.parameter.secret !== prop_("WEBHOOK_SECRET")) return ok_();
   const update = JSON.parse(e.postData.contents);
   const cache = CacheService.getScriptCache();
   if (cache.get("u" + update.update_id)) return ok_(); // Telegram может прислать то же сообщение повторно
   cache.put("u" + update.update_id, "1", 21600);
+  const cb = telegramCallback(update);
+  if (cb) { tgAck_(cb); return ok_(); }
   const ev = telegramEvent(update);
   if (ev) {
     const t0 = Date.now();
@@ -544,12 +587,29 @@ function diag_(text) {
   } catch (err) { console.error("не удалось записать журнал: " + (err && err.message)); }
 }
 
+/** Нажали «Увидел(а)» или «Не могу» в ВК: записываем отметку и показываем подтверждение всплывающей подсказкой. */
+function vkAck_(be) {
+  const cache = CacheService.getScriptCache();
+  if (be.eventKey && cache.get("ve" + be.eventKey)) return; // повтор того же нажатия
+  if (be.eventKey) cache.put("ve" + be.eventKey, "1", 3600);
+  let text = "Не получилось, попробуйте ещё раз";
+  try {
+    const r = withLock_(() => handleAck({store: store_(), channel: SENDERS.vk, chatId: be.chatId, status: be.status, eventId: be.eventId, appUrl: prop_("APP_URL") || "", senders: SENDERS, now: Date.now(), log: console}));
+    if (r.ok && r.changed) bumpRev_();
+    text = r.toast;
+  } catch (err) { diag_("VK: ОШИБКА кнопки — " + (err && err.message ? err.message : err)); }
+  try { vkCall_("messages.sendMessageEventAnswer", {event_id: be.eventKey, user_id: be.userId, peer_id: be.chatId, event_data: JSON.stringify({type: "show_snackbar", text: String(text).slice(0, 90)})}); }
+  catch (err) { diag_("VK: ответ на кнопку не отправлен — " + (err && err.message ? err.message : err)); }
+}
+
 function vkUpdate_(e) {
   try {
     if (e.parameter.secret !== prop_("WEBHOOK_SECRET")) { diag_("VK: пропущено — secret в адресе воркера (GAS_URL) не совпал с WEBHOOK_SECRET"); return ok_(); }
     const update = JSON.parse(e.postData.contents);
     if (update.type === "confirmation") return ContentService.createTextOutput(prop_("VK_CONFIRM") || "");
     if (prop_("VK_SECRET") && update.secret !== prop_("VK_SECRET")) { diag_("VK: пропущено — секретный ключ Callback API не совпал с VK_SECRET"); return ok_(); }
+    const be = vkButtonEvent(update);
+    if (be) { vkAck_(be); return ok_(); }
     const ev = vkEvent(update);
     if (!ev) { diag_("VK: пропущено — событие «" + update.type + "» не личное сообщение человека"); return ok_(); }
     const cache = CacheService.getScriptCache();
@@ -601,7 +661,7 @@ function setWebhook() {
   console.log("Вебхук будет на: " + hostOf_(target));
   const r = UrlFetchApp.fetch("https://api.telegram.org/bot" + prop_("TELEGRAM_BOT_TOKEN") + "/setWebhook", {
     method: "post", contentType: "application/json", muteHttpExceptions: true,
-    payload: JSON.stringify({url: target, allowed_updates: ["message"]}),
+    payload: JSON.stringify({url: target, allowed_updates: ["message", "callback_query"]}),
   });
   console.log(r.getContentText());
 }

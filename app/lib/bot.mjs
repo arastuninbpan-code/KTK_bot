@@ -1,6 +1,6 @@
 // Диалог с сотрудником (одинаков для любого мессенджера) и рассылка уведомлений. Синхронный код.
-import {looksLikePhone, matchPhones, normPhone, parseEvents, parseGrid, planCycle, todayIso} from "./core.mjs";
-import {afishaText, appButton, MENU_COMMANDS, msgApp, msgMenu, msgNoApp, msgAlreadyConnected, msgAskPhone, msgIntro, msgBlocked, msgChange, msgConnected, msgAccessGranted, msgCommentSaved, msgLogin, msgPostEmpty, msgPostNoRights, msgPostNotConfigured, msgPostPreview, msgPostResult, msgReminder, msgRequestSent, msgStopped, msgWelcome, publicAfishaText, shiftsText} from "./format.mjs";
+import {daysOf, looksLikePhone, matchPhones, norm, normPhone, parseEvents, parseGrid, planCycle, todayIso} from "./core.mjs";
+import {afishaText, appButton, MENU_COMMANDS, msgApp, msgMenu, msgNoApp, msgAlreadyConnected, ackToast, msgAckNo, msgAskPhone, msgIntro, msgBlocked, msgChange, msgConnected, msgAccessGranted, msgCommentSaved, msgLogin, msgPostEmpty, msgPostNoRights, msgPostNotConfigured, msgPostPreview, msgPostResult, msgReminder, msgRequestSent, msgStopped, msgWelcome, publicAfishaText, shiftsText} from "./format.mjs";
 import {Gone} from "./telegram.mjs";
 import {canEdit, normLogin, TABS} from "./store.mjs";
 
@@ -149,7 +149,14 @@ export function runCycle({store, senders, now = Date.now(), appUrl = "", log = c
     const g = changeGroups.get(k);
     if (g) { if (c.row.role && !g.roles.includes(c.row.role)) g.roles.push(c.row.role); } else changeGroups.set(k, {c, roles: c.row.role ? [c.row.role] : []});
   }
-  const messages = [...changeGroups.values()].map(({c, roles}) => ({phone: c.phone, text: msgChange(c.kind, {...c.row, role: roles.join(", ")}, c.old)}));
+  const events = parseEvents(table, todayIso(now));
+  // под уведомлением о назначении и переносе — кнопки «Увидел(а)» / «Не могу» (нужен ID события)
+  const ackFor = (c) => {
+    if (c.kind !== "added" && c.kind !== "changed") return "";
+    const e = events.find((x) => x.id && daysOf(x).includes(c.row.date) && norm(x.title) === norm(c.row.event));
+    return e ? e.id : "";
+  };
+  const messages = [...changeGroups.values()].map(({c, roles}) => ({phone: c.phone, text: msgChange(c.kind, {...c.row, role: roles.join(", ")}, c.old), ack: ackFor(c)}));
   const groups = new Map();
   for (const r of plan.reminders) {
     const k = r.phone + "\t" + r.kind;
@@ -164,7 +171,7 @@ export function runCycle({store, senders, now = Date.now(), appUrl = "", log = c
   for (const m of messages) {
     for (const c of chats.filter((x) => x.phone === m.phone)) {
       try {
-        senders[c.channel]?.send(c.chatId, m.text, btn);
+        senders[c.channel]?.send(c.chatId, m.text, m.ack ? {...(btn || {}), ack: {eventId: m.ack}} : btn);
         sent++;
       } catch (err) {
         if (err instanceof Gone) store.unbind(c.channel, c.chatId);
@@ -173,4 +180,32 @@ export function runCycle({store, senders, now = Date.now(), appUrl = "", log = c
     }
   }
   return {sent};
+}
+
+/** Человек отметил под событием «увидел(а)» или «не могу» (из бота или из приложения). -> {ok, changed, status, toast}. */
+export function recordAck({store, user, status, eventId, appUrl = "", senders = {}, now = Date.now(), log = console}) {
+  const users = store.users();
+  const ev = parseEvents(store.book.get(TABS.schedule), todayIso(now)).find((e) => e.id === eventId);
+  if (!ev) return {ok: false, toast: "Это событие уже удалено"};
+  const mine = Object.values(ev.roles).some((names) => names.some((n) => matchPhones(n, users).includes(user.phone)));
+  if (!mine) return {ok: false, toast: "Вас уже нет в составе этого события"};
+  const changed = store.setAck(eventId, user, status);
+  if (changed && status === "no") { // администраторам и редакторам сразу сообщаем, что человек не может
+    const text = msgAckNo(user.name, ev);
+    const btn = appButton(appUrl ? appUrl + "#event=" + eventId : "");
+    const editors = new Set(store.activeUsers().filter((u) => canEdit(u.role) && u.phone !== user.phone).map((u) => u.phone));
+    for (const c of store.chats().filter((x) => editors.has(x.phone))) {
+      try { senders[c.channel]?.send(c.chatId, text, btn); }
+      catch (err) { if (err instanceof Gone) store.unbind(c.channel, c.chatId); else log.error(String(err.message || err)); }
+    }
+  }
+  return {ok: true, changed, status, toast: ackToast[status]};
+}
+
+/** Нажатие кнопки под уведомлением в мессенджере: чат -> сотрудник -> отметка. */
+export function handleAck({store, channel, chatId, status, eventId, appUrl = "", senders = {}, now = Date.now(), log = console}) {
+  const chat = store.chats().find((c) => c.channel === channel.name && c.chatId === String(chatId));
+  const user = chat ? store.users().find((u) => u.phone === chat.phone && u.role !== "blocked") : null;
+  if (!user) return {ok: false, toast: "Этот чат не подключён к сотруднику"};
+  return recordAck({store, user, status, eventId, appUrl, senders, now, log});
 }
