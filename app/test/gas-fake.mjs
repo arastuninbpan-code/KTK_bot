@@ -82,6 +82,7 @@ class Spreadsheet {
   constructor(tabs) { this.sheets = Object.entries(tabs).map(([name, rows]) => { const s = new Sheet(name); s.ss = this; rows.forEach((row, i) => row.forEach((v, j) => s.put(i + 1, j + 1, v))); return s; }); }
   getSheets() { return this.sheets.slice(); }
   getSheetByName(n) { return this.sheets.find((s) => s.name === n) || null; }
+  deleteSheet(sh) { this.sheets.splice(this.sheets.indexOf(sh), 1); }
   insertSheet(n) { const s = new Sheet(n); s.ss = this; this.sheets.push(s); return s; }
 }
 

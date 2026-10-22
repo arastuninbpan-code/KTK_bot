@@ -2,10 +2,10 @@
 import {makeToken, readToken} from "./auth.mjs";
 import {addDays, buildRow, daysOf, findConflicts, headerRoles, isIdColumn, layoutOf, rowColumns, matchPhones, norm, parseDate, parseEvents, todayIso, validateEvent} from "./core.mjs";
 import {platform} from "./platform.mjs";
-import {buildReport, checkParams, reportCsv} from "./report.mjs";
+import {archiveLine, buildReport, checkParams, parseArchive, reportCsv} from "./report.mjs";
 import {canEdit, cleanPhotoIds, colorName, ROLE_LABELS, TABS, VENUE_COLORS} from "./store.mjs";
 
-export const SERVER_VERSION = "2026.10.22-6"; // меняется при каждом выпуске; приложение показывает её в профиле
+export const SERVER_VERSION = "2026.10.22-7"; // меняется при каждом выпуске; приложение показывает её в профиле
 
 class HttpError extends Error {
   constructor(status, message, extra = {}) { super(message); this.status = status; this.extra = extra; }
@@ -104,8 +104,8 @@ export function handleApi(req, deps) {
       const bad = checkParams(body);
       if (bad) throw new HttpError(400, bad);
       const metaMap = store.metaMap();
-      const events = parseEvents(store.book.get(TABS.schedule), today);
-      const report = buildReport(events, {from: body.from, to: body.to, kind: body.kind, value: body.value, isMeeting: (e) => Boolean(e.id && metaMap[e.id] && metaMap[e.id].kind === "meeting")});
+      const events = [...parseArchive(store.archiveRows(), today), ...parseEvents(store.book.get(TABS.schedule), today)]; // и старые события из листа «Архив»
+      const report = buildReport(events, {from: body.from, to: body.to, kind: body.kind, value: body.value, isMeeting: (e) => Boolean(e.meeting || (e.id && metaMap[e.id] && metaMap[e.id].kind === "meeting"))});
       const out = {report};
       if (body.save) out.saved = saveReport(report, me.name);
       if (body.csv) out.csv = reportCsv(report);
@@ -218,6 +218,8 @@ export function handleApi(req, deps) {
         if (!byId && body.rev !== undefined && body.rev !== rev(table[rowNo - 1])) throw new HttpError(409, "Событие уже изменили. Обновите страницу и повторите.");
       }
       if (method === "DELETE") {
+        const gone = parseEvents(table, today).find((e) => e.row === rowNo);
+        if (gone) { try { store.archiveDeleted(archiveLine(gone, Boolean(gone.id && store.metaMap()[gone.id] && store.metaMap()[gone.id].kind === "meeting")), me.name); } catch (e) { console.error("Копия удалённого: " + String(e.message || e)); } } // удалённое не пропадает насовсем
         store.book.remove(TABS.schedule, rowNo);
         bumpRev();
         afterChange();

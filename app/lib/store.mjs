@@ -1,8 +1,9 @@
 // Хранилище поверх таблицы: сотрудники и роли, чаты, снимок расписания, коды входа, блокировка.
 import {normPhone, phonesIn} from "./core.mjs";
 import {platform} from "./platform.mjs";
+import {ARCHIVE_HEADER, DELETED_HEADER} from "./report.mjs";
 
-export const TABS = {schedule: "Расписание", staff: "Сотрудники", venues: "Площадки", reports: "Отчёты", chats: "Подписчики", requests: "_заявки", people: "_люди", off: "_недоступность", comments: "_комментарии", meta: "_события", avatars: "_аватары", photos: "_фото", state: "_служебное", lock: "_замок"};
+export const TABS = {schedule: "Расписание", staff: "Сотрудники", venues: "Площадки", reports: "Отчёты", archive: "Архив", deleted: "_удалённое", chats: "Подписчики", requests: "_заявки", people: "_люди", off: "_недоступность", comments: "_комментарии", meta: "_события", avatars: "_аватары", photos: "_фото", state: "_служебное", lock: "_замок"};
 export const REQUESTS_HEADER = ["Канал", "ID чата", "Телефон"];
 export const COMMENT_HEADER = ["ID события", "ID", "Время", "Телефон", "Имя", "Текст", "Фото"];
 export const META_HEADER = ["ID события", "Тип", "Описание", "—", "Автор", "Создано"];
@@ -442,6 +443,19 @@ export class Store {
   }
 
   /** Всем сотрудникам без логина выдаёт случайный (6 знаков, без похожих букв и цифр). Возвращает число выданных. */
+  /** Удалённое событие не пропадает насовсем: его копия остаётся в скрытом листе «_удалённое». */
+  archiveDeleted(line, by) {
+    this.book.ensure(TABS.deleted, DELETED_HEADER);
+    this.book.append(TABS.deleted, [new Date(this.now() + 3 * 3600e3).toISOString().slice(0, 16).replace("T", " "), by || "", ...line]);
+  }
+  /** Лист «Архив»: события старше года (строки без шапки). */
+  archiveRows() { return this.book.has(TABS.archive) ? this.book.get(TABS.archive).slice(1) : []; }
+  appendArchive(lines) {
+    if (!lines.length) return;
+    this.book.ensure(TABS.archive, ARCHIVE_HEADER);
+    for (const l of lines) this.book.append(TABS.archive, l);
+  }
+
   ensureLogins() {
     const rows = this.book.get(TABS.staff);
     if (rows.length < 2) return 0;

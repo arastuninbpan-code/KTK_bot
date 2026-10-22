@@ -1,7 +1,7 @@
 // Оболочка приложения в памяти телефона: страница открывается и без интернета.
 // Онлайн всегда берём свежее с сервера; если сети нет или она «висит» дольше 4 секунд — отдаём то, что сохранено в прошлый раз.
 // Сами данные расписания (запросы к серверу — POST) сюда не попадают: их хранит само приложение.
-const CACHE = "ktk-shell-v9";
+const CACHE = "ktk-shell-v10";
 const SHELL = ["./", "index.html", "style.css", "app.js", "config.js", "version.js", "demo.js", "avatar.webp", "manifest.webmanifest"];
 
 self.addEventListener("install", (e) => {

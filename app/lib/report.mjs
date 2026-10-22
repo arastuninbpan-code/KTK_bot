@@ -1,5 +1,5 @@
 // Отчёты за период: по площадке, по сотруднику, по отделу (должности). Чистые функции: события -> таблица.
-import {addDays, daysOf, norm} from "./core.mjs";
+import {addDays, daysOf, norm, parseDate, splitPeople} from "./core.mjs";
 
 export const REPORT_KINDS = {venue: "Площадка", person: "Сотрудник", role: "Отдел"};
 export const REPORT_WIDTH = 7; // все отчёты в листе одной ширины
@@ -107,7 +107,7 @@ export function checkParams(p) {
   if (!REPORT_KINDS[p.kind]) return "Выберите, по чему готовить отчёт";
   if (!iso.test(p.from || "") || !iso.test(p.to || "")) return "Укажите даты начала и конца периода";
   if (p.to < p.from) return "Конец периода раньше начала";
-  if (p.to > addDays(p.from, 366)) return "Период не больше года";
+  if (p.to > addDays(p.from, 4100)) return "Период не больше 10 лет";
   return "";
 }
 
@@ -136,3 +136,35 @@ export function reportCsv(r) {
   const q = (s) => /[;"\n]/.test(s) ? '"' + String(s).replace(/"/g, '""') + '"' : String(s);
   return "﻿" + [[reportTitle(r)], [`Период: ${periodText(r)}`], [], r.columns, ...r.rows, r.total].map((row) => row.map(q).join(";")).join("\r\n");
 }
+
+// ===== долгое хранение: события старше года уходят в лист «Архив» (и никогда не удаляются), отчёты читают и его =====
+export const ARCHIVE_HEADER = ["Дата", "Начало", "Конец", "Событие", "Площадка", "Тип", "Состав", "ID"];
+export const DELETED_HEADER = ["Удалено (МСК)", "Кто", ...ARCHIVE_HEADER];
+export const rolesText = (roles) => Object.entries(roles || {}).map(([r, names]) => r + ": " + names.join(", ")).join("; ");
+
+/** Событие -> строка архива в понятном человеку виде. */
+export function archiveLine(e, meeting = false) {
+  return [ddmmyyyy(e.date) + (e.dateEnd ? " до " + ddmmyyyy(e.dateEnd) : ""), e.time || "", e.end || "", e.title || "", e.hall || "", meeting ? "Собрание" : "Событие", rolesText(e.roles), e.id || ""].map(String);
+}
+
+/** Строки архива (без шапки) -> события в том же виде, что даёт parseEvents. */
+export function parseArchive(rows, today) {
+  const out = [];
+  rows.forEach((r, i) => {
+    const m = /^\s*(\d{1,2}\.\d{2}\.\d{4})(?:\s+до\s+(\d{1,2}\.\d{2}\.\d{4}))?/.exec(String(r[0] || ""));
+    const date = m ? parseDate(m[1], today) : null;
+    if (!date) return;
+    const roles = {};
+    for (const part of String(r[6] || "").split(/;\s*/).filter(Boolean)) {
+      const at = part.indexOf(": ");
+      if (at < 1) continue;
+      const people = splitPeople(part.slice(at + 2));
+      if (people.length) roles[part.slice(0, at)] = people;
+    }
+    out.push({row: i + 2, id: String(r[7] || ""), date, dateEnd: (m[2] && parseDate(m[2], today)) || "", time: String(r[1] || ""), end: String(r[2] || ""), title: String(r[3] || ""), hall: String(r[4] || ""), roles, staffed: Object.keys(roles).length > 0, meeting: String(r[5] || "") === "Собрание", archived: true});
+  });
+  return out;
+}
+
+/** Первое число месяца, который был `months` месяцев назад: всё, что закончилось раньше, пора уносить в архив. */
+export const archiveCutoff = (today, months = 12) => new Date(Date.UTC(+today.slice(0, 4), +today.slice(5, 7) - 1 - months, 1)).toISOString().slice(0, 10);

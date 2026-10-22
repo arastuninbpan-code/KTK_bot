@@ -72,6 +72,20 @@ const tagStyle = (role) => { const all = state.allRoles && state.allRoles.length
 const tag = (role) => h("span", {class: "tag", style: tagStyle(role)}, roleText(role));
 
 /** Смена начинается в ближайший час (по Москве)? Тогда карточка «срочная». */
+/** Событие идёт прямо сейчас: сегодня, время начала уже наступило, конец (или 2 часа без указанного конца) ещё нет. */
+function isNow(e) {
+  if (e.dateEnd || !e.time) return false;
+  const now = new Date(Date.now() + 3 * 3600e3);
+  if (e.date !== now.toISOString().slice(0, 10)) return false;
+  const m = /(\d{1,2}):(\d{2})/.exec(e.time);
+  if (!m) return false;
+  const start = +m[1] * 60 + +m[2];
+  const em = /(\d{1,2}):(\d{2})/.exec(e.end || "");
+  let end = em ? +em[1] * 60 + +em[2] : start + 120;
+  if (end <= start) end = start + 120;
+  const cur = now.getUTCHours() * 60 + now.getUTCMinutes();
+  return cur >= start && cur < end;
+}
 function isSoon(e) {
   if (e.date !== state.today || !e.time) return false;
   const m = /(\d{1,2}):(\d{2})/.exec(e.time);
@@ -372,13 +386,14 @@ function eventCard(e) {
   const hall = e.hall ? h("span", {class: "hall"}, icon("pin"), cap(e.hall)) : null;
   const roles = Object.entries(e.roles).filter(([r]) => state.tab !== "mine" || e.mine.includes(r));
   const list = h("ul", {class: "roles"}, roles.map(([role, names]) => h("li", {class: e.mine.includes(role) ? "me" : ""}, tag(role), h("div", {class: "n"}, names.join(", ")))));
-  const urgent = isSoon(e);
+  const live = isNow(e);
+  const urgent = !live && isSoon(e);
   const hex = e.hall ? hexOfHall(e.hall) : "";
   const outline = hex ? `border-color:${hex};box-shadow:3px 3px 0 ${hex}` : ""; // обводка цвета площадки (у «скоро» тоже: срочность видна по метке и времени)
   const meeting = Boolean(e.meta && e.meta.kind === "meeting");
-  return h("button", {class: "ev" + (e.mine.length ? " mine" : "") + (urgent ? " urgent" : "") + (meeting ? " meeting" : ""), style: outline, onclick: () => eventDetails(e), "aria-label": `Открыть: ${e.title}`},
+  return h("button", {class: "ev" + (e.mine.length ? " mine" : "") + (urgent ? " urgent" : "") + (live ? " live" : "") + (meeting ? " meeting" : ""), style: outline, onclick: () => eventDetails(e), "aria-label": `Открыть: ${e.title}`},
     time,
-    h("div", {}, h("h3", {}, meeting ? h("span", {class: "mtag"}, "📋 Собрание") : null, e.title), range, hall, roles.length ? list : null, e.comments ? h("span", {class: "ccount"}, "💬 " + e.comments) : null),
+    h("div", {}, live ? h("span", {class: "nowtag"}, "Идёт сейчас") : urgent ? h("span", {class: "soontag"}, "Скоро") : null, h("h3", {}, meeting ? h("span", {class: "mtag"}, "📋 Собрание") : null, e.title), range, hall, roles.length ? list : null, e.comments ? h("span", {class: "ccount"}, "💬 " + e.comments) : null),
     canEdit ? h("span", {class: "edit-hint"}, icon("pencil")) : (e.mine.length ? h("span", {class: "pill mine-tag"}, "вы") : null),
     urgent ? splash() : null);
 }

@@ -86,7 +86,7 @@ class GasBook {
   ensure(tab, header) {
     if (this.has(tab)) return;
     const s = this.ss.insertSheet(tab);
-    if ([TABS.staff, TABS.schedule, TABS.venues, TABS.reports].indexOf(tab) < 0) { try { s.hideSheet(); } catch (e) { /* служебный лист просто останется видимым */ } }
+    if ([TABS.staff, TABS.schedule, TABS.venues, TABS.reports, TABS.archive].indexOf(tab) < 0) { try { s.hideSheet(); } catch (e) { /* служебный лист просто останется видимым */ } }
     if (header) s.getRange(1, 1, 1, header.length).setNumberFormat("@").setValues([header.map(String)]);
     this.touch(tab);
   }
@@ -357,6 +357,7 @@ function everyMinute() {
   const todayStr = todayIso(Date.now());
   if (p.getProperty("months_day") !== todayStr) { p.setProperty("months_day", todayStr); p.setProperty("regroup", "1"); } // новый день: месяц мог стать прошедшим, перекладываем вниз
   if (p.getProperty("regroup")) { p.deleteProperty("regroup"); try { tidyStaff_(); renderPeopleList_(); syncRoleColumns_(); ensureEventIds_(); tidySchedule_(); syncRestoreButtons_(); fillVenueColors_(); renderOccupancy_(); } catch (err) { diag_("Таблица: ОШИБКА — " + String(err && err.message ? err.message : err)); } }
+  try { maintainDaily_(false); } catch (err) { diag_("Обслуживание: ОШИБКА — " + String(err && err.message ? err.message : err)); }
   if (!dueDirty && now - last < 4 * 60e3 + 30e3) return;
   withLock_(() => {
     if (dueDirty) p.deleteProperty("dirty");
@@ -396,7 +397,8 @@ function onSheetChange(e) {
 const json_ = (obj) => ContentService.createTextOutput(JSON.stringify(obj)).setMimeType(ContentService.MimeType.JSON);
 const ok_ = () => ContentService.createTextOutput("ok");
 
-function doGet() {
+function doGet(e) {
+  if (e && e.parameter && e.parameter.warm) prop_("SHEET_ID"); // «прогрев»: посредник стучится раз в минуту, чтобы скрипт не засыпал (иначе первый ответ бота ждёт 5–12 секунд)
   return ok_();
 }
 
@@ -669,6 +671,15 @@ const PAST_GAP_ = 2; // сколько пустых строк между пос
 const isDividerRow_ = (row) => String(row[0] || "").trim() === PAST_DIVIDER_;
 const isBlankRow_ = (row) => row.every((c) => String(c).trim() === "");
 
+const MONTHS_BACK_ = 3, MONTHS_AHEAD_ = 6; // шапки месяцев есть всегда: 3 месяца назад, текущий и 6 вперёд (даже пустые), плюс все месяцы с событиями
+/** Первые числа нужных месяцев: ["2026-07-01", ..., "2027-04-01"]. */
+function wantedMonths_(today) {
+  const y = +today.slice(0, 4), m = +today.slice(5, 7);
+  const out = [];
+  for (let k = -MONTHS_BACK_; k <= MONTHS_AHEAD_; k++) out.push(new Date(Date.UTC(y, m - 1 + k, 1)).toISOString().slice(0, 10));
+  return out;
+}
+
 function monthsDisordered_(rows, today) {
   let current = "";
   let last = null;
@@ -691,7 +702,7 @@ function monthsDisordered_(rows, today) {
     if ((last && cmpRank(rank, last) < 0) || monthTitle_(d) !== current) return true;
     last = rank;
   }
-  if (!seen[monthTitle_(today)]) return true; // шапка текущего месяца должна быть всегда, даже если событий в нём нет
+  for (const first of wantedMonths_(today)) if (!seen[monthTitle_(first)]) return true; // шапки нужных месяцев должны быть всегда, даже если событий в них нет
   // разделитель стоит прямо перед первым прошедшим месяцем, перед ним ровно PAST_GAP_ пустых строк; без прошлого разделителя нет
   if (pastHead < 0) return divider >= 0;
   if (divider < 0 || divider !== pastHead - 1) return true;
@@ -714,15 +725,12 @@ function rebuildMonths_(sheet) {
     if (d) key = d; // строка без понятной даты остаётся рядом с предыдущей
     body.push({row, key, n: body.length});
   });
+  const haveMonth = new Set(body.filter((b) => b.key !== "0000-00-00").map((b) => monthTitle_(b.key)));
+  wantedMonths_(today).forEach((first) => { if (!haveMonth.has(monthTitle_(first))) body.push({row: null, key: first, n: -1}); }); // пустой месяц: только шапка
   body.sort((a, b) => cmpRank(rankOfKey(a.key), rankOfKey(b.key)) || a.n - b.n);
   const out = [];
   let title = "";
   let dividerDone = false;
-  const curTitle = monthTitle_(today);
-  if (!body.some((b) => b.key !== "0000-00-00" && monthTitle_(b.key) === curTitle)) { // в текущем месяце событий нет — шапка всё равно остаётся
-    out.push([curTitle].concat(Array(cols - 1).fill("")));
-    title = curTitle;
-  }
   body.forEach((b) => {
     const t = b.key === "0000-00-00" ? "" : monthTitle_(b.key);
     if (t && t !== title) {
@@ -733,7 +741,7 @@ function rebuildMonths_(sheet) {
       }
       out.push([t].concat(Array(cols - 1).fill(""))); title = t;
     }
-    out.push(b.row);
+    if (b.row) out.push(b.row);
   });
   const range = sheet.getRange(2, 1, Math.max(lastRow - 1, 1), cols);
   for (let r = 2; r <= lastRow; r++) { const d = sheet.getRowGroupDepth(r); if (d > 0) sheet.getRange(r, 1, 1, 1).shiftRowGroupDepth(-d); }
@@ -1045,7 +1053,7 @@ function tidySchedule_() {
 
 /** Видны только три листа: «Сотрудники», «Расписание», «Площадки». Остальные служебные прячем (они работают, как раньше). */
 function hideHelperSheets_(ss) {
-  const keep = [TABS.staff, TABS.schedule, TABS.venues];
+  const keep = [TABS.staff, TABS.schedule, TABS.venues, TABS.reports, TABS.archive];
   ss.getSheets().forEach((sh) => {
     const name = sh.getName();
     const helper = keep.indexOf(name) < 0;
@@ -1374,6 +1382,81 @@ function saveReport_(report, by) {
   if (sheet.getMaxRows() > keep) sheet.deleteRows(keep + 1, sheet.getMaxRows() - keep);
   return {number, rows: block.shown, url: "https://docs.google.com/spreadsheets/d/" + prop_("SHEET_ID") + "/edit#gid=" + sheet.getSheetId()};
 }
+
+// ---------- копии и архив: ничего не теряется ----------
+// Раз в сутки (после 4 утра по Москве): 1) копии главных листов (скрытые «_копия ДД.ММ …»; ежедневные хранятся 14 дней,
+// копии первого числа месяца — больше года); 2) события старше года переезжают в лист «Архив» и остаются там навсегда
+// (отчёты читают и его). В архив переносим только после того, как копия успешно сделана.
+const BACKUP_TABS_ = [[TABS.schedule, "Расписание"], [TABS.staff, "Сотрудники"], [TABS.venues, "Площадки"], [TABS.meta, "События"]];
+const BACKUP_DAYS_ = 14, BACKUP_MONTHLY_DAYS_ = 400;
+
+function backupNow_() {
+  const ss = SpreadsheetApp.openById(prop_("SHEET_ID"));
+  const today = todayIso(Date.now());
+  const day = today.slice(8, 10) + "." + today.slice(5, 7);
+  let made = 0;
+  BACKUP_TABS_.forEach((pair) => {
+    const src = ss.getSheetByName(pair[0]);
+    if (!src) return;
+    const name = "_копия " + day + " " + pair[1];
+    const old = ss.getSheetByName(name);
+    if (old) ss.deleteSheet(old); // сегодняшняя копия обновляется
+    const copy = src.copyTo(ss);
+    copy.setName(name);
+    try { copy.hideSheet(); } catch (e) { /* останется видимой */ }
+    made++;
+  });
+  const t0 = Date.parse(today);
+  ss.getSheets().forEach((sh) => {
+    const m = /^_копия (\d{2})\.(\d{2}) /.exec(sh.getName());
+    if (!m) return;
+    let at = Date.UTC(+today.slice(0, 4), +m[2] - 1, +m[1]);
+    if (at > t0) at = Date.UTC(+today.slice(0, 4) - 1, +m[2] - 1, +m[1]);
+    if ((t0 - at) / 864e5 > (m[1] === "01" ? BACKUP_MONTHLY_DAYS_ : BACKUP_DAYS_)) ss.deleteSheet(sh);
+  });
+  return made;
+}
+
+/** События старше года -> лист «Архив» (дописываются, ничего не стирается); из «Расписания» убираются только после проверки. */
+function archiveOld_() {
+  const st = store_();
+  const today = todayIso(Date.now());
+  const table = st.book.get(TABS.schedule);
+  if (layoutOf(table).v !== 2) return 0;
+  const cutoff = archiveCutoff(today, 12);
+  const old = parseEvents(table, today).filter((e) => (e.dateEnd || e.date) < cutoff);
+  if (!old.length) return 0;
+  const metaMap = st.metaMap();
+  const before = st.archiveRows().length;
+  st.appendArchive(old.map((e) => archiveLine(e, Boolean(e.id && metaMap[e.id] && metaMap[e.id].kind === "meeting"))));
+  const arch = SpreadsheetApp.openById(prop_("SHEET_ID")).getSheetByName(TABS.archive);
+  if (arch) { styleHeader_(arch, 8); [100, 70, 70, 260, 150, 90, 380, 90].forEach((w, i) => arch.setColumnWidth(i + 1, w)); arch.setFrozenRows(1); }
+  if (st.archiveRows().length < before + old.length) throw new Error("в архив записалось меньше событий, чем нужно; в расписании всё оставлено как есть");
+  const sheet = SpreadsheetApp.openById(prop_("SHEET_ID")).getSheetByName(TABS.schedule);
+  old.map((e) => e.row).sort((a, b) => b - a).forEach((r) => sheet.deleteRow(r));
+  dropAllCaches_();
+  rebuildMonths_(sheet); // шапки ушедших месяцев убираем
+  styleSchedule_(sheet);
+  dropAllCaches_();
+  bumpRev_();
+  return old.length;
+}
+
+function maintainDaily_(force) {
+  const p = PropertiesService.getScriptProperties();
+  const today = todayIso(Date.now());
+  const hour = new Date(Date.now() + TZ_OFFSET_H * 3600e3).getUTCHours();
+  if (!force && (hour < 4 || p.getProperty("MAINT_DAY") === today)) return;
+  p.setProperty("MAINT_DAY", today); // отмечаем сразу: при сбое не повторяем каждую минуту
+  let made;
+  try { made = backupNow_(); diag_("Копии: сохранено листов — " + made); }
+  catch (err) { diag_("Копии: ОШИБКА — " + String(err && err.message ? err.message : err)); return; } // без копии ничего не переносим
+  try { const moved = archiveOld_(); if (moved) diag_("Архив: перенесено событий — " + moved); }
+  catch (err) { diag_("Архив: ОШИБКА — " + String(err && err.message ? err.message : err)); }
+}
+
+/** Запустить вручную из редактора: сделать копии и перенести старое в архив прямо сейчас. */
+function runMaintenance() { maintainDaily_(true); }
 
 function styleHeaderRange_(range) {
   range.setBackground(C.blue).setFontColor(C.white).setFontWeight("bold").setHorizontalAlignment("center").setVerticalAlignment("middle").setWrap(true);

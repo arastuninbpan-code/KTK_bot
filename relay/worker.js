@@ -15,6 +15,13 @@ const CORS = {
 };
 
 export default {
+  // Прогрев: раз в минуту (Cron Trigger «* * * * *») стучимся в скрипт Google, чтобы он не «засыпал». Без этого первое сообщение
+  // после паузы ждёт «холодного старта» 5–12 секунд.
+  async scheduled(event, env, ctx) {
+    const base = String(env.GAS_URL || "").split("?")[0];
+    if (base) ctx.waitUntil(fetch(base + "?warm=1", {redirect: "follow"}).catch(() => {}));
+  },
+
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
 

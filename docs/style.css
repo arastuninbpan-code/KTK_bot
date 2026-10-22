@@ -87,7 +87,6 @@ h1, h2, h3 { font-family: var(--h); font-weight: 700; }
 
 .ev { position: relative; display: grid; grid-template-columns: 76px 1fr; gap: 14px; margin: 12px 0; padding: 14px; background: #fff; border: var(--line); border-radius: 20px; box-shadow: 3px 3px 0 var(--navy); text-align: left; width: 100%; }
 .ev.mine { background: var(--cream); box-shadow: 3px 3px 0 var(--blue); }
-.ev.urgent { border-color: var(--coral); box-shadow: 3px 3px 0 var(--coral); }
 button.ev { font: inherit; }
 button.ev:active { transform: translate(2px, 2px); box-shadow: 1px 1px 0 var(--navy); }
 .time { align-self: start; padding: 8px 4px; border-radius: 14px; background: var(--light); border: var(--line); text-align: center; font: 700 16px/1.2 var(--h); }
@@ -426,3 +425,14 @@ input, textarea, select, [contenteditable] { -webkit-user-select: text; user-sel
 img { -webkit-user-drag: none; -webkit-touch-callout: none; }
 .ev.urgent .time { border-color: var(--coral); }
 .ev.urgent .time .until { color: var(--coral); }
+
+/* «сейчас» и «скоро»: цвет обводки (площадка) не трогаем, выделяем меткой, временем и свечением */
+.ev.live .time { background: var(--coral); border-color: var(--coral); color: #fff; }
+.ev.live .time .until { color: #fff; opacity: .9; }
+.ev.live { animation: livepulse 2.2s ease-in-out infinite; }
+@keyframes livepulse { 0%, 100% { filter: drop-shadow(0 0 0 rgba(240,78,74,0)); } 50% { filter: drop-shadow(0 0 9px rgba(240,78,74,.6)); } }
+.nowtag, .soontag { display: inline-flex; align-items: center; gap: 6px; margin-bottom: 4px; padding: 2px 10px; border-radius: 999px; font-weight: 900; font-size: 12px; color: #fff; background: var(--coral); }
+.soontag { background: var(--orange); }
+.nowtag::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: #fff; animation: blink 1.2s ease-in-out infinite; }
+@keyframes blink { 50% { opacity: .25; } }
+@media (prefers-reduced-motion: reduce) { .ev.live { animation: none; } }
