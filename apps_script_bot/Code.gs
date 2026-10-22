@@ -2391,6 +2391,7 @@ function onSheetChange(e) {
       const nm0 = e && e.range ? e.range.getSheet().getName() : "";
       const headEdit = nm0 === TABS.schedule && e.range.getRow() === topOffset_(e.range.getSheet(), nm0) + 1;
       if (headEdit || (e && e.changeType === "REMOVE_COLUMN")) { syncRoleColumns_(); p.deleteProperty("regroup"); } // убрали или переименовали колонку-должность: то же в «Сотрудниках»
+      if (headEdit) { try { styleSchedule_(tabSheet_(e.range.getSheet().getParent(), TABS.schedule)); dropAllCaches_(); } catch (err) { diag_("Оформление новой колонки: " + String(err && err.message ? err.message : err)); } } // новая колонка получает шапку, ширину и список сразу
       if (headEdit) applyPeopleValidation_(tabSheet_(e.range.getSheet().getParent(), TABS.schedule)); // добавили новую роль-колонку: сразу список
       syncRestoreButtons_();
       if (e && e.range) { const nm = e.range.getSheet().getName(); if (nm === TABS.venues) fillVenueColors_(); if (nm === TABS.schedule || nm === TABS.venues) renderOccupancy_(); } // занятость площадок обновляем сразу
@@ -3001,7 +3002,7 @@ function seedTestUsers_(p) {
   } catch (err) { diag_("Тестовые пользователи: ОШИБКА — " + String(err && err.message ? err.message : err)); }
 }
 
-const STYLE_VERSION_ = "21"; // поднимайте, когда меняется оформление: таблица перестроится сама при ближайшем срабатывании таймера
+const STYLE_VERSION_ = "22"; // поднимайте, когда меняется оформление: таблица перестроится сама при ближайшем срабатывании таймера
 
 /** После обновления кода один раз оформляет таблицу сама (то же, что ручной запуск styleSheets). */
 function autoStyle_(p) {
@@ -3362,6 +3363,31 @@ function syncRoleColumns_() {
         });
         dropAllCaches_();
         names = store_().groups().map((g) => g.name);
+      }
+    }
+  }
+  { // новую колонку вписали в «Расписании» (в «Сотрудниках» такой группы нет): заводим группу и там. Если в обоих листах одновременно вписали разное — остаются оба вида в обоих листах
+    let prevHead = null;
+    try { prevHead = JSON.parse(p.getProperty("SCHED_HEAD") || "null"); } catch (e) { prevHead = null; }
+    if (Array.isArray(prevHead) && Array.isArray(prev)) {
+      const seenBefore = (x) => prevHead.some((q) => norm(q) === norm(x));
+      const known = (x) => names.some((q) => norm(q) === norm(x));
+      const fresh = head.filter((x, i) => i >= 5 && x && !x.startsWith(RESTORE_MARK) && !isIdColumn(x) && !known(x) && !seenBefore(x));
+      if (fresh.length) {
+        const staff = tabSheet_(SpreadsheetApp.openById(prop_("SHEET_ID")), TABS.staff);
+        let sh = staff.getRange(1, 1, 1, Math.max(staff.getLastColumn(), 1)).getDisplayValues()[0].map((x) => String(x).trim());
+        fresh.forEach((n) => {
+          if (sh.some((x, i) => i >= 4 && norm(x) === norm(n))) return;
+          let at = 0;
+          sh.forEach((x, i) => { if (x) at = i + 1; });
+          staff.getRange(1, at + 1).setNumberFormat("@").setValue(n);
+          sh = staff.getRange(1, 1, 1, Math.max(staff.getLastColumn(), 1)).getDisplayValues()[0].map((x) => String(x).trim());
+          changed = true;
+        });
+        dropAllCaches_();
+        names = store_().groups().map((g) => g.name);
+        tidyStaff_(); // галочки и оформление новой колонки в «Сотрудниках»
+        dropAllCaches_();
       }
     }
   }

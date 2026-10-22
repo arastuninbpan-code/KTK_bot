@@ -8,7 +8,7 @@ const SCHEDULE = [HEAD,
   ["04.10\n11.00 и 13.00", "Спектакль «Бука»\n(малая сцена)", "Иванова М.В.", "Морозова Н.М.", "", "", ""],
   ["10.10", "Сказки из старого чемодана", "Петрова Л.Н.", "", "", "", ""]];
 const G = () => loadGas({now: NOW, tabs: {"Расписание": SCHEDULE, "Сотрудники": STAFF},
-  props: {SHEET_ID: "x", STYLE_VER: "21", TOP_ROWS_DONE: "1", TEST_USERS: "1", TELEGRAM_BOT_TOKEN: "TOKEN", WEBHOOK_SECRET: "hook", APP_URL: "https://app.test"}});
+  props: {SHEET_ID: "x", STYLE_VER: "22", TOP_ROWS_DONE: "1", TEST_USERS: "1", TELEGRAM_BOT_TOKEN: "TOKEN", WEBHOOK_SECRET: "hook", APP_URL: "https://app.test"}});
 
 const tg = (g, update) => g.run(`doPost(${JSON.stringify({parameter: {secret: "hook"}, postData: {contents: JSON.stringify(update)}})}).getContent()`);
 const msg = (id, text, contact) => ({update_id: Math.floor(Math.random() * 1e9), message: {chat: {id, type: "private"}, from: {id}, text, contact}});
@@ -170,7 +170,7 @@ test("группы: галочки в таблице -> состав групп;
 // ---------- ВКонтакте ----------
 const VKPROPS = {VK_TOKEN: "VKTOKEN", VK_GROUP_ID: "club123", VK_SECRET: "vksecret", VK_CONFIRM: "abc123", TG_CHANNEL: "@teatr"};
 const GV = (extra = {}) => loadGas({now: NOW, tabs: {"Расписание": SCHEDULE, "Сотрудники": STAFF},
-  props: {SHEET_ID: "x", STYLE_VER: "21", TOP_ROWS_DONE: "1", TEST_USERS: "1", TELEGRAM_BOT_TOKEN: "TOKEN", WEBHOOK_SECRET: "hook", APP_URL: "https://app.test", ...VKPROPS, ...extra}});
+  props: {SHEET_ID: "x", STYLE_VER: "22", TOP_ROWS_DONE: "1", TEST_USERS: "1", TELEGRAM_BOT_TOKEN: "TOKEN", WEBHOOK_SECRET: "hook", APP_URL: "https://app.test", ...VKPROPS, ...extra}});
 const vk = (g, update, secret = "hook") => g.run(`doPost(${JSON.stringify({parameter: {secret, vk: "1"}, postData: {contents: JSON.stringify(update)}})}).getContent()`);
 const vkMsg = (id, text, extra = {}) => ({type: "message_new", event_id: "e" + Math.random(), secret: "vksecret", object: {message: {peer_id: id, from_id: id, text, ...extra}}});
 const vkSent = (g, id) => g.fetches.filter((f) => f.url.endsWith("/messages.send") && String(f.body.user_id) === String(id));
@@ -370,7 +370,7 @@ test("после обновления таблица оформляется са
   const g = G();
   delete g.properties.STYLE_VER;
   g.run("everyMinute()"); // как после выкладки новой версии
-  assert.equal(g.properties.STYLE_VER, "21");
+  assert.equal(g.properties.STYLE_VER, "22");
   const staff = g.ss.getSheetByName("Сотрудники");
   assert.deepEqual(staff.getDataRange().getDisplayValues()[0].slice(4, 6), ["Доступ", "Комментарий"]);
   assert.deepEqual(g.ss.sheets.filter((x) => !x.hidden).map((x) => x.name).sort(), ["Площадки", "Расписание", "Сотрудники"]);
@@ -500,7 +500,7 @@ test("«Сотрудники» как в жизни: тысяча строк-з�
 });
 
 test("заявка из ВК: в «ФИО» имя из профиля, роль «Заявка»; поставили «Доступ» — это уже обычный сотрудник", () => {
-  const g = GV({STYLE_VER: "21", TOP_ROWS_DONE: "1"});
+  const g = GV({STYLE_VER: "22", TOP_ROWS_DONE: "1"});
   g.run("styleSheets()");
   g.setFetchReply((url) => (/users\.get/.test(url) ? JSON.stringify({response: [{first_name: "Анна", last_name: "Смирнова"}]}) : ""));
   vk(g, vkMsg(77, "89112223344"));
@@ -706,6 +706,52 @@ test("«хвост» справа от таблицы (остатки удалё
   assert.ok(sch.styleLog.some((l) => l[0] === "breakApart"), "объединения сняты перед новым оформлением");
 });
 
+test("новые виды сотрудников в обе стороны: вписали в одном листе, в другом, в обоих одно и то же, в обоих разное на одном месте — всё на местах без дублей", () => {
+  const g = G();
+  g.run("styleSheets()");
+  const sch = g.ss.getSheetByName("Расписание");
+  const staff = g.ss.getSheetByName("Сотрудники");
+  const heads = (sh) => sh.getDataRange().getDisplayValues()[0];
+  const count = (sh, n) => heads(sh).filter((x) => x === n).length;
+  const sync = () => { g.run("dropAllCaches_()"); g.run("syncRoleColumns_()"); g.run("dropAllCaches_()"); };
+  // 1) вписали «Посадчики» только в «Расписании» -> появилась и в «Сотрудниках» (с галочками)
+  sch.put(1, heads(sch).length + 1, "Посадчики");
+  sync();
+  assert.equal(count(staff, "Посадчики"), 1, "в «Сотрудниках» появилась группа");
+  assert.equal(count(sch, "Посадчики"), 1);
+  assert.ok(staff.styleLog.length > 0);
+  // 2) вписали «Монтажёры» только в «Сотрудниках» -> появилась в «Расписании»
+  staff.put(1, heads(staff).length + 1, "Монтажёры");
+  sync();
+  assert.equal(count(sch, "Монтажёры"), 1);
+  assert.equal(count(staff, "Монтажёры"), 1);
+  // 3) одно и то же название в обоих листах -> без дублей
+  sch.put(1, heads(sch).length + 1, "Костюмеры");
+  staff.put(1, heads(staff).length + 1, "Костюмеры");
+  sync();
+  assert.equal(count(sch, "Костюмеры"), 1, "в «Расписании» одна");
+  assert.equal(count(staff, "Костюмеры"), 1, "в «Сотрудниках» одна");
+  // 4) разное, но в одном и том же месте (следующая свободная колонка) -> остаются обе в обоих листах
+  sch.put(1, heads(sch).length + 1, "Гримёры");
+  staff.put(1, heads(staff).length + 1, "Реквизиторы");
+  sync();
+  for (const n of ["Гримёры", "Реквизиторы"]) {
+    assert.equal(count(sch, n), 1, n + " в «Расписании»");
+    assert.equal(count(staff, n), 1, n + " в «Сотрудниках»");
+  }
+  // в приложении все группы доступны, и событие на новую должность сохраняется в свою колонку
+  g.run("store_().ensureLogins()");
+  const t = api(g, {method: "POST", path: "/api/login", body: {login: g.run("store_().users().find((u) => u.phone === '9000000001').login")}}).token;
+  const sc = api(g, {method: "GET", path: "/api/schedule", token: t});
+  for (const n of ["Посадчики", "Монтажёры", "Костюмеры", "Гримёры", "Реквизиторы"]) assert.ok(sc.roles.includes(n), n);
+  const ok = api(g, {method: "POST", path: "/api/events", token: t, body: {event: {title: "Две роли", date: "2026-10-20", dateEnd: "", time: "", end: "", hall: "", roles: {"Гримёры": ["Морозова Н.М."], "Реквизиторы": ["Иванова М.В."]}}}});
+  assert.equal(ok._status, 200);
+  const rows = sch.getDataRange().getDisplayValues();
+  const row = rows.find((r) => r[3] === "Две роли");
+  assert.equal(row[rows[0].indexOf("Гримёры")], "Морозова Н.М.");
+  assert.equal(row[rows[0].indexOf("Реквизиторы")], "Иванова М.В.");
+});
+
 test("удалили все события текущего месяца: шапка месяца остаётся, прошлый месяц уходит под разделитель; пустой лист тоже получает шапку", () => {
   const g = G();
   g.ss.getSheetByName("Расписание").put(4, 1, "30.09");
@@ -831,7 +877,7 @@ test("служебная колонка ID: появляется скрытой,
 });
 
 test("собрание: текст документа уходит всем с доступом в Telegram и ВК личными сообщениями и постом в группу ВК; комментарии работают", () => {
-  const g = GV({STYLE_VER: "21", TOP_ROWS_DONE: "1", APP_URL: "https://app.test"});
+  const g = GV({STYLE_VER: "22", TOP_ROWS_DONE: "1", APP_URL: "https://app.test"});
   g.run("styleSheets()"); g.run("store_().ensureLogins()");
   tg(g, msg(5, "", {user_id: 5, phone_number: "9000000002"})); // Петрова в Telegram
   vk(g, vkMsg(77, "89000000001"), "hook"); // Иванова в ВК
@@ -859,7 +905,7 @@ test("собрание: текст документа уходит всем с �
 });
 
 test("аватарки: после сообщения боту берётся фото из профиля (ВК — ссылка, Telegram — картинка), раз в неделю", () => {
-  const g = GV({STYLE_VER: "21", TOP_ROWS_DONE: "1"});
+  const g = GV({STYLE_VER: "22", TOP_ROWS_DONE: "1"});
   g.run("styleSheets()");
   g.setFetchReply((url) => {
     if (/getUserProfilePhotos/.test(url)) return JSON.stringify({result: {photos: [[{file_id: "a", width: 160}, {file_id: "b", width: 320}]]}});
@@ -878,7 +924,7 @@ test("аватарки: после сообщения боту берётся ф
 });
 
 test("собрание отличается в таблице: строка золотистая по типу из скрытого листа, в занятости площадок — значок и заливка", () => {
-  const g = GV({STYLE_VER: "21", TOP_ROWS_DONE: "1"});
+  const g = GV({STYLE_VER: "22", TOP_ROWS_DONE: "1"});
   g.run("styleSheets()"); g.run("store_().ensureLogins()");
   const sch = g.ss.getSheetByName("Расписание");
   const idc = sch.getDataRange().getDisplayValues()[0].indexOf("ID");

@@ -168,7 +168,7 @@ test("собрание можно создать совсем без рассы�
 test("скрипт Google: без галочки «Разослать сотрудникам» личные сообщения не уходят, а пост в ВК выходит", () => {
   const tabs = {"Расписание": [["Дата", "Начало", "Конец", "Событие", "Площадка", "ID"], ["12.10.2026", "18:00", "", "Собрание труппы", "", "abcd1234"]], "Сотрудники": STAFF,
     "Подписчики": [["Канал", "ID чата", "Телефон", "ФИО"], ["telegram", "6", "9000000002", "Петрова Л.Н."]]};
-  const g = loadGas({tabs, props: {SHEET_ID: "x", STYLE_VER: "21", TOP_ROWS_DONE: "1", TELEGRAM_BOT_TOKEN: "TOKEN", WEBHOOK_SECRET: "h", APP_URL: "https://app.test", VK_TOKEN: "vk", VK_GROUP_ID: "5", OWNER_PHONE: "9000000001"}, now: NOW});
+  const g = loadGas({tabs, props: {SHEET_ID: "x", STYLE_VER: "22", TOP_ROWS_DONE: "1", TELEGRAM_BOT_TOKEN: "TOKEN", WEBHOOK_SECRET: "h", APP_URL: "https://app.test", VK_TOKEN: "vk", VK_GROUP_ID: "5", OWNER_PHONE: "9000000001"}, now: NOW});
   g.run("store_().ensureLogins()");
   const call = (req) => JSON.parse(g.run(`doPost(${JSON.stringify({postData: {contents: JSON.stringify(req)}})}).getContent()`));
   const token = call({method: "POST", path: "/api/login", body: {login: g.run('store_().users().find((u) => u.phone === "9000000001").login')}}).token;
