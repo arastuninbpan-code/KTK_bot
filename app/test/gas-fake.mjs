@@ -68,7 +68,7 @@ class Sheet {
   insertRowBefore(r) { this.cells.splice(r - 1, 0, []); }
   insertRowsAfter(r, n) { for (let i = 0; i < n; i++) this.cells.splice(r, 0, []); }
   deleteRow(r) { this.cells.splice(r - 1, 1); }
-  deleteRows(r, n) { this.cells.splice(r - 1, n); }
+  deleteRows(r, n) { this.cells.splice(r - 1, n); this.maxRows = Math.max(1, this.getMaxRows() - n); }
   clear() { this.cells = []; }
   autoResizeRows(r, n) { this.styleLog.push(["autoResizeRows", r, n]); }
   setRowHeight(r, h) { this.styleLog.push(["rowHeight", r, h]); }

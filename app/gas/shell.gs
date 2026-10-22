@@ -851,13 +851,15 @@ function groupMonths_(sheet, fresh) {
   }
   if (!months.length) return;
   const thisMonth = MONTHS_UP[+today.slice(5, 7) - 1] + " " + today.slice(0, 4);
+  const monthIdx = (t) => +t.split(" ")[1] * 12 + MONTHS_UP.indexOf(t.split(" ")[0]);
+  const tail = months[months.length - 1];
+  if (monthIdx(tail.title) < monthIdx(thisMonth) && sheet.getMaxRows() > last + 1) sheet.deleteRows(last + 1, sheet.getMaxRows() - last - 1); // последний месяц прошедший: лишние пустые строки ниже него убираем, лист компактный
   const monthKey = (t) => { const i = MONTHS_UP.indexOf(t.split(" ")[0]); return t.split(" ")[1] + String(i + 100); };
   sheet.setRowGroupControlPosition(SpreadsheetApp.GroupControlTogglePosition.BEFORE);
   months.forEach((m) => {
     const rows = m.end - m.head;
     if (rows < 1) return;
-    const idx = (t) => +t.split(" ")[1] * 12 + MONTHS_UP.indexOf(t.split(" ")[0]);
-    const isPast = idx(m.title) < idx(thisMonth);
+    const isPast = monthIdx(m.title) < monthIdx(thisMonth);
     let collapsed = isPast; // прошедшие месяцы свёрнуты (шапка видна, строки спрятаны за «+»); развернули сами — так и остаётся
     if (!fresh) { const g = sheet.getRowGroup(m.head + 1, 1); if (g) collapsed = g.isCollapsed(); }
     const range = sheet.getRange(m.head + 1, 1, rows, 1);
