@@ -105,3 +105,19 @@ test("цвет площадки из приложения сразу попад�
   assert.ok(sh.styleLog.some((x) => x[0] === "setBackground" && x[2] === grey && x[1] >= 2), "ячейка площадки в занятости перекрашена сразу");
   assert.equal(g.properties.occ_dirty, undefined);
 });
+
+test("свободные строки: заполнили одну — таблица сама добавляет ещё, всегда ровно пять под актуальным месяцем", () => {
+  const g = loadGas({tabs: {[TABS.schedule]: [HEAD, ["20.10.2026", "19:00", "21:00", "Будущее", "Малая сцена", "", "aaaaaaa3"]], [TABS.staff]: STAFF}, props: {SHEET_ID: "x", TEST_USERS: "1"}, now: NOW});
+  g.run("styleSheets()");
+  const sch = g.ss.getSheetByName(TABS.schedule);
+  const col = () => sch.getDataRange().getDisplayValues().map((r) => r[0]);
+  const freeBelow = () => { const c = col(), d = c.indexOf("▼ ПРОШЕДШИЕ МЕСЯЦЫ"); let n = 0; for (let i = d - 1; i >= 0 && c[i] === ""; i--) n++; return n; };
+  assert.equal(freeBelow(), 5);
+  const first = col().indexOf("20.10.2026") + 2; // первая свободная строка под событием (нумерация с 1)
+  sch.put(first, 1, "25.10.2026"); sch.put(first, 4, "Новое");
+  g.run("onSheetChange()"); g.run("everyMinute()");
+  assert.equal(freeBelow(), 5, "свободных строк снова пять");
+  const c = col();
+  assert.ok(c.indexOf("25.10.2026") > c.indexOf("20.10.2026") && c.indexOf("25.10.2026") < c.indexOf("▼ ПРОШЕДШИЕ МЕСЯЦЫ"));
+  assert.ok(c.includes("СЕНТЯБРЬ 2026") && c.indexOf("СЕНТЯБРЬ 2026") > c.indexOf("▼ ПРОШЕДШИЕ МЕСЯЦЫ"), "сентябрь ниже разделителя");
+});

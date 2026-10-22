@@ -123,7 +123,7 @@ test("styleSheets: перенос в новый формат (копия сох�
   assert.deepEqual(sh[0].slice(0, 5), ["Дата", "Начало", "Конец", "Событие", "Площадка"]);
   assert.deepEqual(sh.slice(1).map((r) => r.slice(0, 5).join("|")),
     ["ОКТЯБРЬ 2026||||", "04.10|11:00||Спектакль «Бука»|малая сцена", "04.10|13:00||Спектакль «Бука»|малая сцена", "10.10|||Сказки из старого чемодана|", "НОЯБРЬ 2026||||", "05.11|||Ноябрьское событие|",
-     "ДЕКАБРЬ 2026||||", "ЯНВАРЬ 2027||||", "ФЕВРАЛЬ 2027||||", "МАРТ 2027||||", "АПРЕЛЬ 2027||||", "||||", "||||", "▼ ПРОШЕДШИЕ МЕСЯЦЫ||||", "СЕНТЯБРЬ 2026||||", "АВГУСТ 2026||||", "ИЮЛЬ 2026||||"]); // пустые месяцы (3 назад .. 6 вперёд) тоже с шапками
+     "||||", "||||", "||||", "||||", "||||", "▼ ПРОШЕДШИЕ МЕСЯЦЫ||||", "СЕНТЯБРЬ 2026||||"]); // под актуальным месяцем 5 свободных строк, ниже прошедшие (с сентября, пустые тоже)
   assert.deepEqual(sh[2].slice(5, 7), ["Иванова М.В.", "Морозова Н.М."]); // люди переехали вместе со строкой
   assert.ok(g.ss.sheets.some((x) => /^Расписание \(копия /.test(x.name)), "копия старого листа сохранена");
   assert.deepEqual(g.ss.getSheetByName("Площадки").getDataRange().getDisplayValues().map((r) => r.slice(0, 2)).slice(0, 2), [["Площадка", "Заметка"], ["Малая сцена", ""]]);
@@ -142,7 +142,7 @@ test("styleSheets: перенос в новый формат (копия сох�
   assert.ok(staff.getDataRange().getDisplayValues().slice(1).every((r) => r[0] === "" || r[4] === "true"), "у внесённых людей доступ включён");
   assert.equal(staff.getDataRange().getDisplayValues()[3][2], "Читатель"); // пустая роль -> «Читатель»
   g.run("styleSheets()"); // повторный запуск ничего не дублирует
-  assert.equal(g.ss.getSheetByName("Расписание").getDataRange().getDisplayValues().filter((r) => /^[А-ЯЁ]+ \d{4}$/.test(r[0])).length, 10); // октябрь, ноябрь + пустые месяцы (дек-апр) + 3 прошедших
+  assert.equal(g.ss.getSheetByName("Расписание").getDataRange().getDisplayValues().filter((r) => /^[А-ЯЁ]+ \d{4}$/.test(r[0])).length, 3); // октябрь, ноябрь (в нём есть событие) и сентябрь (прошедший, пустой)
   assert.equal(g.ss.sheets.filter((x) => /^Расписание \(копия /.test(x.name)).length, 1);
 });
 
@@ -332,7 +332,7 @@ test("styleSheets: видны только три листа; месяцы — �
   assert.deepEqual(visible.sort(), ["Площадки", "Расписание", "Сотрудники"].sort());
   const sch = g.ss.getSheetByName("Расписание");
   assert.ok(sch.groups.length >= 2);
-  assert.equal(sch.groups.filter((x) => x.collapsed).length, 0, "прошедшие месяцы не прячутся");
+  assert.ok(sch.groups.filter((x) => x.collapsed).length >= 1, "прошедший месяц свёрнут (шапка видна, строки за «+»)");
   const colA = () => sch.getDataRange().getDisplayValues().map((r) => r[0]);
   const shape = () => { const c = colA(), d = c.indexOf("▼ ПРОШЕДШИЕ МЕСЯЦЫ"); return {d, gap: [c[d - 1], c[d - 2]], next: c[d + 1]}; };
   const sh = shape();
@@ -405,7 +405,7 @@ test("месяцы идут по порядку без повторов: пер�
   g.run("everyMinute()");
   const col = sch.getDataRange().getDisplayValues().map((r) => r[0]);
   const heads = col.filter((x) => /^[А-ЯЁ]+ \d{4}$/.test(x));
-  assert.deepEqual(heads, ["ОКТЯБРЬ 2026", "НОЯБРЬ 2026", "ДЕКАБРЬ 2026", "ЯНВАРЬ 2027", "ФЕВРАЛЬ 2027", "МАРТ 2027", "АПРЕЛЬ 2027", "СЕНТЯБРЬ 2026", "АВГУСТ 2026", "ИЮЛЬ 2026"], "текущий и будущие месяцы сверху, прошедшие внизу, пустые тоже с шапками");
+  assert.deepEqual(heads, ["ОКТЯБРЬ 2026", "СЕНТЯБРЬ 2026"], "текущий месяц сверху, прошедший внизу (начиная с сентября)");
   assert.ok(col.indexOf("05.09") > col.indexOf("СЕНТЯБРЬ 2026"));
   assert.ok(col.indexOf("19.10") > col.indexOf("10.10") && col.indexOf("19.10") < col.indexOf("СЕНТЯБРЬ 2026"));
   g.run("everyMinute()");
@@ -533,8 +533,8 @@ test("добавили событие в будущем месяце: просв
   const c = idx();
   const d1 = c.indexOf("▼ ПРОШЕДШИЕ МЕСЯЦЫ");
   assert.ok(d1 > d0, "разделитель уехал вниз");
-  assert.deepEqual([c[d1 - 1], c[d1 - 2]], ["", ""]);
-  assert.ok(c[d1 - 3] !== "", "просвет ровно два ряда");
+  assert.deepEqual([c[d1 - 1], c[d1 - 2], c[d1 - 3], c[d1 - 4], c[d1 - 5]], ["", "", "", "", ""]);
+  assert.ok(c[d1 - 6] !== "", "под актуальными месяцами ровно пять свободных строк");
   assert.ok(c.indexOf("20.11") < d1 && c.indexOf("НОЯБРЬ 2026") < c.indexOf("20.11"));
   assert.equal(c[d1 + 1], "СЕНТЯБРЬ 2026");
   g.run("everyMinute()"); g.run("onSheetChange()"); g.run("everyMinute()");

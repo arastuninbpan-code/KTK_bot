@@ -668,16 +668,25 @@ const monthRowTitle_ = (row) => { const f = row.filter((c) => String(c).trim() !
  * события сортируются по дате (внутри одной даты порядок сохраняется), старые шапки убираются, ставятся новые.
  */
 const PAST_DIVIDER_ = "▼ ПРОШЕДШИЕ МЕСЯЦЫ";
-const PAST_GAP_ = 2; // сколько пустых строк между последним событием и разделителем (всегда одинаково; блок прошлого просто «едет» вниз вместе с новыми событиями)
+const PAST_GAP_ = 5; // свободных строк под актуальными месяцами, прежде чем начнётся блок прошлого. Заполнили одну — таблица сама добавляет ещё одну, их всегда ровно столько
 const isDividerRow_ = (row) => String(row[0] || "").trim() === PAST_DIVIDER_;
 const isBlankRow_ = (row) => row.every((c) => String(c).trim() === "");
 
-const MONTHS_BACK_ = 3, MONTHS_AHEAD_ = 6; // шапки месяцев есть всегда: 3 месяца назад, текущий и 6 вперёд (даже пустые), плюс все месяцы с событиями
-/** Первые числа нужных месяцев: ["2026-07-01", ..., "2027-04-01"]. */
+const MONTHS_FROM_ = "2026-09"; // с какого месяца ведётся таблица: начиная с него шапки есть всегда, даже у пустых месяцев (можно поменять свойством MONTHS_FROM)
+const MONTHS_KEEP_ = 12; // дальше года назад шапки не показываем (старые события уходят в «Архив»)
+/** Первые числа нужных месяцев: от начала ведения (но не глубже года назад) до текущего. Будущие месяцы появляются, когда в них вносят события. */
 function wantedMonths_(today) {
   const y = +today.slice(0, 4), m = +today.slice(5, 7);
+  const from = String(prop_("MONTHS_FROM") || MONTHS_FROM_);
+  const floor = new Date(Date.UTC(y, m - 1 - MONTHS_KEEP_, 1)).toISOString().slice(0, 7);
+  let start = from > floor ? from : floor;
+  if (start > today.slice(0, 7)) start = today.slice(0, 7);
   const out = [];
-  for (let k = -MONTHS_BACK_; k <= MONTHS_AHEAD_; k++) out.push(new Date(Date.UTC(y, m - 1 + k, 1)).toISOString().slice(0, 10));
+  for (let k = 0; k < 400; k++) {
+    const d = new Date(Date.UTC(+start.slice(0, 4), +start.slice(5, 7) - 1 + k, 1)).toISOString().slice(0, 10);
+    if (d.slice(0, 7) > today.slice(0, 7)) break;
+    out.push(d);
+  }
   return out;
 }
 
@@ -847,7 +856,9 @@ function groupMonths_(sheet, fresh) {
   months.forEach((m) => {
     const rows = m.end - m.head;
     if (rows < 1) return;
-    let collapsed = false; // прошедшие месяцы не прячем: они просто лежат ниже разделителя
+    const idx = (t) => +t.split(" ")[1] * 12 + MONTHS_UP.indexOf(t.split(" ")[0]);
+    const isPast = idx(m.title) < idx(thisMonth);
+    let collapsed = isPast; // прошедшие месяцы свёрнуты (шапка видна, строки спрятаны за «+»); развернули сами — так и остаётся
     if (!fresh) { const g = sheet.getRowGroup(m.head + 1, 1); if (g) collapsed = g.isCollapsed(); }
     const range = sheet.getRange(m.head + 1, 1, rows, 1);
     let depth = sheet.getRowGroupDepth(m.head + 1);
