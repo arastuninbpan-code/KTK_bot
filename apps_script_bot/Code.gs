@@ -1450,7 +1450,7 @@ function readToken(token, secret, now = Date.now()) {
 // ===== lib/api.mjs =====
 // API приложения. Чистая функция: запрос -> {status, body}. Синхронный код, никакой привязки к платформе.
 
-const SERVER_VERSION = "2026.10.22-13"; // меняется при каждом выпуске; приложение показывает её в профиле
+const SERVER_VERSION = "2026.10.22-14"; // меняется при каждом выпуске; приложение показывает её в профиле
 
 class HttpError extends Error {
   constructor(status, message, extra = {}) { super(message); this.status = status; this.extra = extra; }
@@ -1982,14 +1982,79 @@ function cacheWrite_(tab, rows) {
 const cacheDrop_ = (tab) => CacheService.getScriptCache().remove("T:" + tab);
 const dropAllCaches_ = () => CacheService.getScriptCache().removeAll(CACHED_TABS_.map((t) => "T:" + t));
 
+// ---------- место под «шапку» сверху листа ----------
+// Над таблицей на листах «Расписание», «Сотрудники», «Площадки» можно оставить пару своих строк (название, логотип, заметки).
+// Система сама находит строку с названиями колонок и работает ниже неё: для всего остального кода она выглядит как строка 1.
+const HEADER_TESTS_ = {
+  [TABS.schedule]: (c) => c.some((x) => /^дата/i.test(x)) && c.some((x) => /начал|конец|оконч|событие|спектакль|мероприят/i.test(x)),
+  [TABS.staff]: (c) => c.some((x) => /^(фио|сотрудник|имя)/i.test(x)) && c.some((x) => /телефон|номер/i.test(x)),
+  [TABS.venues]: (c) => /^площадка\s*$/i.test(c[0] || "") && c.some((x) => /^цвет/i.test(x)),
+};
+const TOP_ROWS_DEFAULT_ = 2; // сколько строк оставить сверху (свойство TOP_ROWS)
+
+/** Сколько строк лежит над шапкой таблицы (0 — шапка в первой строке). Результат запоминается на 10 минут и проверяется перед использованием. */
+function topOffset_(raw, tab) {
+  const test = HEADER_TESTS_[tab];
+  if (!test || raw.getLastRow() < 1) return 0;
+  const lastCol = Math.max(raw.getLastColumn(), 1);
+  const cache = CacheService.getScriptCache();
+  const key = "TOP:" + tab;
+  const cached = cache.get(key);
+  if (cached !== null && Number(cached) < 20 && raw.getLastRow() > Number(cached)) {
+    const row = raw.getRange(Number(cached) + 1, 1, 1, lastCol).getDisplayValues()[0].map((x) => String(x).trim());
+    if (test(row)) return Number(cached);
+  }
+  const n = Math.min(raw.getLastRow(), 20);
+  const block = raw.getRange(1, 1, n, lastCol).getDisplayValues();
+  for (let i = 0; i < n; i++) if (test(block[i].map((x) => String(x).trim()))) { cache.put(key, String(i), 600); return i; }
+  return 0;
+}
+
+/** Лист, у которого строка 1 — это шапка таблицы (на T строк ниже настоящего верха). Всё, что берёт номер строки, сдвигается на T. */
+function topSheet_(raw, T) {
+  const shift = (a1) => String(a1).replace(/([A-Z]+)(\d+)/g, (m, c, r) => c + (+r + T));
+  const map = {
+    getRange: (a, b, c, d) => (typeof a === "string" ? raw.getRange(shift(a)) : c === undefined ? raw.getRange(a + T, b) : d === undefined ? raw.getRange(a + T, b, c) : raw.getRange(a + T, b, c, d)),
+    getLastRow: () => Math.max(0, raw.getLastRow() - T),
+    getMaxRows: () => Math.max(1, raw.getMaxRows() - T),
+    getDataRange: () => raw.getRange(1 + T, 1, Math.max(raw.getLastRow() - T, 1), Math.max(raw.getLastColumn(), 1)),
+    insertRowBefore: (r) => raw.insertRowBefore(r + T),
+    insertRowsBefore: (r, n) => raw.insertRowsBefore(r + T, n),
+    insertRowsAfter: (r, n) => raw.insertRowsAfter(r + T, n),
+    deleteRow: (r) => raw.deleteRow(r + T),
+    deleteRows: (r, n) => raw.deleteRows(r + T, n),
+    setRowHeight: (r, h) => raw.setRowHeight(r + T, h),
+    autoResizeRows: (r, n) => raw.autoResizeRows(r + T, n),
+    getRowGroup: (r, d) => raw.getRowGroup(r + T, d),
+    getRowGroupDepth: (r) => raw.getRowGroupDepth(r + T),
+    setFrozenRows: (n) => raw.setFrozenRows(n + T),
+    clear: () => raw.getRange(1 + T, 1, Math.max(raw.getMaxRows() - T, 1), Math.max(raw.getMaxColumns(), 1)).clear(),
+  };
+  return new Proxy(raw, {get(target, prop) {
+    if (prop === "top") return T;
+    if (typeof prop === "string" && Object.prototype.hasOwnProperty.call(map, prop)) return map[prop];
+    const v = raw[prop];
+    return typeof v === "function" ? v.bind(raw) : v;
+  }});
+}
+
+/** Лист по названию; для трёх главных листов — с учётом строк над шапкой. */
+function tabSheet_(ss, name) {
+  const raw = ss.getSheetByName(name);
+  if (!raw || !HEADER_TESTS_[name]) return raw;
+  const T = topOffset_(raw, name);
+  return T > 0 ? topSheet_(raw, T) : raw;
+}
+
 // ---------- книга: тот же интерфейс, что у MemoryBook в тестах ----------
 class GasBook {
-  constructor() { this.memo = {}; this.opened = null; this.plans = {}; } // memo: лист читаем один раз за запрос
+  constructor() { this.memo = {}; this.opened = null; this.plans = {}; this.sheetMemo = {}; } // memo: лист читаем один раз за запрос
   get ss() { return this.opened || (this.opened = SpreadsheetApp.openById(prop_("SHEET_ID"))); } // таблицу открываем только когда без неё не обойтись
   sheet(tab) {
-    const s = this.ss.getSheetByName(tab);
+    if (this.sheetMemo[tab]) return this.sheetMemo[tab]; // строку шапки ищем один раз за запрос (это лишние чтения таблицы)
+    const s = tabSheet_(this.ss, tab);
     if (!s) throw new Error("Нет листа «" + tab + "»");
-    return s;
+    return (this.sheetMemo[tab] = s);
   }
   touch(tab) { this.memo = {}; this.plans = {}; cacheDrop_(tab); } // после любой записи в лист
   has(tab) {
@@ -2469,21 +2534,41 @@ const C = {navy: "#1B3560", blue: "#0A96DC", light: "#D4F1FC", cream: "#FBF6DC",
 const MONTH_ROW_RE = /^[А-ЯЁ]+ \d{4}$/;
 const ROLE_LIST = ["Админ", "Редактор", "Читатель", "Заблокирован", "Заявка"];
 
+/** Один раз вставляет пару пустых строк над шапкой на главных листах: сюда можно поместить свою «шапку» (название, логотип). */
+function ensureTopRows_(ss) {
+  const p = PropertiesService.getScriptProperties();
+  if (p.getProperty("TOP_ROWS_DONE")) return;
+  p.setProperty("TOP_ROWS_DONE", "1");
+  const n = Number(p.getProperty("TOP_ROWS") || TOP_ROWS_DEFAULT_);
+  if (!(n > 0)) return;
+  [TABS.schedule, TABS.staff, TABS.venues].forEach((name) => {
+    const raw = ss.getSheetByName(name);
+    if (!raw || raw.getLastRow() < 1) return;
+    const first = raw.getRange(1, 1, 1, Math.max(raw.getLastColumn(), 1)).getDisplayValues()[0].map((x) => String(x).trim());
+    if (!HEADER_TESTS_[name](first)) return; // шапка не в первой строке (сверху уже что-то есть) или не узнана: ничего не вставляем
+    raw.insertRowsBefore(1, n);
+    try { raw.setFrozenRows(n + 1); } catch (e) { /* закрепление не обязательно */ }
+  });
+  dropAllCaches_();
+  CacheService.getScriptCache().removeAll(Object.keys(HEADER_TESTS_).map((t) => "TOP:" + t));
+}
+
 function styleSheets() {
   dropAllCaches_();
   const ss = SpreadsheetApp.openById(prop_("SHEET_ID"));
+  ensureTopRows_(ss);
   migrateSchedule();
   const book = new GasBook();
   book.ensure(TABS.venues, VENUES_HEADER);
   seedVenues_(book);
   fillVenueColors_();
-  styleStaff_(ss.getSheetByName(TABS.staff));
+  styleStaff_(tabSheet_(ss, TABS.staff));
   dropAllCaches_(); // «Сотрудники» только что поменялись: дальше читаем их заново
   renderPeopleList_();
   syncRoleColumns_();
   ensureEventIds_();
-  styleSchedule_(ss.getSheetByName(TABS.schedule));
-  styleVenues_(ss.getSheetByName(TABS.venues));
+  styleSchedule_(tabSheet_(ss, TABS.schedule));
+  styleVenues_(tabSheet_(ss, TABS.venues));
   const chats = ss.getSheetByName(TABS.chats);
   if (chats) styleHeader_(chats, 4);
   renderOccupancy_();
@@ -2499,7 +2584,7 @@ function styleSheets() {
  */
 function migrateSchedule() {
   const ss = SpreadsheetApp.openById(prop_("SHEET_ID"));
-  const sheet = ss.getSheetByName(TABS.schedule);
+  const sheet = tabSheet_(ss, TABS.schedule);
   const table = new GasBook().get(TABS.schedule);
   if (layoutOf(table).v === 2) { console.log("Расписание уже в новом формате."); return; }
   const stamp = Utilities.formatDate(new Date(), "Europe/Moscow", "dd.MM HH:mm");
@@ -2558,7 +2643,7 @@ function styleSchedule_(sheet) {
     for (let c = 6; c <= cols; c++) sheet.setColumnWidth(c, 160);
     sheet.getRange(2, 2, Math.max(sheet.getMaxRows() - 1, 1), 2).setHorizontalAlignment("center");
     // площадка — выпадающий список из листа «Площадки» (можно вписать и новую)
-    const venues = sheet.getParent().getSheetByName(TABS.venues);
+    const venues = tabSheet_(sheet.getParent(), TABS.venues);
     if (venues) sheet.getRange(2, 5, Math.max(sheet.getMaxRows() - 1, 1), 1).setDataValidation(
       SpreadsheetApp.newDataValidation().requireValueInRange(venues.getRange("A2:A300"), true).setAllowInvalid(true).build());
   } else {
@@ -2703,7 +2788,7 @@ function scheduleRules_(sheet) {
   const cols = Math.max(2, sheet.getLastColumn());
   const rows = Math.max(sheet.getMaxRows() - 1, 1);
   const banding = SpreadsheetApp.newConditionalFormatRule()
-    .whenFormulaSatisfied('=AND(ISEVEN(ROW()),$A2<>"",NOT(REGEXMATCH($A2,"^[А-ЯЁ]+ [0-9]{4}$")),LEFT($A2,1)<>"▼")')
+    .whenFormulaSatisfied('=AND(ISEVEN(ROW()),$A' + (2 + (sheet.top || 0)) + '<>"",NOT(REGEXMATCH($A' + (2 + (sheet.top || 0)) + ',"^[А-ЯЁ]+ [0-9]{4}$")),LEFT($A' + (2 + (sheet.top || 0)) + ',1)<>"▼")')
     .setBackground(C.light).setRanges([sheet.getRange(2, 1, rows, cols)]).build();
   const head = sheet.getRange(1, 1, 1, cols).getDisplayValues()[0];
   const out = [];
@@ -2712,14 +2797,14 @@ function scheduleRules_(sheet) {
     const hall = sheet.getRange(2, plan.perm[4] + 1, rows, 1);
     const letter = colLetter_(plan.perm[4] + 1);
     store_().venueList().forEach((v) => out.push(SpreadsheetApp.newConditionalFormatRule()
-      .whenFormulaSatisfied('=LOWER(TRIM($' + letter + '2))=LOWER("' + v.name.replace(/"/g, '""') + '")')
+      .whenFormulaSatisfied('=LOWER(TRIM($' + letter + (2 + (sheet.top || 0)) + '))=LOWER("' + v.name.replace(/"/g, '""') + '")')
       .setBackground(v.hex).setFontColor(inkHex_(v.hex)).setBold(true).setRanges([hall]).build()));
   }
   // собрание (тип хранится в скрытом листе «_события» по ID события): вся строка в золотистой заливке, название жирным; цвет площадки остаётся
   const idIdx = head.findIndex((x) => isIdColumn(x));
   if (plan && idIdx >= 0) {
     const idL = colLetter_(idIdx + 1);
-    const isMeeting = '=COUNTIFS(INDIRECT("\'' + TABS.meta + '\'!A:A"),$' + idL + '2,INDIRECT("\'' + TABS.meta + '\'!B:B"),"meeting")>0';
+    const isMeeting = '=COUNTIFS(INDIRECT("\'' + TABS.meta + '\'!A:A"),$' + idL + (2 + (sheet.top || 0)) + ',INDIRECT("\'' + TABS.meta + '\'!B:B"),"meeting")>0';
     const titleRange = sheet.getRange(2, plan.perm[3] + 1, rows, 1);
     out.push(SpreadsheetApp.newConditionalFormatRule().whenFormulaSatisfied(isMeeting).setBackground("#FFE8A3").setBold(true).setRanges([titleRange]).build());
     out.push(SpreadsheetApp.newConditionalFormatRule().whenFormulaSatisfied(isMeeting).setBackground("#FFF1C2").setRanges([sheet.getRange(2, 1, rows, cols)]).build());
@@ -2795,7 +2880,7 @@ function seedTestUsers_(p) {
   p.setProperty("TEST_USERS", "1");
   try {
     const store = store_();
-    const sheet = SpreadsheetApp.openById(prop_("SHEET_ID")).getSheetByName(TABS.staff);
+    const sheet = tabSheet_(SpreadsheetApp.openById(prop_("SHEET_ID")), TABS.staff);
     const rows = store.book.get(TABS.staff);
     const cols = store.staffCols_(rows);
     const plan = columnPlan("staff", sheet.getRange(1, 1, 1, Math.max(sheet.getLastColumn(), 6)).getDisplayValues()[0]);
@@ -2820,7 +2905,7 @@ function seedTestUsers_(p) {
   } catch (err) { diag_("Тестовые пользователи: ОШИБКА — " + String(err && err.message ? err.message : err)); }
 }
 
-const STYLE_VERSION_ = "18"; // поднимайте, когда меняется оформление: таблица перестроится сама при ближайшем срабатывании таймера
+const STYLE_VERSION_ = "19"; // поднимайте, когда меняется оформление: таблица перестроится сама при ближайшем срабатывании таймера
 
 /** После обновления кода один раз оформляет таблицу сама (то же, что ручной запуск styleSheets). */
 function autoStyle_(p) {
@@ -2863,7 +2948,7 @@ function cleanStaffRows_(sheet) {
 
 function tidyStaff_() {
   const ss = SpreadsheetApp.openById(prop_("SHEET_ID"));
-  const sheet = ss.getSheetByName(TABS.staff);
+  const sheet = tabSheet_(ss, TABS.staff);
   if (!sheet || sheet.getLastRow() < 1) return;
   const p = PropertiesService.getScriptProperties();
   if (cleanStaffRows_(sheet)) { dropAllCaches_(); bumpRev_(); }
@@ -2965,7 +3050,7 @@ function handleRestoreClick_(e) {
 /** Следит за порядком в «Расписании»: шапки месяцев и сворачивание. Вызывается таймером после изменений. */
 function tidySchedule_() {
   const ss = SpreadsheetApp.openById(prop_("SHEET_ID"));
-  const sheet = ss.getSheetByName(TABS.schedule);
+  const sheet = tabSheet_(ss, TABS.schedule);
   if (!sheet) return;
   const added = fixMonths_(sheet);
   if (added) { // добавили шапки или пересобрали порядок: оформляем лист заново, приложению сообщаем об изменении
@@ -3058,8 +3143,8 @@ function styleStaff_(sheet) {
   const A = (n) => String.fromCharCode(64 + n);
   const whole = sheet.getRange(2, 1, rows, Math.max(head.length, 6));
   const rules = sheet.getConditionalFormatRules();
-  const request = SpreadsheetApp.newConditionalFormatRule().whenFormulaSatisfied('=OR(REGEXMATCH($A2,"^(?i)заявка"),REGEXMATCH($C2,"^(?i)заявка"))').setBackground("#FFF2B3").setRanges([whole]).build();
-  const off = SpreadsheetApp.newConditionalFormatRule().whenFormulaSatisfied("=AND($A2<>\"\",$" + A(accessCol) + "2=FALSE)").setBackground("#FBE0DF").setFontColor("#8A8A8A").setRanges([whole]).build();
+  const request = SpreadsheetApp.newConditionalFormatRule().whenFormulaSatisfied('=OR(REGEXMATCH($A' + (2 + (sheet.top || 0)) + ',"^(?i)заявка"),REGEXMATCH($C' + (2 + (sheet.top || 0)) + ',"^(?i)заявка"))').setBackground("#FFF2B3").setRanges([whole]).build();
+  const off = SpreadsheetApp.newConditionalFormatRule().whenFormulaSatisfied("=AND($A" + (2 + (sheet.top || 0)) + "<>\"\",$" + A(accessCol) + (2 + (sheet.top || 0)) + "=FALSE)").setBackground("#FBE0DF").setFontColor("#8A8A8A").setRanges([whole]).build();
   sheet.setConditionalFormatRules(rules.concat([request, off]));
 }
 
@@ -3090,7 +3175,7 @@ function fillVenueColors_() {
   const sig = JSON.stringify(list.map((v) => [v.name, v.hex]));
   const p = PropertiesService.getScriptProperties();
   if (p.getProperty("VENUE_SIG") !== sig) {
-    const sch = SpreadsheetApp.openById(prop_("SHEET_ID")).getSheetByName(TABS.schedule);
+    const sch = tabSheet_(SpreadsheetApp.openById(prop_("SHEET_ID")), TABS.schedule);
     if (sch) sch.setConditionalFormatRules(scheduleRules_(sch));
     p.setProperty("VENUE_SIG", sig);
   }
@@ -3106,7 +3191,7 @@ function fillVenueColors_() {
  */
 const LEGACY_ROLES_ = ["Администратор/ Капельдинер", "Гардероб/ Уборщица", "Касса", "Монтировка", "Актеры, свет, звук"]; // колонки исходной таблицы театра
 function syncRoleColumns_() {
-  const sheet = SpreadsheetApp.openById(prop_("SHEET_ID")).getSheetByName(TABS.schedule);
+  const sheet = tabSheet_(SpreadsheetApp.openById(prop_("SHEET_ID")), TABS.schedule);
   if (!sheet || sheet.getLastColumn() < 1) return false;
   const readHead = () => sheet.getRange(1, 1, 1, sheet.getLastColumn()).getDisplayValues()[0].map((x) => String(x).trim());
   let head = readHead();
@@ -3183,7 +3268,7 @@ function syncRoleColumns_() {
  * Добавляется справа сама; строкам без номера (например, вписанным руками) номера выдаются при ближайшей проверке.
  */
 function ensureEventIds_() {
-  const sheet = SpreadsheetApp.openById(prop_("SHEET_ID")).getSheetByName(TABS.schedule);
+  const sheet = tabSheet_(SpreadsheetApp.openById(prop_("SHEET_ID")), TABS.schedule);
   if (!sheet || sheet.getLastColumn() < 1) return false;
   const head = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getDisplayValues()[0].map((x) => String(x).trim());
   if (layoutOf([head]).v !== 2) return false;
@@ -3253,7 +3338,7 @@ const OCC_HEAD_ = ["Дата", "Время", "Площадка", "Событие
  */
 function renderOccupancy_() {
   const ss = SpreadsheetApp.openById(prop_("SHEET_ID"));
-  const sheet = ss.getSheetByName(TABS.venues);
+  const sheet = tabSheet_(ss, TABS.venues);
   if (!sheet) return;
   const today = todayIso(Date.now());
   const book = new GasBook();
@@ -3393,7 +3478,7 @@ function archiveOld_() {
   const arch = SpreadsheetApp.openById(prop_("SHEET_ID")).getSheetByName(TABS.archive);
   if (arch) { styleHeader_(arch, 8); [100, 70, 70, 260, 150, 90, 380, 90].forEach((w, i) => arch.setColumnWidth(i + 1, w)); arch.setFrozenRows(1); }
   if (st.archiveRows().length < before + old.length) throw new Error("в архив записалось меньше событий, чем нужно; в расписании всё оставлено как есть");
-  const sheet = SpreadsheetApp.openById(prop_("SHEET_ID")).getSheetByName(TABS.schedule);
+  const sheet = tabSheet_(SpreadsheetApp.openById(prop_("SHEET_ID")), TABS.schedule);
   old.map((e) => e.row).sort((a, b) => b - a).forEach((r) => sheet.deleteRow(r));
   dropAllCaches_();
   rebuildMonths_(sheet); // шапки ушедших месяцев убираем
@@ -3438,5 +3523,5 @@ function styleVenues_(sheet) {
   const names = sheet.getRange(2, 1, Math.max(sheet.getMaxRows() - 1, 1), 1);
   sheet.setConditionalFormatRules([].concat(
     VENUE_COLORS.map((c) => SpreadsheetApp.newConditionalFormatRule().whenTextEqualTo(c.name).setBackground(c.hex).setFontColor(inkHex_(c.hex)).setRanges([colors]).build()),
-    VENUE_COLORS.map((c) => SpreadsheetApp.newConditionalFormatRule().whenFormulaSatisfied('=AND($A2<>"",$C2="' + c.name + '")').setBackground(c.hex).setFontColor(inkHex_(c.hex)).setBold(true).setRanges([names]).build())));
+    VENUE_COLORS.map((c) => SpreadsheetApp.newConditionalFormatRule().whenFormulaSatisfied('=AND($A' + (2 + (sheet.top || 0)) + '<>"",$C' + (2 + (sheet.top || 0)) + '="' + c.name + '")').setBackground(c.hex).setFontColor(inkHex_(c.hex)).setBold(true).setRanges([names]).build())));
 }
