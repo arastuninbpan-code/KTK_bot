@@ -1450,7 +1450,7 @@ function readToken(token, secret, now = Date.now()) {
 // ===== lib/api.mjs =====
 // API приложения. Чистая функция: запрос -> {status, body}. Синхронный код, никакой привязки к платформе.
 
-const SERVER_VERSION = "2026.10.22-7"; // меняется при каждом выпуске; приложение показывает её в профиле
+const SERVER_VERSION = "2026.10.22-8"; // меняется при каждом выпуске; приложение показывает её в профиле
 
 class HttpError extends Error {
   constructor(status, message, extra = {}) { super(message); this.status = status; this.extra = extra; }
@@ -2269,6 +2269,7 @@ function everyMinute() {
   seedTestUsers_(p);
   const todayStr = todayIso(Date.now());
   if (p.getProperty("months_day") !== todayStr) { p.setProperty("months_day", todayStr); p.setProperty("regroup", "1"); } // новый день: месяц мог стать прошедшим, перекладываем вниз
+  if (p.getProperty("occ_dirty")) { try { p.deleteProperty("occ_dirty"); fillVenueColors_(); renderOccupancy_(); } catch (err) { diag_("Занятость: ОШИБКА — " + String(err && err.message ? err.message : err)); } } // доделываем занятость, если правок было много подряд
   if (p.getProperty("regroup")) { p.deleteProperty("regroup"); try { tidyStaff_(); renderPeopleList_(); syncRoleColumns_(); ensureEventIds_(); tidySchedule_(); syncRestoreButtons_(); fillVenueColors_(); renderOccupancy_(); } catch (err) { diag_("Таблица: ОШИБКА — " + String(err && err.message ? err.message : err)); } }
   try { maintainDaily_(false); } catch (err) { diag_("Обслуживание: ОШИБКА — " + String(err && err.message ? err.message : err)); }
   if (!dueDirty && now - last < 4 * 60e3 + 30e3) return;
@@ -2336,11 +2337,11 @@ function apiCall_(req) {
     secret: secret_(),
     announce: announce_,
     saveReport: saveReport_,
-    afterVenues: () => PropertiesService.getScriptProperties().setProperty("regroup", "1"), // цвета и список площадок в таблице обновит ближайший таймер (до минуты)
+    afterVenues: () => { PropertiesService.getScriptProperties().setProperty("regroup", "1"); occupancyNow_(); }, // цвета в таблице занятости обновляются сразу
     getRev: getRev_,
     bumpRev: bumpRev_,
     // после правки сразу рассылаем уведомления (не ждём таймера); ошибки рассылки не ломают сохранение
-    afterChange: () => { PropertiesService.getScriptProperties().setProperty("regroup", "1"); try { runCycle_(); } catch (err) { console.error(String(err && err.message ? err.message : err)); } },
+    afterChange: () => { PropertiesService.getScriptProperties().setProperty("regroup", "1"); occupancyNow_(); try { runCycle_(); } catch (err) { console.error(String(err && err.message ? err.message : err)); } },
   });
   const lockFree = !req.method || req.method === "GET"; // чтение блокировку не держит
   const r = lockFree ? call() : withLock_(call);
@@ -3200,6 +3201,19 @@ function applyPeopleValidation_(sheet) {
   const rule = SpreadsheetApp.newDataValidation().requireValueInRange(people.getRange("A2:A1000"), true).setAllowInvalid(true).build();
   const rows = Math.max(sheet.getMaxRows() - 1, 1);
   plan.perm.slice(5).filter((col) => !isIdColumn(head[col])).forEach((col) => sheet.getRange(2, col + 1, rows, 1).setDataValidation(rule));
+}
+
+/**
+ * Таблица занятости (справа на листе «Площадки») обновляется сразу после правки из приложения, а не ждёт минутного таймера.
+ * Если только что уже рисовали (пачка правок подряд), остальное доделает таймер: отмечаем флагом «occ_dirty».
+ */
+function occupancyNow_() {
+  const p = PropertiesService.getScriptProperties();
+  p.setProperty("occ_dirty", "1");
+  if (Date.now() - Number(p.getProperty("occ_last") || 0) < 8000) return;
+  p.setProperty("occ_last", String(Date.now()));
+  try { fillVenueColors_(); renderOccupancy_(); p.deleteProperty("occ_dirty"); }
+  catch (err) { diag_("Занятость: ОШИБКА — " + String(err && err.message ? err.message : err)); }
 }
 
 const OCC_COL_ = 4; // таблица занятости лежит в листе «Площадки» правее названий: колонки D–H

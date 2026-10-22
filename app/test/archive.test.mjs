@@ -90,3 +90,18 @@ test("прогрев: запрос ?warm=1 отвечает мгновенно �
   assert.equal(g.run('doGet({parameter: {warm: "1"}}).getContent()'), "ok");
   assert.equal(g.run("doGet().getContent()"), "ok");
 });
+
+test("цвет площадки из приложения сразу попадает в таблицу занятости (не ждёт таймера)", () => {
+  const tabs = {[TABS.schedule]: [HEAD, ["20.10.2026", "19:00", "21:00", "Бука", "Малая сцена", "", "aaaaaaa3"]], [TABS.staff]: STAFF,
+    [TABS.venues]: [["Площадка", "Заметка", "Цвет"], ["Малая сцена", "", "Розовый"]]};
+  const g = loadGas({tabs, props: {SHEET_ID: "x", STYLE_VER: "17", TEST_USERS: "1", OWNER_PHONE: "9000000001"}, now: NOW});
+  const call = (req) => JSON.parse(g.run(`doPost(${JSON.stringify({postData: {contents: JSON.stringify(req)}})}).getContent()`));
+  g.run("store_().ensureLogins()");
+  const token = call({method: "POST", path: "/api/login", body: {login: g.run('store_().users().find((u) => u.phone === "9000000001").login')}}).token;
+  const grey = g.run('colorHex("Серый")');
+  const sh = g.ss.getSheetByName(TABS.venues);
+  sh.styleLog.length = 0;
+  assert.equal(call({method: "PUT", path: "/api/venues", token, body: {name: "Малая сцена", color: "Серый"}}).ok, true);
+  assert.ok(sh.styleLog.some((x) => x[0] === "setBackground" && x[2] === grey && x[1] >= 2), "ячейка площадки в занятости перекрашена сразу");
+  assert.equal(g.properties.occ_dirty, undefined);
+});
