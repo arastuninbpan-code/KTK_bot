@@ -53,3 +53,12 @@ test("цвет площадки и дни «не могу» можно прис�
   assert.equal(t.call("POST", "/api/off", {add: ["2026-10-15"], remove: []}).status, 200);
   assert.deepEqual(t.call("GET", "/api/schedule").body.me.off, ["2026-10-15"]);
 });
+
+test("сбой на сервере отвечает со статусом 500: приложение не считает правку сохранённой и повторит", async () => {
+  const {loadGas} = await import("./gas-fake.mjs");
+  const g = loadGas({tabs: {[TABS.schedule]: [["Дата"]], [TABS.staff]: STAFF}, props: {SHEET_ID: "x"}, now: NOW});
+  const r = JSON.parse(g.run(`doPost({postData: {contents: "{не json"}}).getContent()`));
+  assert.equal(r._status, 500);
+  const nf = JSON.parse(g.run(`doPost({postData: {contents: JSON.stringify({path: "/x"})}}).getContent()`));
+  assert.equal(nf._status, 404);
+});

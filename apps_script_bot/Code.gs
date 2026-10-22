@@ -1405,7 +1405,7 @@ function readToken(token, secret, now = Date.now()) {
 // ===== lib/api.mjs =====
 // API приложения. Чистая функция: запрос -> {status, body}. Синхронный код, никакой привязки к платформе.
 
-const SERVER_VERSION = "2026.10.22-4"; // меняется при каждом выпуске; приложение показывает её в профиле
+const SERVER_VERSION = "2026.10.22-5"; // меняется при каждом выпуске; приложение показывает её в профиле
 
 class HttpError extends Error {
   constructor(status, message, extra = {}) { super(message); this.status = status; this.extra = extra; }
@@ -2270,11 +2270,13 @@ function doPost(e) {
   try {
     if (e && e.parameter && e.parameter.secret) return e.parameter.vk ? vkUpdate_(e) : telegramUpdate_(e);
     const req = JSON.parse(e.postData.contents);
-    if (!req || typeof req.path !== "string" || req.path.indexOf("/api/") !== 0) return json_({error: "Не найдено"});
+    if (!req || typeof req.path !== "string" || req.path.indexOf("/api/") !== 0) return json_({error: "Не найдено", _status: 404});
     return json_(apiCall_(req));
   } catch (err) {
-    console.error(String(err && err.message ? err.message : err));
-    return json_({error: "Что-то пошло не так. Попробуйте ещё раз."});
+    const why = String(err && err.message ? err.message : err);
+    console.error(why);
+    try { diag_("API: ОШИБКА — " + why); } catch (e2) { /* журнал недоступен */ }
+    return json_({error: "Что-то пошло не так. Попробуйте ещё раз.", _status: 500}); // со статусом 500 приложение не считает правку сохранённой и пробует снова
   }
 }
 

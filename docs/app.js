@@ -116,7 +116,7 @@ async function api(method, path, body) {
       throw err;
     }
     try { data = JSON.parse(raw); } catch (e) { throw new Error("Сервер ответил не так, как ждали (код " + r.status + "): " + raw.replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").slice(0, 160)); }
-    status = data._status || (r.ok ? 200 : r.status);
+    status = data._status || (data && data.error ? 500 : (r.ok ? 200 : r.status));
   } else {
     const r = await fetch(method === "GET" && body ? path + "?" + new URLSearchParams(body) : path, {method, headers: {"Content-Type": "application/json", ...(state.token ? {Authorization: "Bearer " + state.token} : {})}, body: method === "GET" ? undefined : JSON.stringify(body || {})});
     data = await r.json().catch(() => ({}));
@@ -374,7 +374,7 @@ function eventCard(e) {
   const list = h("ul", {class: "roles"}, roles.map(([role, names]) => h("li", {class: e.mine.includes(role) ? "me" : ""}, tag(role), h("div", {class: "n"}, names.join(", ")))));
   const urgent = isSoon(e);
   const hex = e.hall ? hexOfHall(e.hall) : "";
-  const outline = hex && !urgent ? `border-color:${hex};box-shadow:3px 3px 0 ${hex}` : ""; // обводка цвета площадки
+  const outline = hex ? `border-color:${hex};box-shadow:3px 3px 0 ${hex}` : ""; // обводка цвета площадки (у «скоро» тоже: срочность видна по метке и времени)
   const meeting = Boolean(e.meta && e.meta.kind === "meeting");
   return h("button", {class: "ev" + (e.mine.length ? " mine" : "") + (urgent ? " urgent" : "") + (meeting ? " meeting" : ""), style: outline, onclick: () => eventDetails(e), "aria-label": `Открыть: ${e.title}`},
     time,
@@ -1068,6 +1068,7 @@ async function load(manual = false, force = false) {
   loading = true;
   try {
     const d = await api("GET", "/api/schedule");
+    if (!d || !d.me || !Array.isArray(d.events)) throw new Error("Сервер ответил неполно. Попробуйте ещё раз через минуту.");
     const next = {me: d.me, events: d.events, roles: d.roles, allRoles: d.allRoles || d.roles, staff: d.staff || [], venues: d.venues || [], venueColors: d.venueColors || {}, palette: d.palette || [], unavailable: d.unavailable || {}, groups: d.groups || [], layout: d.layout || 2, rev: d.rev || "", today: d.today};
     Object.assign(state, next, {ready: true, offline: false, savedAt: Date.now(), serverVersion: d.version || ""});
     const server = JSON.stringify({...next, savedAt: 0}); // кеш на телефоне — то, что на сервере; ещё не ушедшие правки накладываем поверх ниже
