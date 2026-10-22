@@ -17,7 +17,7 @@ export function norm(s) {
   return s.split(/\s+/).filter(Boolean).join(" ");
 }
 
-/** Любой вид номера -> цифры без кода страны: «8 (930) 702-91-09», «+7 930 702 91 09», «79307029109» -> «9307029109». */
+/** Любой вид номера -> цифры без кода страны: «8 (900) 000-00-01», «+7 900 000 00 01», «79000000001» -> «9000000001». */
 export function normPhone(s) {
   const d = String(s).replace(/\D/g, "");
   return d.length === 11 && (d[0] === "7" || d[0] === "8") ? d.slice(1) : d;
@@ -34,7 +34,7 @@ export function looksLikePhone(t) {
   return d.length >= 10 && d.length <= 12 && !/\p{L}/u.test(String(t));
 }
 
-/** [фамилия, инициалы] без учёта регистра, точек и пробелов: «Дьячков Н. А» и «дьячков н.а.» -> ["дьячков","на"]. */
+/** [фамилия, инициалы] без учёта регистра, точек и пробелов: «Иванов И. И» и «иванов н.а.» -> ["иванов","на"]. */
 export function personKey(name) {
   const w = String(name).toLowerCase().replace(/ё/g, "е").match(/\p{L}+(?:-\p{L}+)*/gu) || [];
   if (!w.length) return ["", ""];

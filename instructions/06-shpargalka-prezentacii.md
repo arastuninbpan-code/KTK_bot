@@ -7,8 +7,8 @@
 | Бот в Telegram | https://t.me/k_t_k_bot |
 | Бот в ВК (сообщения группы) | https://vk.me/club242412073 |
 | Группа ВК | https://vk.com/club242412073 |
-| Таблица (для администратора) | https://docs.google.com/spreadsheets/d/1VadKiJqbcJn7dsCbQAGfDtSynqe-pX964VRShD18a6U/edit |
-| Скрипт (серверная часть) | https://script.google.com/home/projects/1-bAbXwl8Y15wcJ8HSg55rWxKmipOcqnWMC97zyex2f7MkHpgU5wd-_qq/edit |
+| Таблица (для администратора) | https://docs.google.com/spreadsheets/d/<ID_ТАБЛИЦЫ>/edit |
+| Скрипт (серверная часть) | https://script.google.com/home/projects/<ID_СКРИПТА>/edit |
 | Публикации обновлений | https://github.com/arastuninbpan-code/KTK_bot/actions |
 | Домен и хостинг | https://dash.cloudflare.com |
 
