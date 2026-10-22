@@ -5,7 +5,7 @@ import {platform} from "./platform.mjs";
 import {buildReport, checkParams, reportCsv} from "./report.mjs";
 import {canEdit, cleanPhotoIds, colorName, ROLE_LABELS, TABS, VENUE_COLORS} from "./store.mjs";
 
-export const SERVER_VERSION = "2026.10.22-5"; // меняется при каждом выпуске; приложение показывает её в профиле
+export const SERVER_VERSION = "2026.10.22-6"; // меняется при каждом выпуске; приложение показывает её в профиле
 
 class HttpError extends Error {
   constructor(status, message, extra = {}) { super(message); this.status = status; this.extra = extra; }
@@ -56,7 +56,7 @@ const publicUser = (u) => ({name: u.name, role: u.role, roleLabel: ROLE_LABELS[u
 const connections = (store, me) => ({login: me.login, channels: [...new Set(store.chats().filter((c) => c.phone === me.phone).map((c) => c.channel))]});
 
 export function handleApi(req, deps) {
-  const {store, secret, now = () => Date.now(), afterChange = () => {}, getRev = () => "", bumpRev = () => {}, announce = () => {}, saveReport = () => ({number: 0})} = deps;
+  const {store, secret, now = () => Date.now(), afterChange = () => {}, getRev = () => "", bumpRev = () => {}, announce = () => {}, afterVenues = () => {}, saveReport = () => ({number: 0})} = deps;
   const {method, path, body = {}, token} = req;
   try {
     // --- без входа ---
@@ -192,6 +192,7 @@ export function handleApi(req, deps) {
         store.removeVenue(name);
       }
       bumpRev();
+      afterVenues(); // таблица занятости (справа на листе «Площадки») перерисуется с новыми цветами
       return {status: 200, body: {ok: true, venues: store.venues(), venueColors: venueColorMap(store)}};
     }
 

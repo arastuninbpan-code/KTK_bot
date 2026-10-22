@@ -421,6 +421,7 @@ function apiCall_(req) {
     secret: secret_(),
     announce: announce_,
     saveReport: saveReport_,
+    afterVenues: () => PropertiesService.getScriptProperties().setProperty("regroup", "1"), // цвета и список площадок в таблице обновит ближайший таймер (до минуты)
     getRev: getRev_,
     bumpRev: bumpRev_,
     // после правки сразу рассылаем уведомления (не ждём таймера); ошибки рассылки не ломают сохранение
@@ -884,7 +885,7 @@ function seedTestUsers_(p) {
   } catch (err) { diag_("Тестовые пользователи: ОШИБКА — " + String(err && err.message ? err.message : err)); }
 }
 
-const STYLE_VERSION_ = "16"; // поднимайте, когда меняется оформление: таблица перестроится сама при ближайшем срабатывании таймера
+const STYLE_VERSION_ = "17"; // поднимайте, когда меняется оформление: таблица перестроится сама при ближайшем срабатывании таймера
 
 /** После обновления кода один раз оформляет таблицу сама (то же, что ручной запуск styleSheets). */
 function autoStyle_(p) {

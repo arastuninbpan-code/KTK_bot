@@ -9,11 +9,12 @@ const NOW = msk(1, 10);
 function make() {
   const book = new MemoryBook({[TABS.schedule]: [["Дата", "Начало", "Конец", "Событие", "Площадка", "Касса", "ID"]], [TABS.staff]: STAFF});
   const store = new Store(book, {secret: "t", now: () => NOW});
-  const deps = {store, secret: "s", now: () => NOW};
+  const venueTouched = [];
+  const deps = {store, secret: "s", now: () => NOW, afterVenues: () => venueTouched.push(1)};
   store.ensureLogins();
   const login = (phone) => handleApi({method: "POST", path: "/api/login", body: {login: store.users().find((u) => u.phone === phone).login}}, deps).body.token;
   const token = login("9000000001");
-  return {book, call: (method, path, body = {}) => handleApi({method, path, token, body}, deps)};
+  return {book, venueTouched, call: (method, path, body = {}) => handleApi({method, path, token, body}, deps)};
 }
 const EV = {title: "Сказка", date: "2026-10-12", dateEnd: "", time: "10:00", end: "11:00", hall: "", roles: {}};
 
@@ -61,4 +62,12 @@ test("сбой на сервере отвечает со статусом 500: �
   assert.equal(r._status, 500);
   const nf = JSON.parse(g.run(`doPost({postData: {contents: JSON.stringify({path: "/x"})}}).getContent()`));
   assert.equal(nf._status, 404);
+});
+
+test("правка площадки (цвет, добавление, удаление) просит перерисовать таблицу занятости", () => {
+  const t = make();
+  t.call("POST", "/api/venues", {name: "Фойе", color: "Красный"});
+  t.call("PUT", "/api/venues", {name: "Фойе", color: "Красный"});
+  t.call("DELETE", "/api/venues", {name: "Фойе"});
+  assert.equal(t.venueTouched.length, 3);
 });
