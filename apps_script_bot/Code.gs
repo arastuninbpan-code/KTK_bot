@@ -519,10 +519,12 @@ function menuRows(menu = {}) {
   return rows;
 }
 const msgMenu = "🏠 <b>Главное меню</b>\nЧто открыть?";
-const msgApp = "📱 <b>Приложение расписания</b>\nСмены, площадки, переписка по событиям — всё там.";
+const msgApp = "📱 <b>Приложение КТК</b>\nСмены, площадки, переписка по событиям — всё там.";
 const msgNoApp = "💬 Адрес приложения пока не задан. Спросите у администратора.";
 
-const msgWelcome = (name) => `✈️ <b>Готово, ${esc(name)}!</b>\nТеперь я буду присылать уведомления о ваших сменах. Меню — внизу.`;
+const loginLine = (login) => (login ? `\n\n🔑 Логин для входа в приложение: <code>${esc(login)}</code>` : "");
+const msgWelcome = (name, login = "") => `✈️ <b>Готово, ${esc(name)}!</b>\nТеперь я буду присылать уведомления о ваших сменах. Меню — внизу.${loginLine(login)}`;
+const msgIntro = "👋 <b>Добро пожаловать в КТК!</b>\nЭто рабочее пространство сотрудников театра. Здесь ваши смены, расписание, собрания и обсуждения, а я сам напомню, когда и где вы работаете.\n\n<b>Как начать</b>\n1️⃣ Нажмите кнопку «Поделиться номером» ниже (или напишите свой номер сообщением). Я пришлю ваш логин.\n2️⃣ Откройте приложение и введите логин (кнопка появится после подключения).\n3️⃣ Добавьте приложение на экран телефона.\n\nЕсли вас нет в списке, я передам заявку администратору. Хорошей работы!";
 const msgAskPhone = "💬 <b>Здравствуйте!</b>\nЧтобы получать уведомления о сменах, поделитесь номером телефона (кнопка ниже, если она есть) или просто напишите сообщением свой номер либо логин, который выдал администратор.";
 const msgUnknownPhone = "💬 <b>Этого номера нет в списке сотрудников.</b>\nОбратитесь к администратору, чтобы вас добавили. Если у вас есть логин, просто пришлите его сюда.";
 const msgStopped = "💬 <b>Уведомления отключены.</b>\nЧтобы включить снова, напишите /start.";
@@ -531,7 +533,7 @@ const msgAlreadyConnected = (name) => `✈️ <b>Этот чат уже подк
 const msgBlocked = "💬 <b>Доступ закрыт.</b>\nОбратитесь к администратору.";
 const msgRequestSent = "💬 <b>Вашего номера нет в списке сотрудников.</b>\nЗаявка передана администратору, он увидит её в таблице. Если хотите, напишите одним сообщением, кто вы (ФИО и должность): оно попадёт администратору.\n\nКак только доступ откроют, я напишу вам сам.";
 const msgCommentSaved = "💬 <b>Передал администратору.</b>\nКак только откроют доступ, я напишу вам сам.";
-const msgAccessGranted = (name) => `✈️ <b>Доступ открыт, ${esc(name)}!</b>\nТеперь я буду присылать уведомления о ваших сменах. Меню — внизу.`;
+const msgAccessGranted = (name, login = "") => `✈️ <b>Доступ открыт, ${esc(name)}!</b>\nТеперь я буду присылать уведомления о ваших сменах. Меню — внизу.${loginLine(login)}`;
 const msgLogin = (login) => `🔑 <b>Ваш логин</b>
 
 <code>${esc(login)}</code>
@@ -1403,7 +1405,7 @@ function readToken(token, secret, now = Date.now()) {
 // ===== lib/api.mjs =====
 // API приложения. Чистая функция: запрос -> {status, body}. Синхронный код, никакой привязки к платформе.
 
-const SERVER_VERSION = "2026.10.22-2"; // меняется при каждом выпуске; приложение показывает её в профиле
+const SERVER_VERSION = "2026.10.22-3"; // меняется при каждом выпуске; приложение показывает её в профиле
 
 class HttpError extends Error {
   constructor(status, message, extra = {}) { super(message); this.status = status; this.extra = extra; }
@@ -1728,7 +1730,9 @@ function handleMessage({store, channel, ev, appUrl = "", now = Date.now(), publi
       return channel.send(chat, msgRequestSent);
     }
     store.bind(channel.name, chat, phone, u.name);
-    return channel.send(chat, msgWelcome(u.name), {menu: menuFor(u)});
+    store.ensureLogins(); // логин для входа в приложение показываем сразу
+    const fresh = store.users().find((x) => x.phone === u.phone) || u;
+    return channel.send(chat, msgWelcome(u.name, fresh.login), {menu: menuFor(u)});
   }
 
   const mine = store.chats().find((c) => c.channel === channel.name && c.chatId === String(chat));
@@ -1739,7 +1743,7 @@ function handleMessage({store, channel, ev, appUrl = "", now = Date.now(), publi
       log("Заявка: комментарий записан в строку " + store.addAccessRequest(req.phone, `${label}: ${text}`));
       return channel.send(chat, msgCommentSaved);
     }
-    return req ? channel.send(chat, msgRequestSent) : channel.send(chat, msgAskPhone, "contact");
+    return req ? channel.send(chat, msgRequestSent) : channel.send(chat, /^\/start/i.test(text) || !text ? msgIntro : msgAskPhone, "contact"); // первое знакомство — вступление, дальше короткая просьба
   }
   if (user.role === "blocked") return channel.send(chat, msgBlocked);
 
@@ -1793,7 +1797,7 @@ function runCycle({store, senders, now = Date.now(), appUrl = "", log = console}
     welcomed.add(u.phone);
     store.bind(rq.channel, rq.chatId, u.phone, u.name);
     store.removeRequest(rq.channel, rq.chatId);
-    try { senders[rq.channel]?.send(rq.chatId, msgAccessGranted(u.name), {menu: {editor: false, appUrl}}); } catch (err) { if (!(err instanceof Gone)) log.error(String(err.message || err)); }
+    try { senders[rq.channel]?.send(rq.chatId, msgAccessGranted(u.name, u.login), {menu: {editor: false, appUrl}}); } catch (err) { if (!(err instanceof Gone)) log.error(String(err.message || err)); }
   }
   const users = store.activeUsers();
   const table = store.book.get(TABS.schedule);
@@ -1809,7 +1813,7 @@ function runCycle({store, senders, now = Date.now(), appUrl = "", log = console}
       if (accessBefore.includes(u.phone) || welcomed.has(u.phone)) continue;
       welcomed.add(u.phone);
       for (const c of chatsNow.filter((x) => x.phone === u.phone)) {
-        try { senders[c.channel]?.send(c.chatId, msgAccessGranted(u.name), appButton(appUrl)); }
+        try { senders[c.channel]?.send(c.chatId, msgAccessGranted(u.name, u.login), appButton(appUrl)); }
         catch (err) { if (err instanceof Gone) store.unbind(c.channel, c.chatId); else log.error(String(err.message || err)); }
       }
     }

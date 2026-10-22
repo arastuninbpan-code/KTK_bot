@@ -11,11 +11,12 @@ const say = (ctx, ch, chatId, text, phone = null) => handleMessage({store: ctx.s
 test("регистрация по контакту и по номеру текстом, чужой и заблокированный номера, команды без регистрации", () => {
   const ctx = setup(); const ch = fakeChannel();
   say(ctx, ch, 5, "/start");
-  assert.match(lastTo(ch, 5).text, /Здравствуйте/); assert.equal(lastTo(ch, 5).options, "contact");
+  assert.match(lastTo(ch, 5).text, /Добро пожаловать в КТК/); assert.equal(lastTo(ch, 5).options, "contact"); // первое знакомство: вступление
   say(ctx, ch, 5, "/shifts");
-  assert.equal(lastTo(ch, 5).options, "contact");
+  assert.match(lastTo(ch, 5).text, /Здравствуйте/); assert.equal(lastTo(ch, 5).options, "contact"); // дальше — короткая просьба
   say(ctx, ch, 5, "", "+79000000003");
   assert.match(lastTo(ch, 5).text, /✈️ <b>Готово, Сидорова Л\.Р\.!<\/b>/);
+  assert.match(lastTo(ch, 5).text, /Логин для входа в приложение: <code>[A-Z0-9]{6}<\/code>/);
   say(ctx, ch, 7, "8 (900) 000-00-02");
   assert.equal(ctx.store.chats().length, 2);
   say(ctx, ch, 8, "+7 999 999-99-99");
