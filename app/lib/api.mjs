@@ -5,7 +5,7 @@ import {platform} from "./platform.mjs";
 import {archiveLine, buildReport, checkParams, parseArchive, reportCsv} from "./report.mjs";
 import {canEdit, cleanPhotoIds, colorName, ROLE_LABELS, TABS, VENUE_COLORS} from "./store.mjs";
 
-export const SERVER_VERSION = "2026.10.22-25"; // меняется при каждом выпуске; приложение показывает её в профиле
+export const SERVER_VERSION = "2026.10.22-26"; // меняется при каждом выпуске; приложение показывает её в профиле
 
 class HttpError extends Error {
   constructor(status, message, extra = {}) { super(message); this.status = status; this.extra = extra; }
@@ -236,8 +236,8 @@ export function handleApi(req, deps) {
         if (!roles.includes(role)) errors.push(`Нет такой роли: ${role}`);
         for (const n of names) if (!staff.has(n)) errors.push(`Нет такого сотрудника: ${n}`);
       }
-      // сотрудник отметил, что в эти дни не может: выбрать его нельзя (кроме тех, кто уже стоит на этом событии)
-      if (!errors.length) {
+      // сотрудник отметил, что в эти дни не может: редактор выбрать его не может, администратор может (кроме тех, кто уже стоит на этом событии)
+      if (!errors.length && me.role !== "admin") { // администратор может поставить и того, кто отметил «не могу»
         const old = method === "PUT" ? parseEvents(table, today).find((x) => x.row === rowNo) : null;
         const already = new Set(Object.values(old?.roles || {}).flat());
         const days = daysOf(event);

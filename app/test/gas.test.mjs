@@ -8,7 +8,7 @@ const SCHEDULE = [HEAD,
   ["04.10\n11.00 и 13.00", "Спектакль «Бука»\n(малая сцена)", "Иванова М.В.", "Морозова Н.М.", "", "", ""],
   ["10.10", "Сказки из старого чемодана", "Петрова Л.Н.", "", "", "", ""]];
 const G = () => loadGas({now: NOW, tabs: {"Расписание": SCHEDULE, "Сотрудники": STAFF},
-  props: {SHEET_ID: "x", STYLE_VER: "19", TOP_ROWS_DONE: "1", TEST_USERS: "1", TELEGRAM_BOT_TOKEN: "TOKEN", WEBHOOK_SECRET: "hook", APP_URL: "https://app.test"}});
+  props: {SHEET_ID: "x", STYLE_VER: "20", TOP_ROWS_DONE: "1", TEST_USERS: "1", TELEGRAM_BOT_TOKEN: "TOKEN", WEBHOOK_SECRET: "hook", APP_URL: "https://app.test"}});
 
 const tg = (g, update) => g.run(`doPost(${JSON.stringify({parameter: {secret: "hook"}, postData: {contents: JSON.stringify(update)}})}).getContent()`);
 const msg = (id, text, contact) => ({update_id: Math.floor(Math.random() * 1e9), message: {chat: {id, type: "private"}, from: {id}, text, contact}});
@@ -170,7 +170,7 @@ test("группы: галочки в таблице -> состав групп;
 // ---------- ВКонтакте ----------
 const VKPROPS = {VK_TOKEN: "VKTOKEN", VK_GROUP_ID: "club123", VK_SECRET: "vksecret", VK_CONFIRM: "abc123", TG_CHANNEL: "@teatr"};
 const GV = (extra = {}) => loadGas({now: NOW, tabs: {"Расписание": SCHEDULE, "Сотрудники": STAFF},
-  props: {SHEET_ID: "x", STYLE_VER: "19", TOP_ROWS_DONE: "1", TEST_USERS: "1", TELEGRAM_BOT_TOKEN: "TOKEN", WEBHOOK_SECRET: "hook", APP_URL: "https://app.test", ...VKPROPS, ...extra}});
+  props: {SHEET_ID: "x", STYLE_VER: "20", TOP_ROWS_DONE: "1", TEST_USERS: "1", TELEGRAM_BOT_TOKEN: "TOKEN", WEBHOOK_SECRET: "hook", APP_URL: "https://app.test", ...VKPROPS, ...extra}});
 const vk = (g, update, secret = "hook") => g.run(`doPost(${JSON.stringify({parameter: {secret, vk: "1"}, postData: {contents: JSON.stringify(update)}})}).getContent()`);
 const vkMsg = (id, text, extra = {}) => ({type: "message_new", event_id: "e" + Math.random(), secret: "vksecret", object: {message: {peer_id: id, from_id: id, text, ...extra}}});
 const vkSent = (g, id) => g.fetches.filter((f) => f.url.endsWith("/messages.send") && String(f.body.user_id) === String(id));
@@ -500,7 +500,7 @@ test("«Сотрудники» как в жизни: тысяча строк-з�
 });
 
 test("заявка из ВК: в «ФИО» имя из профиля, роль «Заявка»; поставили «Доступ» — это уже обычный сотрудник", () => {
-  const g = GV({STYLE_VER: "19", TOP_ROWS_DONE: "1"});
+  const g = GV({STYLE_VER: "20", TOP_ROWS_DONE: "1"});
   g.run("styleSheets()");
   g.setFetchReply((url) => (/users\.get/.test(url) ? JSON.stringify({response: [{first_name: "Анна", last_name: "Смирнова"}]}) : ""));
   vk(g, vkMsg(77, "89112223344"));
@@ -618,9 +618,14 @@ test("«Не могу работать»: отмеченные даты хран
   assert.deepEqual(r.unavailable, {"Петрова Л.Н.": ["2026-10-12", "2026-10-13"]});
   // назначить её на 12 октября нельзя, на 14 — можно
   const ev = (date, who) => ({title: "Проба", date, dateEnd: "", time: "19:00", end: "", hall: "", roles: {"Актёры": [who]}});
-  let res = api(g, {method: "POST", path: "/api/events", token: admin, body: {event: ev("2026-10-12", "Петрова Л.Н.")}});
-  assert.equal(res._status, 400);
+  const editor = api(g, {method: "POST", path: "/api/login", body: {login: loginOf("9000000004")}}).token;
+  let res = api(g, {method: "POST", path: "/api/events", token: editor, body: {event: ev("2026-10-12", "Петрова Л.Н.")}});
+  assert.equal(res._status, 400, "редактор не может поставить того, кто отметил «не могу»");
   assert.match(res.error, /Петрова Л\.Н\. отметил\(а\), что не может работать 12\.10/);
+  res = api(g, {method: "POST", path: "/api/events", token: admin, body: {event: ev("2026-10-12", "Петрова Л.Н.")}});
+  assert.equal(res._status, 200, "администратор может поставить и такого человека");
+  const rowAdm = g.run("store_().book.get('Расписание').findIndex((r) => r[3] === 'Проба') + 1");
+  api(g, {method: "DELETE", path: "/api/events/" + rowAdm, token: admin});
   assert.equal(api(g, {method: "POST", path: "/api/events", token: admin, body: {event: ev("2026-10-14", "Петрова Л.Н.")}})._status, 200);
   // уже стоящего на событии можно не трогать, даже если потом отметила дату
   const row = g.run("store_().book.get('Расписание').findIndex((r) => r[3] === 'Проба') + 1");
@@ -790,7 +795,7 @@ test("служебная колонка ID: появляется скрытой,
 });
 
 test("собрание: текст документа уходит всем с доступом в Telegram и ВК личными сообщениями и постом в группу ВК; комментарии работают", () => {
-  const g = GV({STYLE_VER: "19", TOP_ROWS_DONE: "1", APP_URL: "https://app.test"});
+  const g = GV({STYLE_VER: "20", TOP_ROWS_DONE: "1", APP_URL: "https://app.test"});
   g.run("styleSheets()"); g.run("store_().ensureLogins()");
   tg(g, msg(5, "", {user_id: 5, phone_number: "9000000002"})); // Петрова в Telegram
   vk(g, vkMsg(77, "89000000001"), "hook"); // Иванова в ВК
@@ -818,7 +823,7 @@ test("собрание: текст документа уходит всем с �
 });
 
 test("аватарки: после сообщения боту берётся фото из профиля (ВК — ссылка, Telegram — картинка), раз в неделю", () => {
-  const g = GV({STYLE_VER: "19", TOP_ROWS_DONE: "1"});
+  const g = GV({STYLE_VER: "20", TOP_ROWS_DONE: "1"});
   g.run("styleSheets()");
   g.setFetchReply((url) => {
     if (/getUserProfilePhotos/.test(url)) return JSON.stringify({result: {photos: [[{file_id: "a", width: 160}, {file_id: "b", width: 320}]]}});
@@ -837,7 +842,7 @@ test("аватарки: после сообщения боту берётся ф
 });
 
 test("собрание отличается в таблице: строка золотистая по типу из скрытого листа, в занятости площадок — значок и заливка", () => {
-  const g = GV({STYLE_VER: "19", TOP_ROWS_DONE: "1"});
+  const g = GV({STYLE_VER: "20", TOP_ROWS_DONE: "1"});
   g.run("styleSheets()"); g.run("store_().ensureLogins()");
   const sch = g.ss.getSheetByName("Расписание");
   const idc = sch.getDataRange().getDisplayValues()[0].indexOf("ID");

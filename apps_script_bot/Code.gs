@@ -1459,7 +1459,7 @@ function readToken(token, secret, now = Date.now()) {
 // ===== lib/api.mjs =====
 // API приложения. Чистая функция: запрос -> {status, body}. Синхронный код, никакой привязки к платформе.
 
-const SERVER_VERSION = "2026.10.22-25"; // меняется при каждом выпуске; приложение показывает её в профиле
+const SERVER_VERSION = "2026.10.22-26"; // меняется при каждом выпуске; приложение показывает её в профиле
 
 class HttpError extends Error {
   constructor(status, message, extra = {}) { super(message); this.status = status; this.extra = extra; }
@@ -1690,8 +1690,8 @@ function handleApi(req, deps) {
         if (!roles.includes(role)) errors.push(`Нет такой роли: ${role}`);
         for (const n of names) if (!staff.has(n)) errors.push(`Нет такого сотрудника: ${n}`);
       }
-      // сотрудник отметил, что в эти дни не может: выбрать его нельзя (кроме тех, кто уже стоит на этом событии)
-      if (!errors.length) {
+      // сотрудник отметил, что в эти дни не может: редактор выбрать его не может, администратор может (кроме тех, кто уже стоит на этом событии)
+      if (!errors.length && me.role !== "admin") { // администратор может поставить и того, кто отметил «не могу»
         const old = method === "PUT" ? parseEvents(table, today).find((x) => x.row === rowNo) : null;
         const already = new Set(Object.values(old?.roles || {}).flat());
         const days = daysOf(event);
@@ -2054,6 +2054,7 @@ function topSheet_(raw, T) {
   };
   return new Proxy(raw, {get(target, prop) {
     if (prop === "top") return T;
+    if (prop === "raw") return raw;
     if (typeof prop === "string" && Object.prototype.hasOwnProperty.call(map, prop)) return map[prop];
     const v = raw[prop];
     return typeof v === "function" ? v.bind(raw) : v;
@@ -2373,6 +2374,7 @@ function everyMinute() {
  */
 function onSheetChange(e) {
   if (e && e.range && handleRestoreClick_(e)) return;
+  try { clearOrphanRows_(e); } catch (err) { diag_("Очистка строки: ОШИБКА — " + String(err && err.message ? err.message : err)); }
   dropAllCaches_(); // таблицу правили руками: кэшированные листы устарели
   const p = PropertiesService.getScriptProperties();
   p.setProperty("regroup", "1"); // шапки месяцев и сворачивание поправит ближайший минутный таймер
@@ -2392,6 +2394,43 @@ function onSheetChange(e) {
     } catch (err) { diag_("Таблица: ОШИБКА — " + String(err && err.message ? err.message : err)); }
     runCycle_();
   });
+}
+
+/**
+ * Стёрли название (имя сотрудника, площадки, события) — вся остальная строка стирается тоже: телефон, роли, галочки, цвета.
+ * Оформление строки (рамки, списки, галочки) остаётся, исчезает только содержимое.
+ */
+function clearOrphanRows_(e) {
+  if (!e || !e.range) return;
+  const raw = e.range.getSheet();
+  const tab = raw.getName();
+  if (!HEADER_TESTS_[tab]) return;
+  const T = topOffset_(raw, tab);
+  const r1 = e.range.getRow(), r2 = e.range.getLastRow();
+  const first = T + 2;
+  if (r2 < first) return;
+  const cols = Math.max(raw.getLastColumn(), 6);
+  const head = raw.getRange(T + 1, 1, 1, cols).getDisplayValues()[0].map((x) => String(x).trim());
+  let key = 0;
+  if (tab === TABS.staff) { const plan = columnPlan("staff", head); key = plan ? plan.perm[0] : 0; }
+  else if (tab === TABS.schedule) { const i = head.findIndex((x) => /^(событие|спектакль|мероприят)/i.test(x)); key = i >= 0 ? i : 3; }
+  const c1 = e.range.getColumn(), c2 = e.range.getLastColumn();
+  if (key + 1 < c1 || key + 1 > c2) return; // правили не название
+  const multi = r2 > r1 || c2 > c1;
+  const erased = multi ? e.value === undefined : (e.value === undefined || String(e.value) === "") && e.oldValue !== undefined && String(e.oldValue).trim() !== "";
+  if (!erased) return;
+  const from = Math.max(r1, first);
+  const block = raw.getRange(from, 1, r2 - from + 1, cols).getDisplayValues();
+  const aria = [];
+  block.forEach((row, i) => {
+    if (String(row[key]).trim() !== "") return; // название на месте
+    const a = String(row[0]).trim();
+    if (tab === TABS.schedule && (MONTH_ROW_RE.test(a) || a === PAST_DIVIDER_)) return; // шапка месяца — не событие
+    if (!row.some((x, k) => k !== key && String(x).trim() !== "")) return; // и так пусто
+    aria.push(from + i);
+  });
+  aria.forEach((r) => raw.getRange(r, 1, 1, cols).clearContent());
+  if (aria.length) { dropAllCaches_(); bumpRev_(); }
 }
 
 // ---------- точки входа ----------
@@ -2649,6 +2688,17 @@ function styleHeader_(sheet, cols) {
     .setVerticalAlignment("middle").setWrap(true);
   sheet.setRowHeight(1, 44);
   sheet.setFrozenRows(1);
+  paintTopRows_(sheet, cols);
+}
+
+/** Строки над шапкой (место под ваш баннер) закрашены цветом шапки на всю ширину таблицы, в том числе под новыми колонками. Уже закрашенное вами другим цветом не трогаем. */
+function paintTopRows_(sheet, cols) {
+  const T = sheet.top || 0;
+  if (!T || !sheet.raw) return;
+  const rng = sheet.raw.getRange(1, 1, T, Math.max(cols, sheet.raw.getLastColumn(), 1));
+  const bg = rng.getBackgrounds();
+  const next = bg.map((row) => row.map((c) => (!c || String(c).toLowerCase() === "#ffffff" ? C.head : c)));
+  rng.setBackgrounds(next);
 }
 
 /** Шапки месяцев («СЕНТЯБРЬ 2026»), заголовки колонок, чередование строк. */
@@ -2943,7 +2993,7 @@ function seedTestUsers_(p) {
   } catch (err) { diag_("Тестовые пользователи: ОШИБКА — " + String(err && err.message ? err.message : err)); }
 }
 
-const STYLE_VERSION_ = "19"; // поднимайте, когда меняется оформление: таблица перестроится сама при ближайшем срабатывании таймера
+const STYLE_VERSION_ = "20"; // поднимайте, когда меняется оформление: таблица перестроится сама при ближайшем срабатывании таймера
 
 /** После обновления кода один раз оформляет таблицу сама (то же, что ручной запуск styleSheets). */
 function autoStyle_(p) {

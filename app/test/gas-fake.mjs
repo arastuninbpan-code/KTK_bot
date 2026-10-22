@@ -37,6 +37,9 @@ for (const m of ["setNumberFormat", "setBackground", "setFontColor", "setFontWei
   Range.prototype[m] = function (...a) { this.sheet.styleLog.push([m, this.r, ...a]); return this; };
 }
 
+Range.prototype.getBackgrounds = function () { return Array.from({length: this.nr}, () => Array(this.nc).fill("#ffffff")); };
+Range.prototype.setBackgrounds = function (m) { for (const c of new Set(m.flat())) this.sheet.styleLog.push(["setBackground", this.r, c]); return this; };
+
 class Sheet {
   constructor(name) { this.name = name; this.cells = []; this.maxRows = 1000; this.maxCols = 26; this.styleLog = []; this.rules = []; this.groups = []; this.hidden = false; }
   put(r, c, v) { while (this.cells.length < r) this.cells.push([]); const row = this.cells[r - 1]; while (row.length < c) row.push(""); row[c - 1] = String(v); }

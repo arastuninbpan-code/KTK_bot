@@ -1169,7 +1169,8 @@ function editor(e) {
     const origNames = new Set(e ? Object.values(e.roles || {}).flat() : []);
     const dDays = eventDays(draft);
     const badPeople = [...new Set(Object.values(draft.roles).flat())].filter((n) => !origNames.has(n) && blockedDays(n, dDays).length);
-    const warnOff = badPeople.length ? h("div", {class: "warn"}, icon("alert"), h("span", {}, `Не могут работать в эти дни: ${badPeople.map((n) => `${n} (${blockedDays(n, dDays).map(shortDate).join(", ")})`).join("; ")}. Уберите их или смените дату.`)) : null;
+    const blockSave = badPeople.length && !isAdmin();
+    const warnOff = badPeople.length ? h("div", {class: "warn"}, icon("alert"), h("span", {}, `Не могут работать в эти дни: ${badPeople.map((n) => `${n} (${blockedDays(n, dDays).map(shortDate).join(", ")})`).join("; ")}. ${isAdmin() ? "Вы можете оставить их — решение за администратором." : "Уберите их или смените дату."}`)) : null;
     // должности — группы из «Сотрудников»; плюс те, где на этом событии уже кто-то стоит (чтобы старые записи не потерялись)
     const editRoles = [...state.roles, ...Object.keys(draft.roles).filter((r) => !state.roles.includes(r))];
     const roleBlocks = editRoles.map((role) => {
@@ -1208,7 +1209,7 @@ function editor(e) {
       const event = {title: draft.title.trim(), date: draft.date, dateEnd: draft.dateEnd || "", time: [draft.time, ...draft.extra].filter(Boolean).join(", "), end: draft.end, hall: draft.hall, roles: draft.roles};
       if (!event.title) return shakeBad(title, err, "Введите название события");
       if (!event.date) return shakeBad(date, err, "Укажите дату");
-      if (badPeople.length) { err.textContent = "Не могут работать в эти дни: " + badPeople.join(", ") + ". Уберите их или смените дату."; return; }
+      if (blockSave) { err.textContent = "Не могут работать в эти дни: " + badPeople.join(", ") + ". Уберите их или смените дату."; return; }
       if (!force && clash.length) { confirmDialog("Площадка занята", `Площадка занята: ${clash.map((c) => `${c.title} (${timeLabel(c)})`).join("; ")}. Сохранить всё равно?`, "Сохранить", () => doSave(true)); return; }
       close();
       const meta = draft.kind === "meeting" || (e && e.meta && (e.meta.kind === "meeting" || e.meta.note))
@@ -1239,6 +1240,7 @@ function editor(e) {
 /** Дни события (не больше двух месяцев подряд). */
 const eventDays = (d) => { const out = []; if (!d.date) return out; for (let x = d.date, i = 0; x <= (d.dateEnd || d.date) && i < 62; x = addDays(x, 1), i++) out.push(x); return out; };
 /** Дни, на которые человек отметил «не могу», в пределах события. */
+const isAdmin = () => state.me && state.me.role === "admin";
 const blockedDays = (name, days) => ((state.unavailable || {})[name] || []).filter((x) => days.includes(x));
 /** В других событиях в то же время (если у обоих указано время). */
 function busyWith(name, cand) {
@@ -1258,7 +1260,7 @@ function picker(role, selected, onDone, ctx = {}) {
     const names = state.staff.filter((n) => n.toLowerCase().includes(q));
     list.replaceChildren(...names.map((n) => {
       const off = blockedDays(n, days);
-      const locked = Boolean(off.length) && !sel.includes(n); // отметил «не могу» — выбрать нельзя (а если уже стоял на событии, можно только снять)
+      const locked = Boolean(off.length) && !sel.includes(n) && !isAdmin(); // отметил «не могу» — выбрать нельзя (а если уже стоял на событии, можно только снять)
       const busy = locked ? [] : busyWith(n, cand);
       const note = off.length ? "не может: " + off.map((d) => shortDate(d)).join(", ") : busy.length ? "уже занят(а): " + busy.map((e) => `${e.title}, ${timeLabel(e)}`).join("; ") : "";
       return h("button", {class: "pick" + (sel.includes(n) ? " on" : "") + (locked ? " off" : "") + (busy.length ? " warnp" : ""), disabled: locked, "aria-disabled": String(locked),
@@ -1267,9 +1269,9 @@ function picker(role, selected, onDone, ctx = {}) {
     }), ...(names.length ? [] : [h("div", {class: "empty"}, "Никого не нашли")]));
     // группы из таблицы: одно нажатие добавляет всех, ещё одно — убирает
     groups.replaceChildren(...state.groups.filter((g) => g.members.length).map((g) => {
-      const free = g.members.filter((n) => sel.includes(n) || !blockedDays(n, days).length);
+      const free = g.members.filter((n) => sel.includes(n) || isAdmin() || !blockedDays(n, days).length);
       const all = free.length > 0 && free.every((n) => sel.includes(n));
-      return h("button", {class: "chip group" + (all ? " on" : ""), onclick: () => { sel = all ? sel.filter((n) => !g.members.includes(n)) : [...new Set([...sel, ...g.members.filter((n) => sel.includes(n) || !blockedDays(n, days).length)])]; fill(); }}, icon("group"), `${g.name} · ${g.members.length}`);
+      return h("button", {class: "chip group" + (all ? " on" : ""), onclick: () => { sel = all ? sel.filter((n) => !g.members.includes(n)) : [...new Set([...sel, ...g.members.filter((n) => sel.includes(n) || isAdmin() || !blockedDays(n, days).length)])]; fill(); }}, icon("group"), `${g.name} · ${g.members.length}`);
     }));
   };
   const {close} = overlay(sheet(h("h2", {}, roleText(role)), state.groups.some((g) => g.members.length) ? h("div", {class: "field"}, h("span", {}, "Группы"), groups) : null, search, list,
