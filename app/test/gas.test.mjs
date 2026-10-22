@@ -8,7 +8,7 @@ const SCHEDULE = [HEAD,
   ["04.10\n11.00 и 13.00", "Спектакль «Бука»\n(малая сцена)", "Иванова М.В.", "Морозова Н.М.", "", "", ""],
   ["10.10", "Сказки из старого чемодана", "Петрова Л.Н.", "", "", "", ""]];
 const G = () => loadGas({now: NOW, tabs: {"Расписание": SCHEDULE, "Сотрудники": STAFF},
-  props: {SHEET_ID: "x", STYLE_VER: "17", TEST_USERS: "1", TELEGRAM_BOT_TOKEN: "TOKEN", WEBHOOK_SECRET: "hook", APP_URL: "https://app.test"}});
+  props: {SHEET_ID: "x", STYLE_VER: "18", TEST_USERS: "1", TELEGRAM_BOT_TOKEN: "TOKEN", WEBHOOK_SECRET: "hook", APP_URL: "https://app.test"}});
 
 const tg = (g, update) => g.run(`doPost(${JSON.stringify({parameter: {secret: "hook"}, postData: {contents: JSON.stringify(update)}})}).getContent()`);
 const msg = (id, text, contact) => ({update_id: Math.floor(Math.random() * 1e9), message: {chat: {id, type: "private"}, from: {id}, text, contact}});
@@ -166,7 +166,7 @@ test("группы: галочки в таблице -> состав групп;
 // ---------- ВКонтакте ----------
 const VKPROPS = {VK_TOKEN: "VKTOKEN", VK_GROUP_ID: "club123", VK_SECRET: "vksecret", VK_CONFIRM: "abc123", TG_CHANNEL: "@teatr"};
 const GV = (extra = {}) => loadGas({now: NOW, tabs: {"Расписание": SCHEDULE, "Сотрудники": STAFF},
-  props: {SHEET_ID: "x", STYLE_VER: "17", TEST_USERS: "1", TELEGRAM_BOT_TOKEN: "TOKEN", WEBHOOK_SECRET: "hook", APP_URL: "https://app.test", ...VKPROPS, ...extra}});
+  props: {SHEET_ID: "x", STYLE_VER: "18", TEST_USERS: "1", TELEGRAM_BOT_TOKEN: "TOKEN", WEBHOOK_SECRET: "hook", APP_URL: "https://app.test", ...VKPROPS, ...extra}});
 const vk = (g, update, secret = "hook") => g.run(`doPost(${JSON.stringify({parameter: {secret, vk: "1"}, postData: {contents: JSON.stringify(update)}})}).getContent()`);
 const vkMsg = (id, text, extra = {}) => ({type: "message_new", event_id: "e" + Math.random(), secret: "vksecret", object: {message: {peer_id: id, from_id: id, text, ...extra}}});
 const vkSent = (g, id) => g.fetches.filter((f) => f.url.endsWith("/messages.send") && String(f.body.user_id) === String(id));
@@ -366,7 +366,7 @@ test("после обновления таблица оформляется са
   const g = G();
   delete g.properties.STYLE_VER;
   g.run("everyMinute()"); // как после выкладки новой версии
-  assert.equal(g.properties.STYLE_VER, "17");
+  assert.equal(g.properties.STYLE_VER, "18");
   const staff = g.ss.getSheetByName("Сотрудники");
   assert.deepEqual(staff.getDataRange().getDisplayValues()[0].slice(4, 6), ["Доступ", "Комментарий"]);
   assert.deepEqual(g.ss.sheets.filter((x) => !x.hidden).map((x) => x.name).sort(), ["Площадки", "Расписание", "Сотрудники"]);
@@ -496,7 +496,7 @@ test("«Сотрудники» как в жизни: тысяча строк-з�
 });
 
 test("заявка из ВК: в «ФИО» имя из профиля, роль «Заявка»; поставили «Доступ» — это уже обычный сотрудник", () => {
-  const g = GV({STYLE_VER: "17"});
+  const g = GV({STYLE_VER: "18"});
   g.run("styleSheets()");
   g.setFetchReply((url) => (/users\.get/.test(url) ? JSON.stringify({response: [{first_name: "Анна", last_name: "Смирнова"}]}) : ""));
   vk(g, vkMsg(77, "89112223344"));
@@ -613,7 +613,7 @@ test("«Не могу работать»: отмеченные даты хран
   r = api(g, {method: "GET", path: "/api/schedule", token: admin});
   assert.deepEqual(r.unavailable, {"Петрова Л.Н.": ["2026-10-12", "2026-10-13"]});
   // назначить её на 12 октября нельзя, на 14 — можно
-  const ev = (date, who) => ({title: "Проба", date, dateEnd: "", time: "19:00", end: "", hall: "", roles: {"Касса": [who]}});
+  const ev = (date, who) => ({title: "Проба", date, dateEnd: "", time: "19:00", end: "", hall: "", roles: {"Актёры": [who]}});
   let res = api(g, {method: "POST", path: "/api/events", token: admin, body: {event: ev("2026-10-12", "Петрова Л.Н.")}});
   assert.equal(res._status, 400);
   assert.match(res.error, /Петрова Л\.Н\. отметил\(а\), что не может работать 12\.10/);
@@ -639,7 +639,7 @@ test("должности в приложении — группы из «Сот�
   const t = api(g, {method: "POST", path: "/api/login", body: {login: g.run("store_().users().find((u) => u.phone === '9000000001').login")}}).token;
   let s = api(g, {method: "GET", path: "/api/schedule", token: t});
   assert.deepEqual(s.roles, ["Актёры", "Техника", "Зал"], "выбор только из должностей-групп");
-  assert.ok(s.allRoles.includes("Касса") && s.allRoles.includes("Актёры"), "старые колонки таблицы остаются");
+  assert.ok(!s.allRoles.includes("Касса") && s.allRoles.includes("Актёры"), "пустые старые колонки исходной таблицы убраны: остались только должности-группы");
   assert.ok(s.staff.includes("Морозова Н.М."), "а человека можно выбрать, на какой бы галочке он ни стоял");
   // администратор добавил новую группу в «Сотрудниках»
   const col = staff.getLastColumn() + 1;
@@ -786,7 +786,7 @@ test("служебная колонка ID: появляется скрытой,
 });
 
 test("собрание: текст документа уходит всем с доступом в Telegram и ВК личными сообщениями и постом в группу ВК; комментарии работают", () => {
-  const g = GV({STYLE_VER: "17", APP_URL: "https://app.test"});
+  const g = GV({STYLE_VER: "18", APP_URL: "https://app.test"});
   g.run("styleSheets()"); g.run("store_().ensureLogins()");
   tg(g, msg(5, "", {user_id: 5, phone_number: "9000000002"})); // Петрова в Telegram
   vk(g, vkMsg(77, "89000000001"), "hook"); // Иванова в ВК
@@ -814,7 +814,7 @@ test("собрание: текст документа уходит всем с �
 });
 
 test("аватарки: после сообщения боту берётся фото из профиля (ВК — ссылка, Telegram — картинка), раз в неделю", () => {
-  const g = GV({STYLE_VER: "17"});
+  const g = GV({STYLE_VER: "18"});
   g.run("styleSheets()");
   g.setFetchReply((url) => {
     if (/getUserProfilePhotos/.test(url)) return JSON.stringify({result: {photos: [[{file_id: "a", width: 160}, {file_id: "b", width: 320}]]}});
@@ -833,7 +833,7 @@ test("аватарки: после сообщения боту берётся ф
 });
 
 test("собрание отличается в таблице: строка золотистая по типу из скрытого листа, в занятости площадок — значок и заливка", () => {
-  const g = GV({STYLE_VER: "17"});
+  const g = GV({STYLE_VER: "18"});
   g.run("styleSheets()"); g.run("store_().ensureLogins()");
   const sch = g.ss.getSheetByName("Расписание");
   const idc = sch.getDataRange().getDisplayValues()[0].indexOf("ID");

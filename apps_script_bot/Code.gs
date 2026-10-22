@@ -1450,7 +1450,7 @@ function readToken(token, secret, now = Date.now()) {
 // ===== lib/api.mjs =====
 // API приложения. Чистая функция: запрос -> {status, body}. Синхронный код, никакой привязки к платформе.
 
-const SERVER_VERSION = "2026.10.22-12"; // меняется при каждом выпуске; приложение показывает её в профиле
+const SERVER_VERSION = "2026.10.22-13"; // меняется при каждом выпуске; приложение показывает её в профиле
 
 class HttpError extends Error {
   constructor(status, message, extra = {}) { super(message); this.status = status; this.extra = extra; }
@@ -2820,7 +2820,7 @@ function seedTestUsers_(p) {
   } catch (err) { diag_("Тестовые пользователи: ОШИБКА — " + String(err && err.message ? err.message : err)); }
 }
 
-const STYLE_VERSION_ = "17"; // поднимайте, когда меняется оформление: таблица перестроится сама при ближайшем срабатывании таймера
+const STYLE_VERSION_ = "18"; // поднимайте, когда меняется оформление: таблица перестроится сама при ближайшем срабатывании таймера
 
 /** После обновления кода один раз оформляет таблицу сама (то же, что ручной запуск styleSheets). */
 function autoStyle_(p) {
@@ -3104,6 +3104,7 @@ function fillVenueColors_() {
  *  • Удалили группу — колонка в «Расписании» и данные в ней остаются (ничего не стираем).
  * Названия групп запоминаются в свойстве GROUP_NAMES, по ним отличается «переименовали» от «добавили».
  */
+const LEGACY_ROLES_ = ["Администратор/ Капельдинер", "Гардероб/ Уборщица", "Касса", "Монтировка", "Актеры, свет, звук"]; // колонки исходной таблицы театра
 function syncRoleColumns_() {
   const sheet = SpreadsheetApp.openById(prop_("SHEET_ID")).getSheetByName(TABS.schedule);
   if (!sheet || sheet.getLastColumn() < 1) return false;
@@ -3154,6 +3155,20 @@ function syncRoleColumns_() {
     if (btn >= 0 && btn === at) sheet.getRange(1, btn + 1).clear(); // красная кнопка стояла на этом месте: ближайшая проверка поставит её правее
     sheet.getRange(1, at + 1, 1, missing.length).setNumberFormat("@").setValues([missing]);
     changed = true;
+  }
+  if (names.length && !p.getProperty("LEGACY_ROLES_DONE")) { // старые должности из исходной таблицы заменены группами сотрудников: пустые старые колонки убираем (с данными — не трогаем)
+    p.setProperty("LEGACY_ROLES_DONE", "1");
+    const legacy = new Set(LEGACY_ROLES_.map(norm));
+    const lastRow = Math.max(sheet.getLastRow(), 1);
+    const nowSet = new Set(names.map(norm));
+    const drop = [];
+    head.forEach((x, i) => {
+      if (i < 5 || !x || x.startsWith(RESTORE_MARK) || isIdColumn(x) || nowSet.has(norm(x)) || !legacy.has(norm(x))) return;
+      const empty = lastRow < 2 || sheet.getRange(2, i + 1, lastRow - 1, 1).getDisplayValues().every((r) => String(r[0]).trim() === "");
+      if (empty) drop.push(i); else diag_("Старая должность «" + x + "» оставлена: в ней есть данные");
+    });
+    drop.sort((a, b) => b - a).forEach((i) => sheet.deleteColumn(i + 1));
+    if (drop.length) { head = readHead(); changed = true; diag_("Убраны пустые старые должности: " + drop.length); }
   }
   p.setProperty("GROUP_NAMES", JSON.stringify(names));
   if (!changed) return false;

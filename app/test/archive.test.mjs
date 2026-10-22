@@ -25,7 +25,7 @@ test("формат архива: событие -> строка -> событи�
 });
 
 test("ежедневное обслуживание: копии листов (скрытые), старое уходит в «Архив», недавнее остаётся, старые копии убираются", () => {
-  const g = loadGas({tabs: {[TABS.schedule]: ROWS, [TABS.staff]: STAFF, [TABS.venues]: [["Площадка", "Заметка", "Цвет"]]}, props: {SHEET_ID: "x", STYLE_VER: "17", TEST_USERS: "1"}, now: NOW});
+  const g = loadGas({tabs: {[TABS.schedule]: ROWS, [TABS.staff]: STAFF, [TABS.venues]: [["Площадка", "Заметка", "Цвет"]]}, props: {SHEET_ID: "x", STYLE_VER: "18", TEST_USERS: "1"}, now: NOW});
   for (const n of ["_копия 05.09 Расписание", "_копия 20.09 Расписание", "_копия 25.09 Расписание", "_копия 28.09 Расписание", "_копия 29.09 Расписание", "_копия 30.09 Расписание", "_копия 30.09 Сотрудники", "_копия 01.01 Расписание"]) g.ss.insertSheet(n);
   g.run("runMaintenance()");
   const names = g.ss.sheets.map((s) => s.name);
@@ -49,7 +49,7 @@ test("ежедневное обслуживание: копии листов (с
 });
 
 test("если копию сделать не удалось, в архив ничего не переносится", () => {
-  const g = loadGas({tabs: {[TABS.schedule]: ROWS, [TABS.staff]: STAFF}, props: {SHEET_ID: "x", STYLE_VER: "17", TEST_USERS: "1"}, now: NOW});
+  const g = loadGas({tabs: {[TABS.schedule]: ROWS, [TABS.staff]: STAFF}, props: {SHEET_ID: "x", STYLE_VER: "18", TEST_USERS: "1"}, now: NOW});
   g.ss.getSheetByName(TABS.schedule).copyTo = () => { throw new Error("нет места"); };
   g.run("runMaintenance()");
   assert.equal(g.ss.getSheetByName(TABS.archive), null);
@@ -94,7 +94,7 @@ test("прогрев: запрос ?warm=1 отвечает мгновенно �
 test("цвет площадки из приложения сразу попадает в таблицу занятости (не ждёт таймера)", () => {
   const tabs = {[TABS.schedule]: [HEAD, ["20.10.2026", "19:00", "21:00", "Бука", "Малая сцена", "", "aaaaaaa3"]], [TABS.staff]: STAFF,
     [TABS.venues]: [["Площадка", "Заметка", "Цвет"], ["Малая сцена", "", "Розовый"]]};
-  const g = loadGas({tabs, props: {SHEET_ID: "x", STYLE_VER: "17", TEST_USERS: "1", OWNER_PHONE: "9000000001"}, now: NOW});
+  const g = loadGas({tabs, props: {SHEET_ID: "x", STYLE_VER: "18", TEST_USERS: "1", OWNER_PHONE: "9000000001"}, now: NOW});
   const call = (req) => JSON.parse(g.run(`doPost(${JSON.stringify({postData: {contents: JSON.stringify(req)}})}).getContent()`));
   g.run("store_().ensureLogins()");
   const token = call({method: "POST", path: "/api/login", body: {login: g.run('store_().users().find((u) => u.phone === "9000000001").login')}}).token;
@@ -124,4 +124,15 @@ test("свободные строки: заполнили одну — табл�
   const octGroup = sch.groups.find((x) => x.from === 3);
   assert.ok(octGroup && octGroup.to === divider - 1, "группа актуального месяца включает пять свободных строк: сворачивается вместе с ними");
   assert.ok(sch.getMaxRows() <= sch.getLastRow() + 1, "под последним прошедшим месяцем лишних пустых строк нет: лист компактный");
+});
+
+test("старые должности исходной таблицы: пустые убираются, с данными остаются", async () => {
+  const OLD = ["Дата/Время", "Спектакль/Сцена", "Администратор/ Капельдинер", "Гардероб/ Уборщица", "Касса", "Монтировка", "Актеры, свет, звук"];
+  const staff = STAFF.map((r) => r.slice());
+  const g = loadGas({tabs: {[TABS.schedule]: [OLD, ["04.10", "Спектакль", "", "", "", "Орлова А.В.", ""]], [TABS.staff]: [["ФИО", "Телефон", "Роль", "Логин", "Доступ", "Комментарий", "Актёры", "Техника"], ...staff.slice(1).map((r) => [...r, "", "", "", "", "", ""])]}, props: {SHEET_ID: "x", TEST_USERS: "1"}, now: NOW});
+  g.run("styleSheets()");
+  const head = g.ss.getSheetByName(TABS.schedule).getDataRange().getDisplayValues()[0];
+  assert.ok(head.includes("Монтировка"), "в колонке есть данные — осталась");
+  for (const gone of ["Касса", "Гардероб/ Уборщица", "Администратор/ Капельдинер", "Актеры, свет, звук"]) assert.ok(!head.includes(gone), gone + " убрана");
+  assert.ok(head.includes("Актёры") && head.includes("Техника"), "колонки-группы на месте");
 });
