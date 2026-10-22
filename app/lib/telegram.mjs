@@ -17,5 +17,5 @@ export function telegramEvent(update) {
 export function telegramCallback(update) {
   const q = update.callback_query;
   if (!q || !q.message || !q.message.chat || q.message.chat.type !== "private") return null;
-  return {id: q.id, chatId: q.message.chat.id, messageId: q.message.message_id, data: q.data || ""};
+  return {id: q.id, chatId: q.message.chat.id, messageId: q.message.message_id, data: q.data || "", markup: q.message.reply_markup || null};
 }

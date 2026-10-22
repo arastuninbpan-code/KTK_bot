@@ -282,10 +282,13 @@ function tgSend_(chatId, text, options) {
       if (options === "contact") body.reply_markup = {keyboard: [[{text: "📱 Поделиться номером", request_contact: true}]], resize_keyboard: true, one_time_keyboard: true};
       else if (options === "remove") body.reply_markup = {remove_keyboard: true};
       else if (options && options.menu) body.reply_markup = {keyboard: menuRows(options.menu).map((row) => row.map((text) => ({text}))), resize_keyboard: true, is_persistent: true}; // главное меню под полем ввода
-      else if (options && (options.button || options.copy || options.ack)) {
+      else if (options && (options.button || options.copy || options.ack || options.acks)) {
         const rows = [];
         if (options.copy) rows.push([{text: options.copy.text, copy_text: {text: options.copy.value}}]); // кнопка «скопировать» одним нажатием
-        if (options.ack) rows.push(...tgAckRows_(options.ack.eventId, "", options.button)); // «Увидел(а)» / «Не могу» (+ «Открыть в приложении»)
+        if (options.acks && options.acks.length) { // несколько событий в одном сообщении: по строке на событие (не больше трёх)
+          options.acks.slice(0, 3).forEach((x) => rows.push([{text: ("✅ " + x.label).slice(0, 30), callback_data: ackCallback("ok", x.eventId)}, {text: ("🚫 " + x.label).slice(0, 30), callback_data: ackCallback("no", x.eventId)}]));
+          if (options.button) rows.push([{text: options.button.text, url: options.button.url}]);
+        } else if (options.ack) rows.push(...tgAckRows_(options.ack.eventId, "", options.button)); // «Увидел(а)» / «Не могу» (+ «Открыть в приложении»)
         else if (options.button) rows.push([{text: options.button.text, url: options.button.url}]);
         body.reply_markup = {inline_keyboard: rows};
       }
@@ -421,7 +424,7 @@ function withLock_(fn) {
 // «Версия данных»: приложение раз в несколько секунд спрашивает, не изменилось ли что-то (дёшево: таблицу при этом не читаем)
 const getRev_ = () => PropertiesService.getScriptProperties().getProperty("DATA_REV") || "0";
 const bumpRev_ = () => PropertiesService.getScriptProperties().setProperty("DATA_REV", String(Date.now()));
-const SYNC_DELAY_MS = 2000; // сколько ждём тишины после правки таблицы, чтобы не рассылать недописанное
+const SYNC_DELAY_MS = 8000; // сколько ждём тишины после правки таблицы, чтобы не рассылать недописанное
 
 /** Таймер раз в минуту: страховка (если быстрая сверка не сработала) и проверка напоминаний раз в ~5 минут. */
 const WEBHOOK_VERSION_ = "2"; // поднимайте, когда меняется набор событий Telegram (сейчас: сообщения + нажатия кнопок)
@@ -507,6 +510,7 @@ function doPost(e) {
   }
 }
 
+const NOTIFY_QUIET_MS = 8000; // сколько должно пройти без новых правок, прежде чем рассылать уведомления
 function apiCall_(req) {
   const call = () => handleApi({method: req.method || "GET", path: req.path, token: req.token, body: req.body || {}}, {
     store: store_(),
@@ -519,7 +523,19 @@ function apiCall_(req) {
     getRev: getRev_,
     bumpRev: bumpRev_,
     // после правки сразу рассылаем уведомления (не ждём таймера); ошибки рассылки не ломают сохранение
-    afterChange: () => { PropertiesService.getScriptProperties().setProperty("regroup", "1"); occupancyNow_(); try { runCycle_(); } catch (err) { console.error(String(err && err.message ? err.message : err)); } },
+    // после правки из приложения уведомления не уходят сразу: ждём короткую тишину, чтобы несколько правок подряд дали ОДНО сообщение.
+    // Приложение само просит разослать через ~10 секунд после последней правки (/api/flush); если оно закрыто — разошлёт минутный таймер.
+    afterChange: () => { const p = PropertiesService.getScriptProperties(); p.setProperty("regroup", "1"); occupancyNow_(); p.setProperty("dirty", String(Date.now())); },
+    flush: () => {
+      const p = PropertiesService.getScriptProperties();
+      const dirty = Number(p.getProperty("dirty") || 0);
+      if (!dirty) return {pending: false};
+      if (Date.now() - dirty < NOTIFY_QUIET_MS) return {pending: true}; // правки ещё идут: подождём
+      p.deleteProperty("dirty");
+      p.setProperty("last_cycle", String(Date.now()));
+      try { runCycle_(); } catch (err) { console.error(String(err && err.message ? err.message : err)); }
+      return {pending: false};
+    },
   });
   const lockFree = !req.method || req.method === "GET"; // чтение блокировку не держит
   const r = lockFree ? call() : withLock_(call);
@@ -535,7 +551,12 @@ function tgAck_(cb) {
     const r = withLock_(() => handleAck({store: store_(), channel: SENDERS.telegram, chatId: cb.chatId, status: a.status, eventId: a.eventId, appUrl, senders: SENDERS, now: Date.now(), log: console}));
     if (r.ok && r.changed) bumpRev_(); // приложение подхватит отметку
     tgApi_("answerCallbackQuery", {callback_query_id: cb.id, text: String(r.toast).slice(0, 190), show_alert: !r.ok});
-    if (r.ok) tgApi_("editMessageReplyMarkup", {chat_id: cb.chatId, message_id: cb.messageId, reply_markup: {inline_keyboard: tgAckRows_(a.eventId, a.status, appUrl ? {text: "Открыть в приложении", url: appUrl} : null)}});
+    if (r.ok) {
+      const mark = (btn) => (btn.callback_data && btn.callback_data.indexOf("ack:") === 0 && btn.callback_data.slice(-8) === a.eventId
+        ? {text: btn.text.replace(/ ✓$/, "") + (btn.callback_data.indexOf("ack:" + a.status + ":") === 0 ? " ✓" : ""), callback_data: btn.callback_data} : btn);
+      const rows = cb.markup && cb.markup.inline_keyboard ? cb.markup.inline_keyboard.map((row) => row.map(mark)) : tgAckRows_(a.eventId, a.status, appUrl ? {text: "Открыть в приложении", url: appUrl} : null);
+      tgApi_("editMessageReplyMarkup", {chat_id: cb.chatId, message_id: cb.messageId, reply_markup: {inline_keyboard: rows}});
+    }
   } catch (err) {
     diag_("TG: ОШИБКА кнопки — " + (err && err.message ? err.message : err));
     try { tgApi_("answerCallbackQuery", {callback_query_id: cb.id, text: "Не получилось, попробуйте ещё раз"}); } catch (e2) { /* ответ не обязателен */ }

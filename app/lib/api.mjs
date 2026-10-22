@@ -6,7 +6,7 @@ import {recordAck} from "./bot.mjs";
 import {archiveLine, buildReport, checkParams, parseArchive, reportCsv} from "./report.mjs";
 import {canEdit, cleanPhotoIds, colorName, ROLE_LABELS, TABS, VENUE_COLORS} from "./store.mjs";
 
-export const SERVER_VERSION = "2026.10.22-17"; // меняется при каждом выпуске; приложение показывает её в профиле
+export const SERVER_VERSION = "2026.10.22-19"; // меняется при каждом выпуске; приложение показывает её в профиле
 
 class HttpError extends Error {
   constructor(status, message, extra = {}) { super(message); this.status = status; this.extra = extra; }
@@ -57,7 +57,7 @@ const publicUser = (u) => ({name: u.name, role: u.role, roleLabel: ROLE_LABELS[u
 const connections = (store, me) => ({login: me.login, channels: [...new Set(store.chats().filter((c) => c.phone === me.phone).map((c) => c.channel))]});
 
 export function handleApi(req, deps) {
-  const {store, secret, now = () => Date.now(), afterChange = () => {}, getRev = () => "", bumpRev = () => {}, announce = () => {}, senders = {}, appUrl = "", afterVenues = () => {}, saveReport = () => ({number: 0})} = deps;
+  const {store, secret, now = () => Date.now(), afterChange = () => {}, getRev = () => "", bumpRev = () => {}, announce = () => {}, flush = () => ({pending: false}), senders = {}, appUrl = "", afterVenues = () => {}, saveReport = () => ({number: 0})} = deps;
   const {method, path, body = {}, token} = req;
   try {
     // --- без входа ---
@@ -126,6 +126,9 @@ export function handleApi(req, deps) {
       if (r.changed) bumpRev();
       return {status: 200, body: {ok: true, status: st}};
     }
+
+    // --- «разошлите уведомления»: приложение просит после тишины, чтобы правки подряд дали одно сообщение ---
+    if (path === "/api/flush" && method === "POST") return {status: 200, body: {ok: true, ...flush()}};
 
     // --- аватарки (из профилей ВК и Telegram): {uid: ссылка или маленькая картинка} ---
     if (path === "/api/avatars" && method === "GET") return {status: 200, body: {items: store.avatarsByUid(), key: avatarKey(store)}};

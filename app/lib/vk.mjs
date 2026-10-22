@@ -22,6 +22,11 @@ export function vkKeyboard(options) {
       : {action: {type: "text", label: label.slice(0, 40)}})));
     return JSON.stringify({one_time: false, inline: false, buttons: rows});
   }
+  if (options && options.acks && options.acks.length) { // несколько событий в одном сообщении: по строке «✅ / 🚫» на каждое (в ВК не больше двух: у клавиатуры мало места)
+    const rows = options.acks.slice(0, 2).map((x) => ["ok", "no"].map((st) => ({action: {type: "callback", label: `${st === "ok" ? "✅" : "🚫"} ${x.label}`.slice(0, 40), payload: JSON.stringify({a: "ack", s: st, e: x.eventId})}, color: st === "ok" ? "positive" : "negative"})));
+    if (options.button) rows.push([{action: {type: "open_link", link: options.button.url, label: String(options.button.text).slice(0, 40)}}]);
+    return JSON.stringify({inline: true, buttons: rows});
+  }
   if (options && options.ack) { // «Увидел(а)» и «Не могу»: кнопки с обратным вызовом (VK пришлёт событие message_event)
     const cb = (status, color) => ({action: {type: "callback", label: ACK_LABELS[status].slice(0, 40), payload: JSON.stringify({a: "ack", s: status, e: options.ack.eventId})}, color});
     const rows = [[cb("ok", "positive"), cb("no", "negative")]];

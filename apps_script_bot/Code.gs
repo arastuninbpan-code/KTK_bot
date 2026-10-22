@@ -455,6 +455,15 @@ function msgChange(kind, row, old) {
   return kind === "added" ? msgAdded(row) : kind === "removed" ? msgRemoved(row) : msgChanged(row, old);
 }
 
+/** Несколько изменений в сменах одного человека — одно сообщение со всем сразу. items: [{kind, row, old}]. */
+function msgChangesDigest(items) {
+  const section = (it) => {
+    const title = it.kind === "added" ? "🆕 <b>Назначена смена</b>" : it.kind === "removed" ? "❌ <b>Смена отменена</b>" : "✏️ <b>Смена изменена</b>";
+    return title + "\n" + shiftBlock(it.row, it.kind === "removed" ? {strike: true} : it.kind === "changed" ? {old: it.old} : {});
+  };
+  return "✈️ <b>Изменения в ваших сменах</b>\n\n" + items.map(section).join("\n\n");
+}
+
 /** Напоминание: kind = "day" (за сутки / накануне) или "hour" (❗ срочное); rows — смены одного человека. */
 function msgReminder(kind, rows) {
   rows = mergeRoles(rows);
@@ -633,7 +642,7 @@ function telegramEvent(update) {
 function telegramCallback(update) {
   const q = update.callback_query;
   if (!q || !q.message || !q.message.chat || q.message.chat.type !== "private") return null;
-  return {id: q.id, chatId: q.message.chat.id, messageId: q.message.message_id, data: q.data || ""};
+  return {id: q.id, chatId: q.message.chat.id, messageId: q.message.message_id, data: q.data || "", markup: q.message.reply_markup || null};
 }
 
 // ===== lib/vk.mjs =====
@@ -659,6 +668,11 @@ function vkKeyboard(options) {
       ? {action: {type: "open_link", link: m.appUrl, label: label.slice(0, 40)}}
       : {action: {type: "text", label: label.slice(0, 40)}})));
     return JSON.stringify({one_time: false, inline: false, buttons: rows});
+  }
+  if (options && options.acks && options.acks.length) { // несколько событий в одном сообщении: по строке «✅ / 🚫» на каждое (в ВК не больше двух: у клавиатуры мало места)
+    const rows = options.acks.slice(0, 2).map((x) => ["ok", "no"].map((st) => ({action: {type: "callback", label: `${st === "ok" ? "✅" : "🚫"} ${x.label}`.slice(0, 40), payload: JSON.stringify({a: "ack", s: st, e: x.eventId})}, color: st === "ok" ? "positive" : "negative"})));
+    if (options.button) rows.push([{action: {type: "open_link", link: options.button.url, label: String(options.button.text).slice(0, 40)}}]);
+    return JSON.stringify({inline: true, buttons: rows});
   }
   if (options && options.ack) { // «Увидел(а)» и «Не могу»: кнопки с обратным вызовом (VK пришлёт событие message_event)
     const cb = (status, color) => ({action: {type: "callback", label: ACK_LABELS[status].slice(0, 40), payload: JSON.stringify({a: "ack", s: status, e: options.ack.eventId})}, color});
@@ -1514,7 +1528,7 @@ function readToken(token, secret, now = Date.now()) {
 // ===== lib/api.mjs =====
 // API приложения. Чистая функция: запрос -> {status, body}. Синхронный код, никакой привязки к платформе.
 
-const SERVER_VERSION = "2026.10.22-17"; // меняется при каждом выпуске; приложение показывает её в профиле
+const SERVER_VERSION = "2026.10.22-19"; // меняется при каждом выпуске; приложение показывает её в профиле
 
 class HttpError extends Error {
   constructor(status, message, extra = {}) { super(message); this.status = status; this.extra = extra; }
@@ -1565,7 +1579,7 @@ const publicUser = (u) => ({name: u.name, role: u.role, roleLabel: ROLE_LABELS[u
 const connections = (store, me) => ({login: me.login, channels: [...new Set(store.chats().filter((c) => c.phone === me.phone).map((c) => c.channel))]});
 
 function handleApi(req, deps) {
-  const {store, secret, now = () => Date.now(), afterChange = () => {}, getRev = () => "", bumpRev = () => {}, announce = () => {}, senders = {}, appUrl = "", afterVenues = () => {}, saveReport = () => ({number: 0})} = deps;
+  const {store, secret, now = () => Date.now(), afterChange = () => {}, getRev = () => "", bumpRev = () => {}, announce = () => {}, flush = () => ({pending: false}), senders = {}, appUrl = "", afterVenues = () => {}, saveReport = () => ({number: 0})} = deps;
   const {method, path, body = {}, token} = req;
   try {
     // --- без входа ---
@@ -1634,6 +1648,9 @@ function handleApi(req, deps) {
       if (r.changed) bumpRev();
       return {status: 200, body: {ok: true, status: st}};
     }
+
+    // --- «разошлите уведомления»: приложение просит после тишины, чтобы правки подряд дали одно сообщение ---
+    if (path === "/api/flush" && method === "POST") return {status: 200, body: {ok: true, ...flush()}};
 
     // --- аватарки (из профилей ВК и Telegram): {uid: ссылка или маленькая картинка} ---
     if (path === "/api/avatars" && method === "GET") return {status: 200, body: {items: store.avatarsByUid(), key: avatarKey(store)}};
@@ -1970,7 +1987,19 @@ function runCycle({store, senders, now = Date.now(), appUrl = "", log = console}
     const e = events.find((x) => x.id && daysOf(x).includes(c.row.date) && norm(x.title) === norm(c.row.event));
     return e ? e.id : "";
   };
-  const messages = [...changeGroups.values()].map(({c, roles}) => ({phone: c.phone, text: msgChange(c.kind, {...c.row, role: roles.join(", ")}, c.old), ack: ackFor(c)}));
+  // всё, что изменилось у одного человека за этот проход (назначили на одно, перенесли другое, сняли с третьего), — одно сообщение
+  const byPhone = new Map();
+  for (const {c, roles} of changeGroups.values()) {
+    const list = byPhone.get(c.phone) || [];
+    list.push({kind: c.kind, row: {...c.row, role: roles.join(", ")}, old: c.old, ack: ackFor(c)});
+    byPhone.set(c.phone, list);
+  }
+  const shortName = (r) => `${r.date.slice(8, 10)}.${r.date.slice(5, 7)} ${String(r.event || "Смена").slice(0, 14)}`;
+  const messages = [...byPhone].map(([phone, items]) => ({
+    phone,
+    text: items.length === 1 ? msgChange(items[0].kind, items[0].row, items[0].old) : msgChangesDigest(items),
+    acks: [...new Map(items.filter((i) => i.ack).map((i) => [i.ack, {eventId: i.ack, label: shortName(i.row)}])).values()],
+  }));
   const groups = new Map();
   for (const r of plan.reminders) {
     const k = r.phone + "\t" + r.kind;
@@ -1985,7 +2014,7 @@ function runCycle({store, senders, now = Date.now(), appUrl = "", log = console}
   for (const m of messages) {
     for (const c of chats.filter((x) => x.phone === m.phone)) {
       try {
-        senders[c.channel]?.send(c.chatId, m.text, m.ack ? {...(btn || {}), ack: {eventId: m.ack}} : btn);
+        senders[c.channel]?.send(c.chatId, m.text, m.acks && m.acks.length === 1 ? {...(btn || {}), ack: {eventId: m.acks[0].eventId}} : m.acks && m.acks.length > 1 ? {...(btn || {}), acks: m.acks} : btn);
         sent++;
       } catch (err) {
         if (err instanceof Gone) store.unbind(c.channel, c.chatId);
@@ -2308,10 +2337,13 @@ function tgSend_(chatId, text, options) {
       if (options === "contact") body.reply_markup = {keyboard: [[{text: "📱 Поделиться номером", request_contact: true}]], resize_keyboard: true, one_time_keyboard: true};
       else if (options === "remove") body.reply_markup = {remove_keyboard: true};
       else if (options && options.menu) body.reply_markup = {keyboard: menuRows(options.menu).map((row) => row.map((text) => ({text}))), resize_keyboard: true, is_persistent: true}; // главное меню под полем ввода
-      else if (options && (options.button || options.copy || options.ack)) {
+      else if (options && (options.button || options.copy || options.ack || options.acks)) {
         const rows = [];
         if (options.copy) rows.push([{text: options.copy.text, copy_text: {text: options.copy.value}}]); // кнопка «скопировать» одним нажатием
-        if (options.ack) rows.push(...tgAckRows_(options.ack.eventId, "", options.button)); // «Увидел(а)» / «Не могу» (+ «Открыть в приложении»)
+        if (options.acks && options.acks.length) { // несколько событий в одном сообщении: по строке на событие (не больше трёх)
+          options.acks.slice(0, 3).forEach((x) => rows.push([{text: ("✅ " + x.label).slice(0, 30), callback_data: ackCallback("ok", x.eventId)}, {text: ("🚫 " + x.label).slice(0, 30), callback_data: ackCallback("no", x.eventId)}]));
+          if (options.button) rows.push([{text: options.button.text, url: options.button.url}]);
+        } else if (options.ack) rows.push(...tgAckRows_(options.ack.eventId, "", options.button)); // «Увидел(а)» / «Не могу» (+ «Открыть в приложении»)
         else if (options.button) rows.push([{text: options.button.text, url: options.button.url}]);
         body.reply_markup = {inline_keyboard: rows};
       }
@@ -2447,7 +2479,7 @@ function withLock_(fn) {
 // «Версия данных»: приложение раз в несколько секунд спрашивает, не изменилось ли что-то (дёшево: таблицу при этом не читаем)
 const getRev_ = () => PropertiesService.getScriptProperties().getProperty("DATA_REV") || "0";
 const bumpRev_ = () => PropertiesService.getScriptProperties().setProperty("DATA_REV", String(Date.now()));
-const SYNC_DELAY_MS = 2000; // сколько ждём тишины после правки таблицы, чтобы не рассылать недописанное
+const SYNC_DELAY_MS = 8000; // сколько ждём тишины после правки таблицы, чтобы не рассылать недописанное
 
 /** Таймер раз в минуту: страховка (если быстрая сверка не сработала) и проверка напоминаний раз в ~5 минут. */
 const WEBHOOK_VERSION_ = "2"; // поднимайте, когда меняется набор событий Telegram (сейчас: сообщения + нажатия кнопок)
@@ -2533,6 +2565,7 @@ function doPost(e) {
   }
 }
 
+const NOTIFY_QUIET_MS = 8000; // сколько должно пройти без новых правок, прежде чем рассылать уведомления
 function apiCall_(req) {
   const call = () => handleApi({method: req.method || "GET", path: req.path, token: req.token, body: req.body || {}}, {
     store: store_(),
@@ -2545,7 +2578,19 @@ function apiCall_(req) {
     getRev: getRev_,
     bumpRev: bumpRev_,
     // после правки сразу рассылаем уведомления (не ждём таймера); ошибки рассылки не ломают сохранение
-    afterChange: () => { PropertiesService.getScriptProperties().setProperty("regroup", "1"); occupancyNow_(); try { runCycle_(); } catch (err) { console.error(String(err && err.message ? err.message : err)); } },
+    // после правки из приложения уведомления не уходят сразу: ждём короткую тишину, чтобы несколько правок подряд дали ОДНО сообщение.
+    // Приложение само просит разослать через ~10 секунд после последней правки (/api/flush); если оно закрыто — разошлёт минутный таймер.
+    afterChange: () => { const p = PropertiesService.getScriptProperties(); p.setProperty("regroup", "1"); occupancyNow_(); p.setProperty("dirty", String(Date.now())); },
+    flush: () => {
+      const p = PropertiesService.getScriptProperties();
+      const dirty = Number(p.getProperty("dirty") || 0);
+      if (!dirty) return {pending: false};
+      if (Date.now() - dirty < NOTIFY_QUIET_MS) return {pending: true}; // правки ещё идут: подождём
+      p.deleteProperty("dirty");
+      p.setProperty("last_cycle", String(Date.now()));
+      try { runCycle_(); } catch (err) { console.error(String(err && err.message ? err.message : err)); }
+      return {pending: false};
+    },
   });
   const lockFree = !req.method || req.method === "GET"; // чтение блокировку не держит
   const r = lockFree ? call() : withLock_(call);
@@ -2561,7 +2606,12 @@ function tgAck_(cb) {
     const r = withLock_(() => handleAck({store: store_(), channel: SENDERS.telegram, chatId: cb.chatId, status: a.status, eventId: a.eventId, appUrl, senders: SENDERS, now: Date.now(), log: console}));
     if (r.ok && r.changed) bumpRev_(); // приложение подхватит отметку
     tgApi_("answerCallbackQuery", {callback_query_id: cb.id, text: String(r.toast).slice(0, 190), show_alert: !r.ok});
-    if (r.ok) tgApi_("editMessageReplyMarkup", {chat_id: cb.chatId, message_id: cb.messageId, reply_markup: {inline_keyboard: tgAckRows_(a.eventId, a.status, appUrl ? {text: "Открыть в приложении", url: appUrl} : null)}});
+    if (r.ok) {
+      const mark = (btn) => (btn.callback_data && btn.callback_data.indexOf("ack:") === 0 && btn.callback_data.slice(-8) === a.eventId
+        ? {text: btn.text.replace(/ ✓$/, "") + (btn.callback_data.indexOf("ack:" + a.status + ":") === 0 ? " ✓" : ""), callback_data: btn.callback_data} : btn);
+      const rows = cb.markup && cb.markup.inline_keyboard ? cb.markup.inline_keyboard.map((row) => row.map(mark)) : tgAckRows_(a.eventId, a.status, appUrl ? {text: "Открыть в приложении", url: appUrl} : null);
+      tgApi_("editMessageReplyMarkup", {chat_id: cb.chatId, message_id: cb.messageId, reply_markup: {inline_keyboard: rows}});
+    }
   } catch (err) {
     diag_("TG: ОШИБКА кнопки — " + (err && err.message ? err.message : err));
     try { tgApi_("answerCallbackQuery", {callback_query_id: cb.id, text: "Не получилось, попробуйте ещё раз"}); } catch (e2) { /* ответ не обязателен */ }

@@ -1,6 +1,6 @@
 // Диалог с сотрудником (одинаков для любого мессенджера) и рассылка уведомлений. Синхронный код.
 import {daysOf, looksLikePhone, matchPhones, norm, normPhone, parseEvents, parseGrid, planCycle, todayIso} from "./core.mjs";
-import {afishaText, appButton, MENU_COMMANDS, msgApp, msgMenu, msgNoApp, msgAlreadyConnected, ackToast, msgAckNo, msgAskPhone, msgIntro, msgBlocked, msgChange, msgConnected, msgAccessGranted, msgCommentSaved, msgLogin, msgPostEmpty, msgPostNoRights, msgPostNotConfigured, msgPostPreview, msgPostResult, msgReminder, msgRequestSent, msgStopped, msgWelcome, publicAfishaText, shiftsText} from "./format.mjs";
+import {afishaText, appButton, MENU_COMMANDS, msgApp, msgMenu, msgNoApp, msgAlreadyConnected, ackToast, msgAckNo, msgChangesDigest, msgAskPhone, msgIntro, msgBlocked, msgChange, msgConnected, msgAccessGranted, msgCommentSaved, msgLogin, msgPostEmpty, msgPostNoRights, msgPostNotConfigured, msgPostPreview, msgPostResult, msgReminder, msgRequestSent, msgStopped, msgWelcome, publicAfishaText, shiftsText} from "./format.mjs";
 import {Gone} from "./telegram.mjs";
 import {canEdit, normLogin, TABS} from "./store.mjs";
 
@@ -156,7 +156,19 @@ export function runCycle({store, senders, now = Date.now(), appUrl = "", log = c
     const e = events.find((x) => x.id && daysOf(x).includes(c.row.date) && norm(x.title) === norm(c.row.event));
     return e ? e.id : "";
   };
-  const messages = [...changeGroups.values()].map(({c, roles}) => ({phone: c.phone, text: msgChange(c.kind, {...c.row, role: roles.join(", ")}, c.old), ack: ackFor(c)}));
+  // всё, что изменилось у одного человека за этот проход (назначили на одно, перенесли другое, сняли с третьего), — одно сообщение
+  const byPhone = new Map();
+  for (const {c, roles} of changeGroups.values()) {
+    const list = byPhone.get(c.phone) || [];
+    list.push({kind: c.kind, row: {...c.row, role: roles.join(", ")}, old: c.old, ack: ackFor(c)});
+    byPhone.set(c.phone, list);
+  }
+  const shortName = (r) => `${r.date.slice(8, 10)}.${r.date.slice(5, 7)} ${String(r.event || "Смена").slice(0, 14)}`;
+  const messages = [...byPhone].map(([phone, items]) => ({
+    phone,
+    text: items.length === 1 ? msgChange(items[0].kind, items[0].row, items[0].old) : msgChangesDigest(items),
+    acks: [...new Map(items.filter((i) => i.ack).map((i) => [i.ack, {eventId: i.ack, label: shortName(i.row)}])).values()],
+  }));
   const groups = new Map();
   for (const r of plan.reminders) {
     const k = r.phone + "\t" + r.kind;
@@ -171,7 +183,7 @@ export function runCycle({store, senders, now = Date.now(), appUrl = "", log = c
   for (const m of messages) {
     for (const c of chats.filter((x) => x.phone === m.phone)) {
       try {
-        senders[c.channel]?.send(c.chatId, m.text, m.ack ? {...(btn || {}), ack: {eventId: m.ack}} : btn);
+        senders[c.channel]?.send(c.chatId, m.text, m.acks && m.acks.length === 1 ? {...(btn || {}), ack: {eventId: m.acks[0].eventId}} : m.acks && m.acks.length > 1 ? {...(btn || {}), acks: m.acks} : btn);
         sent++;
       } catch (err) {
         if (err instanceof Gone) store.unbind(c.channel, c.chatId);

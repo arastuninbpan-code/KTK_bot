@@ -63,6 +63,10 @@ test("вход по коду из бота и работа приложения:
   assert.equal(api(g, {method: "POST", path: "/api/events", token: admin.token, body: {event: ev}})._status, 200);
   const sheet = g.ss.getSheetByName("Расписание").getDataRange().getDisplayValues();
   assert.deepEqual(sheet[2].slice(0, 3), ["06.10\n15.00", "Экскурсия\n(большая сцена)", "Петрова Л.Н."]); // вставлено по порядку дат
+  assert.equal(sentTo(g, 6).length, before, "сразу не рассылаем: ждём тишину, чтобы правки подряд дали одно сообщение");
+  assert.equal(api(g, {method: "POST", path: "/api/flush", token: admin.token}).pending, true, "рано: правка свежая");
+  g.advance(9000);
+  assert.equal(api(g, {method: "POST", path: "/api/flush", token: admin.token}).pending, false);
   const notes = sentTo(g, 6).slice(before);
   assert.equal(notes.length, 1);
   assert.match(notes[0].body.text, /✈️ <b>Вам назначена смена<\/b>\n\n<b>Экскурсия<\/b>\n🗓 Вт, 6 октября · ⏰ 15:00\n📍 Большая сцена\n👤 Администратор \/ Капельдинер/);

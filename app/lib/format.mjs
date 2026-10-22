@@ -63,6 +63,15 @@ export function msgChange(kind, row, old) {
   return kind === "added" ? msgAdded(row) : kind === "removed" ? msgRemoved(row) : msgChanged(row, old);
 }
 
+/** Несколько изменений в сменах одного человека — одно сообщение со всем сразу. items: [{kind, row, old}]. */
+export function msgChangesDigest(items) {
+  const section = (it) => {
+    const title = it.kind === "added" ? "🆕 <b>Назначена смена</b>" : it.kind === "removed" ? "❌ <b>Смена отменена</b>" : "✏️ <b>Смена изменена</b>";
+    return title + "\n" + shiftBlock(it.row, it.kind === "removed" ? {strike: true} : it.kind === "changed" ? {old: it.old} : {});
+  };
+  return "✈️ <b>Изменения в ваших сменах</b>\n\n" + items.map(section).join("\n\n");
+}
+
 /** Напоминание: kind = "day" (за сутки / накануне) или "hour" (❗ срочное); rows — смены одного человека. */
 export function msgReminder(kind, rows) {
   rows = mergeRoles(rows);

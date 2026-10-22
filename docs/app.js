@@ -166,7 +166,7 @@ async function api(method, path, body) {
 // поэтому на экране всё выглядит так, как задумал пользователь. Если сервер отказал по существу — покажем причину и вернём то, что у него.
 const QKEY = "ktk_queue";
 let queue = (() => { try { const q = JSON.parse(localStorage.getItem(QKEY) || "[]"); return Array.isArray(q) ? q : []; } catch (_) { return []; } })();
-let sending = false, retryTimer = 0, retryMs = 4000;
+let sending = false, retryTimer = 0, retryMs = 4000, flushTimer = 0, needFlush = false;
 const syncEl = (() => { const d = document.createElement("div"); d.className = "syncdot"; d.setAttribute("aria-hidden", "true"); document.body.append(d); return d; })();
 const syncMark = () => syncEl.classList.toggle("on", queue.length > 0);
 const saveQueue = () => { try { localStorage.setItem(QKEY, JSON.stringify(queue)); } catch (_) {} syncMark(); };
@@ -203,7 +203,18 @@ function applyOp(op) {
 const applyQueue = () => { for (const op of queue) { try { applyOp(op); } catch (_) {} } };
 
 /** Добавляет правку в очередь и сразу показывает её. Несколько правок одного события, ещё не ушедшие на сервер, сливаются в одну. */
+/** Через несколько секунд тишины просим сервер разослать уведомления о правках расписания одним сообщением. */
+function scheduleFlush() {
+  clearTimeout(flushTimer);
+  if (!needFlush || !state.token) return;
+  flushTimer = setTimeout(async () => {
+    if (!state.token || queue.length) return;
+    try { const r = await api("POST", "/api/flush"); if (r && r.pending) { flushTimer = setTimeout(() => api("POST", "/api/flush").catch(() => {}), 5000); } else needFlush = false; }
+    catch (e) { /* не дошло: разошлёт минутный таймер сервера */ needFlush = false; }
+  }, 10000);
+}
 function enqueue(op) {
+  clearTimeout(flushTimer); // идут новые правки: пауза до рассылки начинается заново
   const evt = op.t.startsWith("ev");
   const busy = (i) => sending && i === 0; // первая запись, пока уходит, не трогаем
   if (evt && op.id) {
@@ -243,7 +254,7 @@ async function pumpQueue() {
   let drained = true;
   while (queue.length && state.token) {
     const op = queue[0];
-    try { await sendOp(op); queue.shift(); saveQueue(); retryMs = 4000; }
+    try { await sendOp(op); if (op.t.startsWith("ev")) needFlush = true; queue.shift(); saveQueue(); retryMs = 4000; }
     catch (e) {
       if (!state.token) break;
       if (retryable(e)) {
@@ -255,7 +266,7 @@ async function pumpQueue() {
     }
   }
   sending = false;
-  if (state.token && drained) await load(false, true); // сверяемся с сервером: события получают настоящие номера, отклонённое откатывается
+  if (state.token && drained) { scheduleFlush(); await load(false, true); } // сверяемся с сервером: события получают настоящие номера, отклонённое откатывается
 }
 const sortEvents = () => state.events.sort((a, b) => (a.date + (a.time || "")).localeCompare(b.date + (b.time || "")));
 const offlineNow = () => state.offline || navigator.onLine === false;
