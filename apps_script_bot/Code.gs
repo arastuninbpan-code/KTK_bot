@@ -603,6 +603,16 @@ function msgMeeting(e, note = "") {
   const place = e.hall ? `\n📍 ${esc(cap(e.hall))}` : "";
   return `📋 <b>Собрание: ${esc(e.title)}</b>\n🗓 ${esc(meetingWhen(e))}${place}${note ? `\n\n${esc(note)}` : ""}`;
 }
+/** Итоги собрания (приложили после собрания): всем сотрудникам в личные сообщения. */
+function msgMeetingSummary(e, text = "") {
+  const place = e.hall ? `\n📍 ${esc(cap(e.hall))}` : "";
+  return `📋 <b>Итоги собрания: ${esc(e.title)}</b>\n🗓 ${esc(meetingWhen(e))}${place}${text ? `\n\n${esc(text)}` : ""}`;
+}
+/** Итоги собрания для стены группы ВК и канала. */
+function meetingSummaryPostText(e, text = "") {
+  const place = e.hall ? `\n📍 ${cap(e.hall)}` : "";
+  return `📋 Итоги собрания: ${e.title}\n🗓 ${meetingWhen(e)}${place}${text ? `\n\n${text}` : ""}`;
+}
 /** Текст для стены группы ВК и канала. */
 function meetingPostText(e, note = "") {
   const place = e.hall ? `\n📍 ${cap(e.hall)}` : "";
@@ -944,7 +954,7 @@ const archiveCutoff = (today, months = 12) => new Date(Date.UTC(+today.slice(0, 
 const TABS = {schedule: "Расписание", staff: "Сотрудники", venues: "Площадки", reports: "Отчёты", archive: "Архив", deleted: "_удалённое", chats: "Подписчики", requests: "_заявки", people: "_люди", off: "_недоступность", comments: "_комментарии", meta: "_события", avatars: "_аватары", photos: "_фото", state: "_служебное", lock: "_замок"};
 const REQUESTS_HEADER = ["Канал", "ID чата", "Телефон"];
 const COMMENT_HEADER = ["ID события", "ID", "Время", "Телефон", "Имя", "Текст", "Фото"];
-const META_HEADER = ["ID события", "Тип", "Описание", "—", "Автор", "Создано"];
+const META_HEADER = ["ID события", "Тип", "Описание", "—", "Автор", "Создано", "Итоги"];
 const AVATAR_HEADER = ["Телефон", "Канал", "Фото", "Обновлено"];
 /** Фото в сообщении переписки: храним только короткие номера (сами картинки лежат в скрытом служебном листе кусками). */
 const cleanPhotoIds = (list) => [...new Set((Array.isArray(list) ? list : []).map(String).filter((id) => /^[0-9a-f]{12}$/.test(id)))].slice(0, 4);
@@ -1151,7 +1161,7 @@ class Store {
     for (const r of this.book.get(TABS.meta).slice(1)) {
       const id = String(r[0] || "").trim();
       if (!id) continue;
-      out[id] = {kind: String(r[1] || "") === "meeting" ? "meeting" : "event", note: String(r[2] || ""), author: String(r[4] || ""), created: Number(r[5]) || 0, row: 0};
+      out[id] = {kind: String(r[1] || "") === "meeting" ? "meeting" : "event", note: String(r[2] || ""), summary: String(r[6] || ""), author: String(r[4] || ""), created: Number(r[5]) || 0, row: 0};
     }
     return out;
   }
@@ -1167,8 +1177,10 @@ class Store {
       patch.note !== undefined ? String(patch.note).slice(0, 12000) : String(cur[2] || ""),
       "[]",
       patch.author !== undefined ? String(patch.author) : String(cur[4] || ""),
-      String(cur[5] || this.now())];
+      String(cur[5] || this.now()),
+      patch.summary !== undefined ? String(patch.summary).slice(0, 12000) : String(cur[6] || "")]; // итоги собрания (появляются позже повестки)
     if (at >= 0) this.book.set(TABS.meta, at + 1, next); else this.book.append(TABS.meta, next);
+    if (String((rows[0] || [])[6] || "").trim() !== "Итоги") this.book.setCell(TABS.meta, 1, 7, "Итоги"); // у старых таблиц подпись нового столбца
   }
 
   // --- комментарии к событию (переписка) ---
@@ -1459,7 +1471,7 @@ function readToken(token, secret, now = Date.now()) {
 // ===== lib/api.mjs =====
 // API приложения. Чистая функция: запрос -> {status, body}. Синхронный код, никакой привязки к платформе.
 
-const SERVER_VERSION = "2026.10.22-21"; // меняется при каждом выпуске; приложение показывает её в профиле
+const SERVER_VERSION = "2026.10.22-22"; // меняется при каждом выпуске; приложение показывает её в профиле
 
 class HttpError extends Error {
   constructor(status, message, extra = {}) { super(message); this.status = status; this.extra = extra; }
@@ -1540,7 +1552,7 @@ function handleApi(req, deps) {
         .filter((e) => (e.dateEnd || e.date) >= addDays(today, -62)) // два месяца назад: для календаря на вкладке «Площадки»
         .sort((a, b) => (a.date + a.time).localeCompare(b.date + b.time))
         .map((e) => ({...e, rev: rev(table[e.row - 1]),
-          meta: e.id && metaMap[e.id] ? {kind: metaMap[e.id].kind, note: metaMap[e.id].note} : {kind: "event", note: ""},
+          meta: e.id && metaMap[e.id] ? {kind: metaMap[e.id].kind, note: metaMap[e.id].note, summary: metaMap[e.id].summary} : {kind: "event", note: "", summary: ""},
           comments: (e.id && counts[e.id] && counts[e.id].n) || 0,
           mine: Object.entries(e.roles).filter(([, names]) => names.some((n) => matchPhones(n, users).includes(me.phone))).map(([role]) => role)}));
       // площадки: список из листа «Площадки» + все, что уже вписано в события
@@ -1714,6 +1726,7 @@ function handleApi(req, deps) {
       const columns = rowColumns(table);
       const hasId = columns.some(isIdColumn);
       const meta = body.meta && typeof body.meta === "object" ? body.meta : null;
+      let summaryNew = "";
       if (meta && !hasId) throw new HttpError(409, "Таблица ещё готовится (появляется служебная колонка). Повторите через минуту.");
       const old = method === "PUT" ? parseEvents(table, today).find((e) => e.row === rowNo) : null;
       const id = hasId ? ((old && old.id) || wantId || newId()) : "";
@@ -1732,12 +1745,20 @@ function handleApi(req, deps) {
       if (meta && id) {
         const kind = meta.kind === "meeting" ? "meeting" : "event";
         const patch = {kind, note: String(meta.note || ""), author: store.uid(me.phone)};
+        const prevSummary = String((store.metaMap()[id] || {}).summary || "").trim();
+        const summary = meta.summary !== undefined ? String(meta.summary).trim().slice(0, 12000) : undefined;
+        if (summary !== undefined) patch.summary = summary;
         store.setMeta(id, patch);
+        if (kind === "meeting" && summary && summary !== prevSummary) summaryNew = summary; // итоги появились или изменились: разошлём
       }
       bumpRev();
       afterChange();
       if (method === "POST" && meta && id && meta.kind === "meeting" && meta.announce !== false) {
         try { announce({kind: "meeting", event: {...event, id}, note: String(meta.note || ""), publish: meta.publish !== false}); } catch (e) { console.error(String(e.message || e)); }
+      }
+      // итоги собрания, приложенные при редактировании: сотрудникам в личные сообщения и (по галочке) в группу ВК / канал; повторно тот же текст не рассылается
+      if (summaryNew && id) {
+        try { announce({kind: "meetingSummary", event: {...event, id}, note: summaryNew, publish: meta.publishSummary !== false, dm: meta.sendSummary !== false}); } catch (e) { console.error(String(e.message || e)); }
       }
       return {status: 200, body: {ok: true, id}};
     }
@@ -2302,17 +2323,18 @@ function announce_(a) {
   const st = store_();
   const appUrl = prop_("APP_URL") || "";
   const e = a.event;
-  const text = msgMeeting(e, a.note || "");
+  const summary = a.kind === "meetingSummary"; // итоги собрания, приложенные позже
+  const text = summary ? msgMeetingSummary(e, a.note || "") : msgMeeting(e, a.note || "");
   const btn = appButton(appUrl ? appUrl + "#event=" + encodeURIComponent(e.id || "") : "");
   const people = new Set(st.activeUsers().map((u) => u.phone));
   let sent = 0;
-  st.chats().filter((c) => people.has(c.phone)).forEach((c) => {
+  if (a.dm !== false) st.chats().filter((c) => people.has(c.phone)).forEach((c) => {
     try { if (SENDERS[c.channel]) { SENDERS[c.channel].send(c.chatId, text, btn); sent++; } }
     catch (err) { if (err instanceof Gone) st.unbind(c.channel, c.chatId); else console.error(String(err && err.message ? err.message : err)); }
   });
   let posted = [];
-  if (a.kind === "meeting" && a.publish) { try { posted = publishers_().post(meetingPostText(e, a.note || "")); } catch (err) { console.error(String(err && err.message ? err.message : err)); } }
-  diag_("Собрание «" + e.title + "»: разослано " + sent + (posted.length ? "; " + posted.join(" ") : ""));
+  if ((a.kind === "meeting" || summary) && a.publish) { try { posted = publishers_().post(summary ? meetingSummaryPostText(e, a.note || "") : meetingPostText(e, a.note || "")); } catch (err) { console.error(String(err && err.message ? err.message : err)); } }
+  diag_((summary ? "Итоги собрания «" : "Собрание «") + e.title + "»: разослано " + sent + (posted.length ? "; " + posted.join(" ") : ""));
   return {sent, posted};
 }
 

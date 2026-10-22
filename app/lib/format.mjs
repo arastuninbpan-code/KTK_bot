@@ -211,6 +211,16 @@ export function msgMeeting(e, note = "") {
   const place = e.hall ? `\n📍 ${esc(cap(e.hall))}` : "";
   return `📋 <b>Собрание: ${esc(e.title)}</b>\n🗓 ${esc(meetingWhen(e))}${place}${note ? `\n\n${esc(note)}` : ""}`;
 }
+/** Итоги собрания (приложили после собрания): всем сотрудникам в личные сообщения. */
+export function msgMeetingSummary(e, text = "") {
+  const place = e.hall ? `\n📍 ${esc(cap(e.hall))}` : "";
+  return `📋 <b>Итоги собрания: ${esc(e.title)}</b>\n🗓 ${esc(meetingWhen(e))}${place}${text ? `\n\n${esc(text)}` : ""}`;
+}
+/** Итоги собрания для стены группы ВК и канала. */
+export function meetingSummaryPostText(e, text = "") {
+  const place = e.hall ? `\n📍 ${cap(e.hall)}` : "";
+  return `📋 Итоги собрания: ${e.title}\n🗓 ${meetingWhen(e)}${place}${text ? `\n\n${text}` : ""}`;
+}
 /** Текст для стены группы ВК и канала. */
 export function meetingPostText(e, note = "") {
   const place = e.hall ? `\n📍 ${cap(e.hall)}` : "";

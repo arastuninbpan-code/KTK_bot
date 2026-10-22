@@ -5,7 +5,7 @@ import {platform} from "./platform.mjs";
 import {archiveLine, buildReport, checkParams, parseArchive, reportCsv} from "./report.mjs";
 import {canEdit, cleanPhotoIds, colorName, ROLE_LABELS, TABS, VENUE_COLORS} from "./store.mjs";
 
-export const SERVER_VERSION = "2026.10.22-21"; // меняется при каждом выпуске; приложение показывает её в профиле
+export const SERVER_VERSION = "2026.10.22-22"; // меняется при каждом выпуске; приложение показывает её в профиле
 
 class HttpError extends Error {
   constructor(status, message, extra = {}) { super(message); this.status = status; this.extra = extra; }
@@ -86,7 +86,7 @@ export function handleApi(req, deps) {
         .filter((e) => (e.dateEnd || e.date) >= addDays(today, -62)) // два месяца назад: для календаря на вкладке «Площадки»
         .sort((a, b) => (a.date + a.time).localeCompare(b.date + b.time))
         .map((e) => ({...e, rev: rev(table[e.row - 1]),
-          meta: e.id && metaMap[e.id] ? {kind: metaMap[e.id].kind, note: metaMap[e.id].note} : {kind: "event", note: ""},
+          meta: e.id && metaMap[e.id] ? {kind: metaMap[e.id].kind, note: metaMap[e.id].note, summary: metaMap[e.id].summary} : {kind: "event", note: "", summary: ""},
           comments: (e.id && counts[e.id] && counts[e.id].n) || 0,
           mine: Object.entries(e.roles).filter(([, names]) => names.some((n) => matchPhones(n, users).includes(me.phone))).map(([role]) => role)}));
       // площадки: список из листа «Площадки» + все, что уже вписано в события
@@ -260,6 +260,7 @@ export function handleApi(req, deps) {
       const columns = rowColumns(table);
       const hasId = columns.some(isIdColumn);
       const meta = body.meta && typeof body.meta === "object" ? body.meta : null;
+      let summaryNew = "";
       if (meta && !hasId) throw new HttpError(409, "Таблица ещё готовится (появляется служебная колонка). Повторите через минуту.");
       const old = method === "PUT" ? parseEvents(table, today).find((e) => e.row === rowNo) : null;
       const id = hasId ? ((old && old.id) || wantId || newId()) : "";
@@ -278,12 +279,20 @@ export function handleApi(req, deps) {
       if (meta && id) {
         const kind = meta.kind === "meeting" ? "meeting" : "event";
         const patch = {kind, note: String(meta.note || ""), author: store.uid(me.phone)};
+        const prevSummary = String((store.metaMap()[id] || {}).summary || "").trim();
+        const summary = meta.summary !== undefined ? String(meta.summary).trim().slice(0, 12000) : undefined;
+        if (summary !== undefined) patch.summary = summary;
         store.setMeta(id, patch);
+        if (kind === "meeting" && summary && summary !== prevSummary) summaryNew = summary; // итоги появились или изменились: разошлём
       }
       bumpRev();
       afterChange();
       if (method === "POST" && meta && id && meta.kind === "meeting" && meta.announce !== false) {
         try { announce({kind: "meeting", event: {...event, id}, note: String(meta.note || ""), publish: meta.publish !== false}); } catch (e) { console.error(String(e.message || e)); }
+      }
+      // итоги собрания, приложенные при редактировании: сотрудникам в личные сообщения и (по галочке) в группу ВК / канал; повторно тот же текст не рассылается
+      if (summaryNew && id) {
+        try { announce({kind: "meetingSummary", event: {...event, id}, note: summaryNew, publish: meta.publishSummary !== false, dm: meta.sendSummary !== false}); } catch (e) { console.error(String(e.message || e)); }
       }
       return {status: 200, body: {ok: true, id}};
     }
