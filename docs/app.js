@@ -477,8 +477,53 @@ function photoEl(id, preview) {
   else photoData(id).then((d) => { img.src = d; }).catch(() => { box.classList.add("broken"); img.alt = "Фото не загрузилось"; });
   return box;
 }
+/** Просмотр фото: щипок двумя пальцами, двойное касание, колесо мыши, перетаскивание; кнопки «Скачать» и закрыть. */
 function showPhoto(src) {
-  const {close} = overlay(h("div", {class: "lightbox", onclick: () => close()}, h("img", {src, alt: "Фото"}), h("button", {class: "lbclose", "aria-label": "Закрыть"}, "×")), {center: true});
+  let scale = 1, x = 0, y = 0, moved = false;
+  const pts = new Map();
+  let startDist = 0, startScale = 1, last = null, lastTap = 0;
+  const img = h("img", {src, alt: "Фото", draggable: "false"});
+  const stage = h("div", {class: "lbstage"}, img);
+  const apply = () => {
+    const w = stage.clientWidth, hh = stage.clientHeight; // нельзя утащить фото совсем за экран
+    const mx = Math.max(0, (img.clientWidth * scale - w) / 2), my = Math.max(0, (img.clientHeight * scale - hh) / 2);
+    x = Math.min(mx, Math.max(-mx, x)); y = Math.min(my, Math.max(-my, y));
+    img.style.transform = `translate(${x}px, ${y}px) scale(${scale})`;
+  };
+  const zoomTo = (v) => { scale = Math.min(6, Math.max(1, v)); if (scale === 1) { x = 0; y = 0; } apply(); };
+  const dist = () => { const [a, b] = [...pts.values()]; return Math.hypot(a.x - b.x, a.y - b.y); };
+  stage.addEventListener("pointerdown", (e) => { stage.setPointerCapture(e.pointerId); pts.set(e.pointerId, {x: e.clientX, y: e.clientY}); moved = false; if (pts.size === 2) { startDist = dist(); startScale = scale; } last = {x: e.clientX, y: e.clientY}; });
+  stage.addEventListener("pointermove", (e) => {
+    if (!pts.has(e.pointerId)) return;
+    pts.set(e.pointerId, {x: e.clientX, y: e.clientY});
+    if (pts.size === 2) { moved = true; zoomTo(startScale * dist() / (startDist || 1)); return; }
+    if (scale > 1 && last) { x += e.clientX - last.x; y += e.clientY - last.y; apply(); }
+    if (last && Math.hypot(e.clientX - last.x, e.clientY - last.y) > 3) moved = true;
+    last = {x: e.clientX, y: e.clientY};
+  });
+  const up = (e) => {
+    pts.delete(e.pointerId);
+    if (pts.size) return;
+    if (!moved) { // короткое касание: двойное приближает/возвращает, одиночное по фону закрывает
+      const now = Date.now();
+      if (now - lastTap < 320) { zoomTo(scale > 1 ? 1 : 2.5); lastTap = 0; }
+      else { lastTap = now; setTimeout(() => { if (lastTap && Date.now() - lastTap >= 320 && scale === 1 && e.target === stage) close(); }, 340); }
+    }
+  };
+  stage.addEventListener("pointerup", up);
+  stage.addEventListener("pointercancel", up);
+  stage.addEventListener("wheel", (e) => { e.preventDefault(); zoomTo(scale * (e.deltaY < 0 ? 1.2 : 1 / 1.2)); }, {passive: false});
+  const save = () => {
+    const mime = (/^data:([^;,]+)/.exec(src) || [])[1] || "image/jpeg";
+    const a = h("a", {href: src, download: `photo-${Date.now()}.${mime.split("/")[1] === "jpeg" ? "jpg" : (mime.split("/")[1] || "jpg").replace(/[^a-z0-9]/gi, "")}`});
+    document.body.append(a); a.click(); a.remove();
+  };
+  const {close} = overlay(h("div", {class: "lightbox"}, stage,
+    h("div", {class: "lbbar"},
+      h("button", {class: "lbbtn", "aria-label": "Уменьшить", onclick: () => zoomTo(scale / 1.5)}, "−"),
+      h("button", {class: "lbbtn", "aria-label": "Приблизить", onclick: () => zoomTo(scale * 1.5)}, "+"),
+      h("button", {class: "lbbtn wide", "aria-label": "Скачать фото", onclick: save}, "⬇ Скачать")),
+    h("button", {class: "lbclose", "aria-label": "Закрыть", onclick: () => close()}, "×")), {center: true});
 }
 /** Окно выбора файла телефона/компьютера. */
 function chooseFiles(multiple, cb, accept = "") {
