@@ -1450,7 +1450,7 @@ function readToken(token, secret, now = Date.now()) {
 // ===== lib/api.mjs =====
 // API приложения. Чистая функция: запрос -> {status, body}. Синхронный код, никакой привязки к платформе.
 
-const SERVER_VERSION = "2026.10.22-10"; // меняется при каждом выпуске; приложение показывает её в профиле
+const SERVER_VERSION = "2026.10.22-11"; // меняется при каждом выпуске; приложение показывает её в профиле
 
 class HttpError extends Error {
   constructor(status, message, extra = {}) { super(message); this.status = status; this.extra = extra; }
@@ -3324,11 +3324,11 @@ function saveReport_(report, by) {
 }
 
 // ---------- копии и архив: ничего не теряется ----------
-// Раз в сутки (после 4 утра по Москве): 1) копии главных листов (скрытые «_копия ДД.ММ …»; ежедневные хранятся 14 дней,
-// копии первого числа месяца — больше года); 2) события старше года переезжают в лист «Архив» и остаются там навсегда
+// Раз в сутки (после 4 утра по Москве): 1) копии главных листов (скрытые «_копия ДД.ММ …»; хранятся только
+// 5 последних дат, остальные удаляются); 2) события старше года переезжают в лист «Архив» и остаются там навсегда
 // (отчёты читают и его). В архив переносим только после того, как копия успешно сделана.
 const BACKUP_TABS_ = [[TABS.schedule, "Расписание"], [TABS.staff, "Сотрудники"], [TABS.venues, "Площадки"], [TABS.meta, "События"]];
-const BACKUP_DAYS_ = 14, BACKUP_MONTHLY_DAYS_ = 400;
+const BACKUP_KEEP_ = 5; // сколько последних копий (дат) хранить; более старые удаляются при каждом ночном запуске
 
 function backupNow_() {
   const ss = SpreadsheetApp.openById(prop_("SHEET_ID"));
@@ -3347,12 +3347,18 @@ function backupNow_() {
     made++;
   });
   const t0 = Date.parse(today);
+  const stamps = {}; // "ДД.ММ" -> сколько дней назад
   ss.getSheets().forEach((sh) => {
     const m = /^_копия (\d{2})\.(\d{2}) /.exec(sh.getName());
     if (!m) return;
     let at = Date.UTC(+today.slice(0, 4), +m[2] - 1, +m[1]);
-    if (at > t0) at = Date.UTC(+today.slice(0, 4) - 1, +m[2] - 1, +m[1]);
-    if ((t0 - at) / 864e5 > (m[1] === "01" ? BACKUP_MONTHLY_DAYS_ : BACKUP_DAYS_)) ss.deleteSheet(sh);
+    if (at > t0) at = Date.UTC(+today.slice(0, 4) - 1, +m[2] - 1, +m[1]); // дата «в будущем» — значит, это прошлый год
+    stamps[m[1] + "." + m[2]] = (t0 - at) / 864e5;
+  });
+  const keep = new Set(Object.keys(stamps).sort((a, b) => stamps[a] - stamps[b]).slice(0, BACKUP_KEEP_));
+  ss.getSheets().forEach((sh) => {
+    const m = /^_копия (\d{2})\.(\d{2}) /.exec(sh.getName());
+    if (m && !keep.has(m[1] + "." + m[2])) ss.deleteSheet(sh);
   });
   return made;
 }
