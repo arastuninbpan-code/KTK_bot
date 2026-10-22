@@ -37,7 +37,7 @@ function secret_() {
 // Чтение листа из таблицы — самое медленное место (около 0,4 с на лист). Часто нужные листы держим в кэше Google и
 // сбрасываем при любой правке: скриптом (GasBook), на сайте (тоже через GasBook) и руками (onSheetChange).
 const PLAN_KIND_ = {[TABS.staff]: "staff", [TABS.schedule]: "schedule"};
-const CACHED_TABS_ = [TABS.schedule, TABS.staff, TABS.venues, TABS.chats, TABS.requests, TABS.off];
+const CACHED_TABS_ = [TABS.schedule, TABS.staff, TABS.venues, TABS.chats, TABS.requests, TABS.off, TABS.meta, TABS.comments, TABS.avatars]; // каждый запрос расписания читает и их: без кеша это лишние ~0,5 с на лист
 const CACHE_TTL_ = 600; // запас: даже если сброс почему-то не сработал, через 10 минут данные обновятся
 const CACHE_PART_ = 30000; // значение в кэше Google ограничено 100 КБ, режем на куски
 
@@ -56,6 +56,7 @@ function cacheRead_(tab) {
 
 function cacheWrite_(tab, rows) {
   const json = JSON.stringify(rows);
+  if (json.length > 400000) return; // слишком большой лист в кеш не кладём (читается напрямую)
   const n = Math.max(1, Math.ceil(json.length / CACHE_PART_));
   const token = n + ":" + Utilities.getUuid().slice(0, 8);
   const parts = {};

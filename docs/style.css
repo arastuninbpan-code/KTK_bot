@@ -409,3 +409,9 @@ table.rep tfoot td { font-weight: 900; background: var(--light); border-top: 2.5
 .report-btn { margin-top: 14px; }
 .rep-dates .input { min-width: 0; padding-left: 8px; padding-right: 6px; }
 .ver { margin-top: 14px; text-align: center; font-size: 11px; color: var(--muted); opacity: .6; }
+
+/* крошечный индикатор «идёт отправка на сервер»: появляется, только если отправка затянулась */
+.syncdot { position: fixed; right: 10px; top: 10px; width: 9px; height: 9px; border-radius: 50%; background: var(--blue); box-shadow: 0 0 0 2px #fff; z-index: 50; opacity: 0; pointer-events: none; }
+.syncdot.on { animation: syncin .3s 1.8s forwards, syncpulse 1s 1.8s infinite; }
+@keyframes syncin { to { opacity: .9; } }
+@keyframes syncpulse { 50% { transform: scale(1.5); } }

@@ -131,8 +131,10 @@ async function api(method, path, body) {
 // Ждать ответа Google не нужно: правка уже на экране. Если сервер отказал — покажем причину и вернём то, что у него на самом деле.
 const opQueue = [];
 let opRunning = false, opsRan = false, opsPending = 0;
+const syncEl = (() => { const d = document.createElement("div"); d.className = "syncdot"; d.setAttribute("aria-hidden", "true"); document.body.append(d); return d; })();
+const syncMark = () => syncEl.classList.toggle("on", opsPending > 0);
 function enqueue(run) {
-  opsPending++;
+  opsPending++; syncMark();
   opQueue.push(run);
   pumpQueue();
 }
@@ -144,7 +146,7 @@ async function pumpQueue() {
     const run = opQueue.shift();
     try { await run(); } catch (e) { if (state.token) toast(e.message || "Не удалось сохранить", {bad: true}); }
     opsRan = true;
-    opsPending--;
+    opsPending--; syncMark();
   }
   opRunning = false;
   if (state.token) await load(false, true); // сверяемся с сервером: строки получают настоящие номера, отклонённое откатывается
@@ -152,7 +154,13 @@ async function pumpQueue() {
 /** Событие, которое правим/удаляем, на сервере могло сменить номер строки (предыдущие правки из очереди): находим его заново по содержимому. */
 async function resolveTarget(orig) {
   if (!orig) return null;
-  if (orig.pending) throw new Error("Событие ещё сохранялось. Повторите через секунду.");
+  if (orig.pending) { // ещё не дошло до сервера: ждём его ответа и находим событие по ID
+    const id = await orig._done;
+    const d = await api("GET", "/api/schedule");
+    const found = d.events.find((x) => (id && x.id === id) || (!id && x.title === orig.title && x.date === orig.date));
+    if (!found) throw new Error("Событие не найдено. Обновите страницу.");
+    return found;
+  }
   if (!opsRan) return orig;
   const d = await api("GET", "/api/schedule");
   const found = d.events.find((x) => x.rev === orig.rev && x.title === orig.title);
@@ -310,7 +318,7 @@ function eventCard(e) {
   const hex = e.hall ? hexOfHall(e.hall) : "";
   const outline = hex && !urgent ? `border-color:${hex};box-shadow:3px 3px 0 ${hex}` : ""; // обводка цвета площадки
   const meeting = Boolean(e.meta && e.meta.kind === "meeting");
-  return h("button", {class: "ev" + (e.mine.length ? " mine" : "") + (urgent ? " urgent" : "") + (meeting ? " meeting" : ""), style: outline, onclick: () => (e.pending ? toast("Ещё сохраняется…") : eventDetails(e)), "aria-label": `Открыть: ${e.title}`},
+  return h("button", {class: "ev" + (e.mine.length ? " mine" : "") + (urgent ? " urgent" : "") + (meeting ? " meeting" : ""), style: outline, onclick: () => eventDetails(e), "aria-label": `Открыть: ${e.title}`},
     time,
     h("div", {}, h("h3", {}, meeting ? h("span", {class: "mtag"}, "📋 Собрание") : null, e.title), range, hall, roles.length ? list : null, e.comments ? h("span", {class: "ccount"}, "💬 " + e.comments) : null),
     canEdit ? h("span", {class: "edit-hint"}, icon("pencil")) : (e.mine.length ? h("span", {class: "pill mine-tag"}, "вы") : null),
@@ -756,9 +764,9 @@ function addVenueSheet(onAdded) {
     close();
     if (!state.venues.some((v) => hallKey(v) === hallKey(name))) state.venues.push(name);
     state.venueColors[name] = ((state.palette || []).find((c) => c.name === color) || {}).hex || FALLBACK_HEX;
-    render(); toast("Добавляю площадку…", {plane: true});
+    render();
     if (onAdded) onAdded(name);
-    enqueue(async () => { await api("POST", "/api/venues", {name, color}); toast("Площадка добавлена", {plane: true}); });
+    enqueue(async () => { await api("POST", "/api/venues", {name, color}); });
   }}, "Добавить");
   const {close} = overlay(sheet(h("h2", {}, "Новая площадка"), h("label", {class: "field"}, h("span", {}, "Название"), input),
     h("div", {class: "field"}, h("span", {}, "Цвет"), pick), err,
@@ -777,7 +785,7 @@ function venueSheet(name) {
     paint(color);
     state.venueColors[name] = (palette.find((c) => c.name === color) || {}).hex || FALLBACK_HEX;
     render(); // календарь за панелью перекрашивается сразу
-    enqueue(async () => { await api("PUT", "/api/venues", {name, color}); toast("Цвет сохранён"); });
+    enqueue(async () => { await api("PUT", "/api/venues", {name, color}); });
   }));
   const {close} = overlay(sheet(h("h2", {}, cap(name)), h("div", {class: "field"}, h("span", {}, "Цвет"), body),
     h("div", {class: "actions"},
@@ -791,8 +799,8 @@ function removeVenue(name) {
   if (state.events.some((e) => hallKey(e.hall) === hallKey(name) && upcoming(e))) return toast("На этой площадке есть будущие события. Сначала перенесите их.", {bad: true});
   state.venues = state.venues.filter((v) => hallKey(v) !== hallKey(name));
   delete state.venueColors[name];
-  render(); toast("Убираю площадку…");
-  enqueue(async () => { await api("DELETE", "/api/venues", {name}); toast("Площадка убрана"); });
+  render();
+  enqueue(async () => { await api("DELETE", "/api/venues", {name}); });
 }
 
 /** Плашка «нет интернета»: показываем последнее, что удалось загрузить, и когда это было. */
@@ -856,8 +864,8 @@ function profileSheet() {
     if (offlineNow()) return toast("Нет интернета: сохранить можно, когда появится сеть", {bad: true});
     const add = [...off].filter((d) => !orig.has(d)), remove = [...orig].filter((d) => !off.has(d));
     state.me.off = [...off].sort();
-    close(); toast("Сохраняю…", {plane: true});
-    enqueue(async () => { await api("POST", "/api/off", {add, remove}); toast("Сохранено: отмеченные дни учтутся при составлении расписания", {plane: true}); });
+    close();
+    enqueue(async () => { await api("POST", "/api/off", {add, remove}); });
   });
   const {close} = overlay(sheet(
     h("div", {class: "profhead"}, (state.avatars[me.uid] ? avatarEl(me.uid, me.name, "avatar big") : h("img", {class: "avatar big", src: "avatar.webp", alt: ""})), h("div", {}, h("h2", {}, me.name), h("span", {class: "badge " + me.role}, me.roleLabel))),
@@ -990,14 +998,12 @@ function actionSheet(e) {
 }
 
 function remove(e) {
-  if (e.pending) return toast("Событие ещё сохраняется, подождите секунду", {bad: true});
   if (offlineNow()) return toast("Нет интернета: удалить можно, когда появится сеть", {bad: true});
   state.events = state.events.filter((x) => x.row !== e.row);
-  render(); toast("Удаляю…", {plane: true});
+  render();
   enqueue(async () => {
     const t = await resolveTarget(e);
     await api("DELETE", `/api/events/${t.row}`, {rev: t.rev});
-    toast("Событие удалено, сотрудникам ушло сообщение", {plane: true});
   });
 }
 
@@ -1006,16 +1012,20 @@ function saveEventOptimistic(orig, event, force, meta) {
   const mine = Object.entries(event.roles).filter(([, names]) => names.includes(state.me.name)).map(([role]) => role);
   const local = {...event, mine, rev: "tmp", pending: true, row: orig ? orig.row : -Date.now(), id: orig ? orig.id : "", comments: orig ? orig.comments : 0, meta: meta || (orig && orig.meta) || {kind: "event", note: ""}};
   if (orig) state.events = state.events.map((x) => (x.row === orig.row ? local : x)); else state.events.push(local);
-  sortEvents(); render(); toast(orig ? "Сохраняю…" : "Добавляю…", {plane: true});
+  let finish, fail;
+  local._done = new Promise((res, rej) => { finish = res; fail = rej; });
+  local._done.catch(() => {});
+  sortEvents(); render();
   enqueue(async () => {
-    const t = await resolveTarget(orig);
-    await api(orig ? "PUT" : "POST", orig ? `/api/events/${t.row}` : "/api/events", {event, rev: t && t.rev, force: force || undefined, meta: meta || undefined});
-    toast(meta && meta.kind === "meeting" && !orig ? (meta.publish === false ? "Собрание создано, всем сотрудникам ушло уведомление" : "Собрание создано: уведомление всем и пост в группу отправлены") : orig ? "Сохранено, сотрудникам ушло сообщение" : "Событие добавлено, сотрудникам ушло сообщение", {plane: true});
+    try {
+      const t = await resolveTarget(orig);
+      const r = await api(orig ? "PUT" : "POST", orig ? `/api/events/${t.row}` : "/api/events", {event, rev: t && t.rev, force: force || undefined, meta: meta || undefined});
+      finish((r && r.id) || "");
+    } catch (err) { fail(err); throw err; }
   });
 }
 
 function editor(e) {
-  if (e && e.pending) return toast("Событие ещё сохраняется, подождите секунду", {bad: true});
   const times = e && e.time ? e.time.split(/,\s*/) : [];
   const draft = e
     ? {row: e.row, rev: e.rev, kind: (e.meta && e.meta.kind) || "event", note: (e.meta && e.meta.note) || "", publish: false, title: e.title, date: e.date, dateEnd: e.dateEnd || "", time: times[0] || "", extra: times.slice(1), end: e.end || "", hall: e.hall || "", roles: JSON.parse(JSON.stringify(e.roles))}
