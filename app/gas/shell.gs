@@ -771,6 +771,17 @@ function paintTopRows_(sheet, cols) {
   rng.setBackgrounds(next);
 }
 
+/** Всё правее последней колонки таблицы (шапка, списки, цвета, галочки от удалённых колонок) очищается, в том числе в строках над шапкой. */
+function clearTail_(sheet, cols) {
+  try {
+    const raw = sheet.raw || sheet;
+    const maxC = raw.getMaxColumns();
+    if (maxC <= cols) return;
+    const tail = raw.getRange(1, cols + 1, raw.getMaxRows(), maxC - cols);
+    tail.breakApart(); tail.clear(); tail.clearDataValidations();
+  } catch (e) { diag_("Хвост справа: " + String(e && e.message ? e.message : e)); }
+}
+
 /** Шапки месяцев («СЕНТЯБРЬ 2026»), заголовки колонок, чередование строк. */
 function styleSchedule_(sheet) {
   const today = todayIso(Date.now());
@@ -810,10 +821,7 @@ function styleSchedule_(sheet) {
     sheet.setColumnWidth(2, 260);
     for (let c = 3; c <= cols; c++) sheet.setColumnWidth(c, 160);
   }
-  const maxC = sheet.getMaxColumns();
-  if (maxC > cols) { // справа от таблицы не должно оставаться «хвоста» от удалённой колонки (шапки, списков, цвета)
-    try { const tail = sheet.getRange(1, cols + 1, sheet.getMaxRows(), maxC - cols); tail.breakApart(); tail.clear(); tail.clearDataValidations(); } catch (e) { diag_("Хвост справа: " + String(e && e.message ? e.message : e)); }
-  }
+  clearTail_(sheet, cols);
   sheet.setConditionalFormatRules(scheduleRules_(sheet));
   groupMonths_(sheet, true);
   applyPeopleValidation_(sheet);
@@ -1068,7 +1076,7 @@ function seedTestUsers_(p) {
   } catch (err) { diag_("Тестовые пользователи: ОШИБКА — " + String(err && err.message ? err.message : err)); }
 }
 
-const STYLE_VERSION_ = "22"; // поднимайте, когда меняется оформление: таблица перестроится сама при ближайшем срабатывании таймера
+const STYLE_VERSION_ = "23"; // поднимайте, когда меняется оформление: таблица перестроится сама при ближайшем срабатывании таймера
 
 /** После обновления кода один раз оформляет таблицу сама (то же, что ручной запуск styleSheets). */
 function autoStyle_(p) {
@@ -1309,6 +1317,7 @@ function styleStaff_(sheet) {
   const request = SpreadsheetApp.newConditionalFormatRule().whenFormulaSatisfied('=OR(REGEXMATCH($A' + (2 + (sheet.top || 0)) + ',"^(?i)заявка"),REGEXMATCH($C' + (2 + (sheet.top || 0)) + ',"^(?i)заявка"))').setBackground("#FFF2B3").setRanges([whole]).build();
   const off = SpreadsheetApp.newConditionalFormatRule().whenFormulaSatisfied("=AND($A" + (2 + (sheet.top || 0)) + "<>\"\",$" + A(accessCol) + (2 + (sheet.top || 0)) + "=FALSE)").setBackground("#FBE0DF").setFontColor("#8A8A8A").setRanges([whole]).build();
   sheet.setConditionalFormatRules(rules.concat([request, off]));
+  clearTail_(sheet, Math.max(sheet.getLastColumn(), 6));
 }
 
 /**
