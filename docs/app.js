@@ -815,7 +815,6 @@ function eventDetails(e) {
       e.hall ? h("div", {class: "drow"}, h("span", {}, "Площадка"), h("b", {class: "vtag", style: `background:${hex};color:${inkOn(hex)}`}, cap(e.hall))) : null),
     e.meta && e.meta.kind === "meeting" ? h("div", {class: "meet-tag"}, "📋 Собрание") : null,
     e.meta && e.meta.note ? h("p", {class: "meet-note"}, e.meta.note) : null,
-    e.meta && e.meta.summary ? h("div", {class: "field"}, h("span", {}, "Итоги собрания"), h("p", {class: "meet-note"}, e.meta.summary)) : null,
     e.mine && e.mine.length ? h("div", {class: "note ok"}, icon("check"), h("span", {}, "Вы заняты: " + e.mine.map(roleText).join(", "))) : null,
     roles.length ? h("div", {class: "field"}, h("span", {}, "Кто занят"), h("ul", {class: "roles"}, roles.map(([role, names]) => h("li", {class: (e.mine || []).includes(role) ? "me" : ""}, tag(role), h("div", {class: "n"}, names.join(", ")))))) : h("div", {class: "hint-line"}, "Людей на событие пока не назначили"),
     h("button", {class: "btn chat-open", onclick: () => { close(); chatSheet(e); }}, "💬 Обсуждение" + (e.comments ? ` · ${e.comments}` : "")),
@@ -1145,7 +1144,7 @@ function saveEventOptimistic(orig, event, force, meta) {
 function editor(e) {
   const times = e && e.time ? e.time.split(/,\s*/) : [];
   const draft = e
-    ? {row: e.row, rev: e.rev, kind: (e.meta && e.meta.kind) || "event", note: (e.meta && e.meta.note) || "", summary: (e.meta && e.meta.summary) || "", sendSummary: true, publishSummary: true, publish: false, title: e.title, date: e.date, dateEnd: e.dateEnd || "", time: times[0] || "", extra: times.slice(1), end: e.end || "", hall: e.hall || "", roles: JSON.parse(JSON.stringify(e.roles))}
+    ? {row: e.row, rev: e.rev, kind: (e.meta && e.meta.kind) || "event", note: (e.meta && e.meta.note) || "", publish: false, title: e.title, date: e.date, dateEnd: e.dateEnd || "", time: times[0] || "", extra: times.slice(1), end: e.end || "", hall: e.hall || "", roles: JSON.parse(JSON.stringify(e.roles))}
     : {kind: "event", note: "", publish: true, title: "", date: state.today, dateEnd: "", time: "", extra: [], end: "", hall: "", roles: {}};
   const {ov, close} = overlay("");
   const paint = () => {
@@ -1194,39 +1193,28 @@ function editor(e) {
       } catch (er) { toast(er.message, {bad: true}); }
       draft.reading = false; paint();
     }, ".docx,.odt,.txt,.md,text/plain")}, draft.reading ? "Читаю документ…" : "📄 Взять текст из документа");
-    const docHint = h("div", {class: "hint-line"}, draft.row ? "Текст попадёт в описание собрания. При редактировании он повторно не рассылается: итоги собрания добавляются ниже." : "Прикрепите документ Word (.docx), .odt или .txt: его текст попадёт в описание, а оттуда в группу ВК и в личные сообщения всем сотрудникам. Перед отправкой текст можно поправить." + (draft.note.length > 3500 ? " Текст длинный: он уйдёт несколькими сообщениями." : ""));
+    const docHint = h("div", {class: "hint-line"}, draft.row ? "Можно заменить текст или добавить документ (например, итоги после собрания). Чтобы разослать новый текст прямо сейчас, нажмите кнопку «Разослать» ниже." : "Прикрепите документ Word (.docx), .odt или .txt: его текст попадёт в описание, а оттуда в группу ВК и в личные сообщения всем сотрудникам. Перед отправкой текст можно поправить." + (draft.note.length > 3500 ? " Текст длинный: он уйдёт несколькими сообщениями." : ""));
     const fileList = h("div", {class: "files"}, docBtn, docHint);
-    const announceBox = !draft.row ? h("label", {class: "check"}, h("input", {type: "checkbox", checked: draft.publish, onchange: (ev) => (draft.publish = ev.target.checked)}), h("span", {}, "Выложить в группу ВК и канал (всем сотрудникам уведомление в личные сообщения придёт в любом случае)")) : null;
-    const meetingBlock = meeting ? h("div", {class: "meetblock"}, h("label", {class: "field"}, h("span", {}, "Текст собрания"), note), h("div", {class: "field"}, h("span", {}, "Документ"), fileList), announceBox) : null;
-    // итоги собрания прикладывают позже, при редактировании: текст или документ, и по галочкам он уходит сотрудникам и в группу ВК / канал
-    const summaryNote = h("textarea", {class: "input", rows: "6", placeholder: "Что решили на собрании, кто что делает. Можно вставить текст или взять его из документа ниже.", oninput: (ev) => (draft.summary = ev.target.value)}, draft.summary || "");
-    summaryNote.value = draft.summary || "";
-    const summaryDoc = h("button", {class: "btn light attach", disabled: Boolean(draft.readingSummary), onclick: () => chooseFiles(false, async ([f]) => {
-      draft.readingSummary = true; paint();
-      try {
-        const text = await extractDocText(f);
-        draft.summary = (draft.summary || "").trim() ? draft.summary.trim() + "\n\n" + text : text;
-        toast(`Текст из «${f.name}» добавлен в итоги`, {plane: true});
-      } catch (er) { toast(er.message, {bad: true}); }
-      draft.readingSummary = false; paint();
-    }, ".docx,.odt,.txt,.md,text/plain")}, draft.readingSummary ? "Читаю документ…" : "📄 Взять текст из документа");
-    const summaryBlock = meeting && draft.row ? h("div", {class: "meetblock"},
-      h("label", {class: "field"}, h("span", {}, "Итоги собрания"), summaryNote),
-      h("div", {class: "field"}, h("span", {}, "Документ с итогами"), h("div", {class: "files"}, summaryDoc, h("div", {class: "hint-line"}, "Прикрепите документ с итогами после собрания: его текст попадёт в итоги. Когда нажмёте «Сохранить», итоги уйдут сотрудникам и в группу ВК. Тот же текст повторно не рассылается."))),
-      h("label", {class: "check"}, h("input", {type: "checkbox", checked: draft.sendSummary, onchange: (ev) => (draft.sendSummary = ev.target.checked)}), h("span", {}, "Разослать итоги сотрудникам в личные сообщения")),
-      h("label", {class: "check"}, h("input", {type: "checkbox", checked: draft.publishSummary, onchange: (ev) => (draft.publishSummary = ev.target.checked)}), h("span", {}, "Выложить итоги в группу ВК и канал"))) : null;
+    const announceBox = !draft.row ? h("label", {class: "check"}, h("input", {type: "checkbox", checked: draft.publish, onchange: (ev) => (draft.publish = ev.target.checked)}), h("span", {}, "Когда рассылаете: выложить ещё и в группу ВК и канал")) : null;
+    // «Разослать»: сотрудникам в личные сообщения и (по галочке) в группу ВК и канал. Обычное «Создать» / «Сохранить» ничего не рассылает.
+    // Так можно создать собрание заранее, а разослать позже — или приложить документ с итогами и разослать уже после собрания.
+    const resendBtn = h("button", {class: "btn light", onclick: () => {
+      if (!draft.note.trim()) { toast("Сначала добавьте текст или документ", {bad: true}); return; }
+      confirmDialog(draft.row ? "Разослать собрание?" : "Создать и разослать?", `Текст уйдёт всем сотрудникам в личные сообщения${draft.row || draft.publish ? " и будет выложен в группе ВК и канале" : ""}. ${draft.row ? "Изменения в собрании тоже сохранятся." : "Собрание будет создано."}`, "Разослать", () => { draft.resend = true; if (draft.row) draft.publish = true; doSave(false); });
+    }}, draft.row ? "📣 Разослать сотрудникам и выложить в ВК" : "📣 Создать и разослать сотрудникам");
+    const meetingBlock = meeting ? h("div", {class: "meetblock"}, h("label", {class: "field"}, h("span", {}, "Текст собрания"), note), h("div", {class: "field"}, h("span", {}, "Документ"), fileList), announceBox, resendBtn) : null;
     const save = h("button", {class: "btn", disabled: Boolean(draft.uploading)}, draft.row ? "Сохранить" : (meeting ? "Создать собрание" : "Создать"));
     const doSave = (force) => {
       err.textContent = "";
       const event = {title: draft.title.trim(), date: draft.date, dateEnd: draft.dateEnd || "", time: [draft.time, ...draft.extra].filter(Boolean).join(", "), end: draft.end, hall: draft.hall, roles: draft.roles};
-      if (!event.title) return shakeBad(title, err, "Введите название события");
-      if (!event.date) return shakeBad(date, err, "Укажите дату");
-      if (badPeople.length) { err.textContent = "Не могут работать в эти дни: " + badPeople.join(", ") + ". Уберите их или смените дату."; return; }
+      if (!event.title) { draft.resend = false; return shakeBad(title, err, "Введите название события"); }
+      if (!event.date) { draft.resend = false; return shakeBad(date, err, "Укажите дату"); }
+      if (badPeople.length) { draft.resend = false; err.textContent = "Не могут работать в эти дни: " + badPeople.join(", ") + ". Уберите их или смените дату."; return; }
       if (!force && clash.length) { confirmDialog("Площадка занята", `Площадка занята: ${clash.map((c) => `${c.title} (${timeLabel(c)})`).join("; ")}. Сохранить всё равно?`, "Сохранить", () => doSave(true)); return; }
       close();
       const meta = draft.kind === "meeting" || (e && e.meta && (e.meta.kind === "meeting" || e.meta.note))
-        ? {kind: draft.kind, note: draft.note.trim(), publish: draft.publish,
-          ...(draft.kind === "meeting" && draft.row ? {summary: (draft.summary || "").trim(), sendSummary: draft.sendSummary, publishSummary: draft.publishSummary} : {})} : null;
+        ? {kind: draft.kind, note: draft.note.trim(), publish: draft.publish, ...(draft.resend ? {resend: true} : {}), ...(!draft.row && !draft.resend ? {announce: false} : {})} : null;
+      draft.resend = false;
       saveEventOptimistic(e, event, force || clash.length > 0, meta);
     };
     save.addEventListener("click", () => doSave(false));
@@ -1234,7 +1222,6 @@ function editor(e) {
       kindSwitch,
       h("label", {class: "field"}, h("span", {}, "Название"), title),
       meetingBlock,
-      summaryBlock,
       h("div", {class: "row2"}, h("label", {class: "field", style: "flex:1"}, h("span", {}, "Дата"), date),
         draft.dateEnd || draft.multi ? h("label", {class: "field", style: "flex:1"}, h("span", {}, "По"), dateEnd) : null),
       draft.dateEnd || draft.multi ? null : h("button", {class: "link", onclick: () => { draft.multi = true; paint(); }}, "Несколько дней"),

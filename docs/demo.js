@@ -78,7 +78,7 @@
       if (clash.length) return {status: 409, data: {error: `Площадка «${body.event.hall}» занята: ${clash[0].title} (${clash[0].time}${clash[0].end ? "–" + clash[0].end : ""})`, conflicts: clash}};
       const ev = {...body.event, rev: "d" + Math.random()};
       if (method === "POST") { events.push({...ev, row: ++seq, id: body.id || undefined}); if (body.meta) metas[body.id || "d" + seq] = {kind: body.meta.kind, note: body.meta.note || ""}; }
-      else { const tgt = events.find((e) => e.row === row); Object.assign(tgt, ev); if (body.meta) metas[tgt.id || "d" + row] = {kind: body.meta.kind, note: body.meta.note || "", summary: body.meta.summary !== undefined ? body.meta.summary : ((metas[tgt.id || "d" + row] || {}).summary || "")}; }
+      else { const tgt = events.find((e) => e.row === row); Object.assign(tgt, ev); if (body.meta) metas[tgt.id || "d" + row] = {kind: body.meta.kind, note: body.meta.note || ""}; }
       rev++;
       return {status: 200, data: {ok: true}};
     },

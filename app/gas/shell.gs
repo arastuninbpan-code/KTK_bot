@@ -370,18 +370,17 @@ function announce_(a) {
   const st = store_();
   const appUrl = prop_("APP_URL") || "";
   const e = a.event;
-  const summary = a.kind === "meetingSummary"; // итоги собрания, приложенные позже
-  const text = summary ? msgMeetingSummary(e, a.note || "") : msgMeeting(e, a.note || "");
+  const text = msgMeeting(e, a.note || "");
   const btn = appButton(appUrl ? appUrl + "#event=" + encodeURIComponent(e.id || "") : "");
   const people = new Set(st.activeUsers().map((u) => u.phone));
   let sent = 0;
-  if (a.dm !== false) st.chats().filter((c) => people.has(c.phone)).forEach((c) => {
+  st.chats().filter((c) => people.has(c.phone)).forEach((c) => {
     try { if (SENDERS[c.channel]) { SENDERS[c.channel].send(c.chatId, text, btn); sent++; } }
     catch (err) { if (err instanceof Gone) st.unbind(c.channel, c.chatId); else console.error(String(err && err.message ? err.message : err)); }
   });
   let posted = [];
-  if ((a.kind === "meeting" || summary) && a.publish) { try { posted = publishers_().post(summary ? meetingSummaryPostText(e, a.note || "") : meetingPostText(e, a.note || "")); } catch (err) { console.error(String(err && err.message ? err.message : err)); } }
-  diag_((summary ? "Итоги собрания «" : "Собрание «") + e.title + "»: разослано " + sent + (posted.length ? "; " + posted.join(" ") : ""));
+  if (a.kind === "meeting" && a.publish) { try { posted = publishers_().post(meetingPostText(e, a.note || "")); } catch (err) { console.error(String(err && err.message ? err.message : err)); } }
+  diag_("Собрание «" + e.title + "»: разослано " + sent + (posted.length ? "; " + posted.join(" ") : ""));
   return {sent, posted};
 }
 

@@ -6,7 +6,7 @@ import {ARCHIVE_HEADER, DELETED_HEADER} from "./report.mjs";
 export const TABS = {schedule: "Расписание", staff: "Сотрудники", venues: "Площадки", reports: "Отчёты", archive: "Архив", deleted: "_удалённое", chats: "Подписчики", requests: "_заявки", people: "_люди", off: "_недоступность", comments: "_комментарии", meta: "_события", avatars: "_аватары", photos: "_фото", state: "_служебное", lock: "_замок"};
 export const REQUESTS_HEADER = ["Канал", "ID чата", "Телефон"];
 export const COMMENT_HEADER = ["ID события", "ID", "Время", "Телефон", "Имя", "Текст", "Фото"];
-export const META_HEADER = ["ID события", "Тип", "Описание", "—", "Автор", "Создано", "Итоги"];
+export const META_HEADER = ["ID события", "Тип", "Описание", "—", "Автор", "Создано"];
 export const AVATAR_HEADER = ["Телефон", "Канал", "Фото", "Обновлено"];
 /** Фото в сообщении переписки: храним только короткие номера (сами картинки лежат в скрытом служебном листе кусками). */
 export const cleanPhotoIds = (list) => [...new Set((Array.isArray(list) ? list : []).map(String).filter((id) => /^[0-9a-f]{12}$/.test(id)))].slice(0, 4);
@@ -213,7 +213,7 @@ export class Store {
     for (const r of this.book.get(TABS.meta).slice(1)) {
       const id = String(r[0] || "").trim();
       if (!id) continue;
-      out[id] = {kind: String(r[1] || "") === "meeting" ? "meeting" : "event", note: String(r[2] || ""), summary: String(r[6] || ""), author: String(r[4] || ""), created: Number(r[5]) || 0, row: 0};
+      out[id] = {kind: String(r[1] || "") === "meeting" ? "meeting" : "event", note: String(r[2] || ""), author: String(r[4] || ""), created: Number(r[5]) || 0, row: 0};
     }
     return out;
   }
@@ -229,10 +229,8 @@ export class Store {
       patch.note !== undefined ? String(patch.note).slice(0, 12000) : String(cur[2] || ""),
       "[]",
       patch.author !== undefined ? String(patch.author) : String(cur[4] || ""),
-      String(cur[5] || this.now()),
-      patch.summary !== undefined ? String(patch.summary).slice(0, 12000) : String(cur[6] || "")]; // итоги собрания (появляются позже повестки)
+      String(cur[5] || this.now())];
     if (at >= 0) this.book.set(TABS.meta, at + 1, next); else this.book.append(TABS.meta, next);
-    if (String((rows[0] || [])[6] || "").trim() !== "Итоги") this.book.setCell(TABS.meta, 1, 7, "Итоги"); // у старых таблиц подпись нового столбца
   }
 
   // --- комментарии к событию (переписка) ---

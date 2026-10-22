@@ -124,51 +124,48 @@ test("«не могу работать» нельзя отметить на да
   assert.equal(t.call("POST", "/api/off", admin, {add: ["2026-10-12"]}).status, 200);
 });
 
-test("итоги собрания: приложили при редактировании — рассылка и пост один раз; тот же текст повторно не рассылается", () => {
+test("собрание можно разослать позже по кнопке: при обычной правке ничего не уходит, с resend — сотрудникам и в ВК с обновлённым текстом", () => {
   const t = make();
   const admin = t.login("9000000001");
-  const created = t.call("POST", "/api/events", admin, {event: MEETING, meta: {kind: "meeting", note: "Повестка: афиша на ноябрь", publish: true}});
-  assert.equal(created.status, 200);
+  const created = t.call("POST", "/api/events", admin, {event: MEETING, meta: {kind: "meeting", note: "Повестка", publish: true}});
   const id = created.body.id;
   assert.equal(t.announced.length, 1);
-  const put = (meta) => t.call("PUT", `/api/events/id-${id}`, admin, {event: MEETING, meta: {kind: "meeting", note: "Повестка: афиша на ноябрь", ...meta}});
-  // правка без итогов — ничего нового не рассылается
-  assert.equal(put({}).status, 200);
+  const put = (meta) => t.call("PUT", `/api/events/id-${id}`, admin, {event: MEETING, meta: {kind: "meeting", ...meta}});
+  // правили текст, кнопку не нажимали — ничего не рассылается
+  assert.equal(put({note: "Повестка + итоги: решили афишу"}).status, 200);
   assert.equal(t.announced.length, 1);
-  // приложили итоги после собрания
-  assert.equal(put({summary: "Решили: афиша в ноябре, репетиции по вторникам."}).status, 200);
+  // нажали «Разослать»: текст ушёл сотрудникам и в ВК
+  assert.equal(put({note: "Итоги: афиша в ноябре, репетиции по вторникам.", publish: true, resend: true}).status, 200);
   assert.equal(t.announced.length, 2);
-  assert.deepEqual([t.announced[1].kind, t.announced[1].note, t.announced[1].publish, t.announced[1].dm, t.announced[1].event.id], ["meetingSummary", "Решили: афиша в ноябре, репетиции по вторникам.", true, true, id]);
+  assert.deepEqual([t.announced[1].kind, t.announced[1].note, t.announced[1].publish, t.announced[1].event.id], ["meeting", "Итоги: афиша в ноябре, репетиции по вторникам.", true, id]);
   const ev = t.call("GET", "/api/schedule", admin).body.events.find((e) => e.id === id);
-  assert.deepEqual([ev.meta.note, ev.meta.summary], ["Повестка: афиша на ноябрь", "Решили: афиша в ноябре, репетиции по вторникам."], "повестка и итоги хранятся отдельно");
-  // повторное сохранение того же текста (в том числе повтор из очереди) ничего не рассылает
-  put({summary: "Решили: афиша в ноябре, репетиции по вторникам."});
+  assert.equal(ev.meta.note, "Итоги: афиша в ноябре, репетиции по вторникам.", "текст сохранился в собрании");
+  // повторное обычное сохранение снова ничего не рассылает
+  put({note: "Итоги: афиша в ноябре, репетиции по вторникам."});
   assert.equal(t.announced.length, 2);
-  // исправили итоги и сняли галочки: рассылка получает «не писать в ВК и не слать личные»
-  put({summary: "Решили: афиша в ноябре, репетиции по средам.", publishSummary: false, sendSummary: false});
-  assert.equal(t.announced.length, 3);
-  assert.deepEqual([t.announced[2].publish, t.announced[2].dm], [false, false]);
-  // обычное событие итогов не рассылает
-  const plain = t.call("POST", "/api/events", admin, {event: {...MEETING, title: "Репетиция", date: "2026-10-13"}, meta: {kind: "event", note: "", summary: "что-то"}});
-  assert.equal(plain.status, 200);
-  assert.equal(t.announced.length, 3);
-  // читатель редактировать не может
+  // читатель разослать не может
   const reader = t.login("9000000002");
-  assert.equal(t.call("PUT", `/api/events/id-${id}`, reader, {event: MEETING, meta: {kind: "meeting", summary: "x"}}).status, 403);
+  assert.equal(t.call("PUT", `/api/events/id-${id}`, reader, {event: MEETING, meta: {kind: "meeting", note: "x", resend: true}}).status, 403);
+  assert.equal(t.announced.length, 2);
+  // у обычного события resend ничего не делает
+  const plain = t.call("POST", "/api/events", admin, {event: {...MEETING, title: "Репетиция", date: "2026-10-13"}, meta: {kind: "event", note: ""}});
+  t.call("PUT", `/api/events/id-${plain.body.id}`, admin, {event: {...MEETING, title: "Репетиция", date: "2026-10-13"}, meta: {kind: "event", note: "", resend: true}});
+  assert.equal(t.announced.length, 2);
 });
 
-test("скрипт Google: итоги собрания уходят личными сообщениями и постом в ВК с заголовком «Итоги собрания»", () => {
-  const tabs = {"Расписание": [["Дата", "Начало", "Конец", "Событие", "Площадка", "ID"], ["12.10.2026", "18:00", "", "Собрание труппы", "", "abcd1234"]], "Сотрудники": STAFF,
-    "Подписчики": [["Канал", "ID чата", "Телефон", "ФИО"], ["telegram", "6", "9000000002", "Петрова Л.Н."]]};
-  const g = loadGas({tabs, props: {SHEET_ID: "x", STYLE_VER: "20", TOP_ROWS_DONE: "1", TELEGRAM_BOT_TOKEN: "TOKEN", WEBHOOK_SECRET: "h", APP_URL: "https://app.test", VK_TOKEN: "vk", VK_GROUP_ID: "5", OWNER_PHONE: "9000000001"}, now: NOW});
-  g.run("store_().ensureLogins()");
-  const call = (req) => JSON.parse(g.run(`doPost(${JSON.stringify({postData: {contents: JSON.stringify(req)}})}).getContent()`));
-  const token = call({method: "POST", path: "/api/login", body: {login: g.run('store_().users().find((u) => u.phone === "9000000001").login')}}).token;
-  const r = call({method: "PUT", path: "/api/events/id-abcd1234", token, body: {event: {title: "Собрание труппы", date: "2026-10-12", dateEnd: "", time: "18:00", end: "", hall: "", roles: {}}, meta: {kind: "meeting", note: "", summary: "Итог: утвердили афишу."}}});
-  assert.equal(r.ok, true);
-  const dm = g.fetches.filter((f) => f.url.endsWith("/sendMessage") && String(f.body.chat_id) === "6");
-  assert.equal(dm.length, 1);
-  assert.match(dm[0].body.text, /Итоги собрания: Собрание труппы[\s\S]*Итог: утвердили афишу/);
-  const wall = g.fetches.find((f) => f.url.includes("wall.post"));
-  assert.ok(wall && /Итоги собрания: Собрание труппы/.test(wall.body.message), "пост на стене группы");
+test("собрание можно создать без рассылки (announce: false) и разослать позже кнопкой", () => {
+  const t = make();
+  const admin = t.login("9000000001");
+  const r = t.call("POST", "/api/events", admin, {event: MEETING, meta: {kind: "meeting", note: "Повестка", publish: true, announce: false}});
+  assert.equal(r.status, 200);
+  assert.equal(t.announced.length, 0, "обычное «Создать» ничего не рассылает");
+  const sent = t.call("PUT", `/api/events/id-${r.body.id}`, admin, {event: MEETING, meta: {kind: "meeting", note: "Повестка", publish: true, resend: true}});
+  assert.equal(sent.status, 200);
+  assert.equal(t.announced.length, 1);
+  assert.equal(t.announced[0].note, "Повестка");
+  // «Создать и разослать» — создание с рассылкой сразу
+  const both = t.call("POST", "/api/events", admin, {event: {...MEETING, title: "Второе", date: "2026-10-14"}, meta: {kind: "meeting", note: "Текст", publish: false, resend: true}});
+  assert.equal(both.status, 200);
+  assert.equal(t.announced.length, 2);
+  assert.equal(t.announced[1].publish, false, "без галочки «в группу ВК» пост не выкладывается");
 });
