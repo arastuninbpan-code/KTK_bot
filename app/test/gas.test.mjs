@@ -670,6 +670,31 @@ test("должности в приложении — группы из «Сот�
   assert.ok(after.some((r) => r[3].startsWith("Спектакль «Бука»!") && r.includes("Иванова М.В.")), "люди в старых колонках на месте");
 });
 
+test("убрали вид сотрудников в «Расписании» — исчезает и в «Сотрудниках»; убрали в «Сотрудниках» — исчезает колонка в «Расписании»; переименование переносится", () => {
+  const g = G();
+  g.run("styleSheets()");
+  const sch = g.ss.getSheetByName("Расписание");
+  const staff = g.ss.getSheetByName("Сотрудники");
+  const heads = (sh) => sh.getDataRange().getDisplayValues()[0];
+  const touch = (name) => g.run(`onSheetChange({range: {getSheet: () => SpreadsheetApp.openById("x").getSheetByName("${name}"), getRow: () => 1, getValue: () => ""}, value: ""})`);
+  const delCol = (sh, name) => { const i = heads(sh).indexOf(name); assert.ok(i >= 0, name + " есть"); sh.deleteColumn(i + 1); };
+  // 1) убрали «Зал» в «Расписании»
+  delCol(sch, "Зал");
+  touch("Расписание");
+  assert.ok(!heads(staff).includes("Зал"), "колонка «Зал» убрана из «Сотрудников»");
+  assert.ok(heads(staff).includes("Актёры") && heads(staff).includes("Техника"), "остальные на месте");
+  assert.ok(!heads(sch).includes("Зал") && heads(sch).includes("Актёры"));
+  // 2) убрали «Техника» в «Сотрудниках»
+  delCol(staff, "Техника");
+  touch("Сотрудники");
+  assert.ok(!heads(sch).includes("Техника"), "колонка «Техника» убрана из «Расписания»");
+  assert.ok(heads(sch).includes("Актёры"));
+  // 3) переименовали «Актёры» в «Расписании»
+  sch.put(1, heads(sch).indexOf("Актёры") + 1, "Артисты");
+  touch("Расписание");
+  assert.ok(heads(staff).includes("Артисты") && !heads(staff).includes("Актёры"), "новое название и в «Сотрудниках»");
+});
+
 test("удалили все события текущего месяца: шапка месяца остаётся, прошлый месяц уходит под разделитель; пустой лист тоже получает шапку", () => {
   const g = G();
   g.ss.getSheetByName("Расписание").put(4, 1, "30.09");
@@ -720,7 +745,7 @@ test("Telegram: после подключения под полем ввода �
 
 const staffEvt = (row, v) => `onSheetChange({range: {getSheet: () => SpreadsheetApp.openById("x").getSheetByName("Сотрудники"), getRow: () => ${row}, getValue: () => "${v}"}, value: "${v}"})`;
 
-test("переименовали группу в «Сотрудниках»: колонка в «Расписании» переименовалась, люди остались; добавили — новая колонка; удалили — данные не стираются", () => {
+test("переименовали группу в «Сотрудниках»: колонка в «Расписании» переименовалась, люди остались; добавили — новая колонка; удалили — колонка убирается в обоих листах", () => {
   const g = G();
   g.run("styleSheets()");
   const sch = g.ss.getSheetByName("Расписание");
@@ -742,12 +767,12 @@ test("переименовали группу в «Сотрудниках»: к�
   g.run("dropAllCaches_()");
   g.run(staffEvt(1, "Свет"));
   assert.ok(head().includes("Свет") && head().includes("Уборщики"));
-  // группу убрали: колонка и данные в «Расписании» остаются
+  // группу убрали в «Сотрудниках»: колонка пропала и в «Расписании» (у «Свет» данных не было)
   const sc = staff.getDataRange().getDisplayValues()[0].indexOf("Свет") + 1;
   staff.put(1, sc, "");
   g.run("dropAllCaches_()");
   g.run(staffEvt(1, ""));
-  assert.ok(head().includes("Свет"));
+  assert.ok(!head().includes("Свет"));
   assert.equal(sch.getDataRange().getDisplayValues()[evRow - 1][head().indexOf("Уборщики")], "Морозова Н.М.");
 });
 

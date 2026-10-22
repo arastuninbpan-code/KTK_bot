@@ -454,7 +454,10 @@ function onSheetChange(e) {
     p.setProperty("last_cycle", String(Date.now()));
     try { // правка в «Сотрудниках» (новая колонка-группа, новый человек): оформляем сразу, не дожидаясь таймера
       if (e && e.range && e.range.getSheet().getName() === TABS.staff) { tidyStaff_(); renderPeopleList_(); syncRoleColumns_(); p.deleteProperty("regroup"); }
-      if (e && e.range && e.range.getSheet().getName() === TABS.schedule && e.range.getRow() === 1) applyPeopleValidation_(e.range.getSheet()); // добавили новую роль-колонку: сразу список
+      const nm0 = e && e.range ? e.range.getSheet().getName() : "";
+      const headEdit = nm0 === TABS.schedule && e.range.getRow() === topOffset_(e.range.getSheet(), nm0) + 1;
+      if (headEdit || (e && e.changeType === "REMOVE_COLUMN")) { syncRoleColumns_(); p.deleteProperty("regroup"); } // убрали или переименовали колонку-должность: то же в «Сотрудниках»
+      if (headEdit) applyPeopleValidation_(tabSheet_(e.range.getSheet().getParent(), TABS.schedule)); // добавили новую роль-колонку: сразу список
       syncRestoreButtons_();
       if (e && e.range) { const nm = e.range.getSheet().getName(); if (nm === TABS.venues) fillVenueColors_(); if (nm === TABS.schedule || nm === TABS.venues) renderOccupancy_(); } // занятость площадок обновляем сразу
     } catch (err) { diag_("Таблица: ОШИБКА — " + String(err && err.message ? err.message : err)); }
@@ -1351,7 +1354,7 @@ function syncRoleColumns_() {
   let head = readHead();
   if (layoutOf([head]).v !== 2) return false;
   const p = PropertiesService.getScriptProperties();
-  const names = store_().groups().map((g) => g.name);
+  let names = store_().groups().map((g) => g.name);
   let prev = null;
   try { prev = JSON.parse(p.getProperty("GROUP_NAMES") || "null"); } catch (e) { prev = null; }
   const indexOfName = (n) => head.findIndex((x) => x && !x.startsWith(RESTORE_MARK) && norm(x) === norm(n));
@@ -1385,6 +1388,44 @@ function syncRoleColumns_() {
       changed = true;
     }
   }
+  if (Array.isArray(prev) && prev.length && names.length) { // убрали вид сотрудников — убираем его и в другом листе
+    const inNames = (n) => names.some((x) => norm(x) === norm(n));
+    const staff = tabSheet_(SpreadsheetApp.openById(prop_("SHEET_ID")), TABS.staff);
+    const staffHead = () => staff.getRange(1, 1, 1, Math.max(staff.getLastColumn(), 1)).getDisplayValues()[0].map((x) => String(x).trim());
+    const goneFromStaff = prev.filter((n) => !inNames(n) && indexOfName(n) >= 0);
+    if (goneFromStaff.length < prev.length) goneFromStaff.forEach((n) => { // в «Сотрудниках» колонки больше нет: в «Расписании» тоже; записи с данными сохраняются в «_удалённое»
+      const i = indexOfName(n);
+      if (i < 0) return;
+      const last = sheet.getLastRow();
+      if (last >= 2) {
+        const col = sheet.getRange(2, 1, last - 1, Math.max(sheet.getLastColumn(), i + 1)).getDisplayValues();
+        col.forEach((r) => { if (String(r[i]).trim() && !MONTH_ROW_RE.test(String(r[0]).trim())) { try { store_().archiveDeleted(["Колонка «" + n + "»", r[0], r[3], r[i]], "таблица"); } catch (e) { /* копия не обязательна */ } } });
+      }
+      sheet.deleteColumn(i + 1);
+      head = readHead();
+      changed = true;
+    });
+    let prevHead = null;
+    try { prevHead = JSON.parse(p.getProperty("SCHED_HEAD") || "null"); } catch (e) { prevHead = null; }
+    const wasThere = (x) => Array.isArray(prevHead) && prevHead.some((q) => norm(q) === norm(x));
+    const scheduleLacks = Array.isArray(prevHead) ? names.filter((n) => prev.some((q) => norm(q) === norm(n)) && wasThere(n) && indexOfName(n) < 0) : [];
+    if (scheduleLacks.length) {
+      const unknown = head.map((x, i) => ({x, i})).filter((c) => c.i >= 5 && c.x && !c.x.startsWith(RESTORE_MARK) && !isIdColumn(c.x) && !inNames(c.x) && !wasThere(c.x));
+      if (scheduleLacks.length === 1 && unknown.length === 1) { // в «Расписании» переименовали колонку: то же название в «Сотрудниках»
+        const sh = staffHead();
+        const at = sh.findIndex((x, i) => i >= 4 && norm(x) === norm(scheduleLacks[0]));
+        if (at >= 0) { staff.getRange(1, at + 1).setNumberFormat("@").setValue(unknown[0].x); dropAllCaches_(); names = store_().groups().map((g) => g.name); changed = true; }
+      } else if (scheduleLacks.length < names.length) { // в «Расписании» колонку убрали: в «Сотрудниках» тоже (удалённое остаётся в копиях таблицы)
+        scheduleLacks.forEach((n) => {
+          const sh = staffHead();
+          const at = sh.findIndex((x, i) => i >= 4 && norm(x) === norm(n));
+          if (at >= 0) { staff.deleteColumn(at + 1); changed = true; }
+        });
+        dropAllCaches_();
+        names = store_().groups().map((g) => g.name);
+      }
+    }
+  }
   const have = new Set(head.filter((x) => x && !x.startsWith(RESTORE_MARK)).map((x) => norm(x)));
   const missing = names.filter((n) => !have.has(norm(n)));
   if (missing.length) {
@@ -1410,6 +1451,7 @@ function syncRoleColumns_() {
     if (drop.length) { head = readHead(); changed = true; diag_("Убраны пустые старые должности: " + drop.length); }
   }
   p.setProperty("GROUP_NAMES", JSON.stringify(names));
+  try { p.setProperty("SCHED_HEAD", JSON.stringify(readHead())); } catch (e) { /* не обязательно */ }
   if (!changed) return false;
   styleSchedule_(sheet);
   dropAllCaches_();
