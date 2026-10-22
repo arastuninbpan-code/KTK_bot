@@ -234,7 +234,8 @@ const sendOp = (op) => {
   return Promise.resolve();
 };
 /** Сервер просто не ответил (нет сети, сбой Google): правку не теряем, пробуем позже. Отказ по существу (4xx) — нет. */
-const retryable = (e) => Boolean(e.offline) || !e.status || e.status >= 500;
+// «Не найдено» (адрес, а не событие) значит, что сервер ещё не обновился до этой версии сайта: правку не теряем, повторим позже
+const retryable = (e) => Boolean(e.offline) || !e.status || e.status >= 500 || (e.status === 404 && e.message === "Не найдено");
 async function pumpQueue() {
   if (sending || !state.token || !queue.length) return;
   clearTimeout(retryTimer);
