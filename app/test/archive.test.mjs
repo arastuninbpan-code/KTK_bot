@@ -120,5 +120,8 @@ test("свободные строки: заполнили одну — табл�
   const c = col();
   assert.ok(c.indexOf("25.10.2026") > c.indexOf("20.10.2026") && c.indexOf("25.10.2026") < c.indexOf("▼ ПРОШЕДШИЕ МЕСЯЦЫ"));
   assert.ok(c.includes("СЕНТЯБРЬ 2026") && c.indexOf("СЕНТЯБРЬ 2026") > c.indexOf("▼ ПРОШЕДШИЕ МЕСЯЦЫ"), "сентябрь ниже разделителя");
+  const divider = c.indexOf("▼ ПРОШЕДШИЕ МЕСЯЦЫ") + 1; // строка разделителя (с 1)
+  const octGroup = sch.groups.find((x) => x.from === 3);
+  assert.ok(octGroup && octGroup.to === divider - 1, "группа актуального месяца включает пять свободных строк: сворачивается вместе с ними");
   assert.ok(sch.getMaxRows() <= sch.getLastRow() + 1, "под последним прошедшим месяцем лишних пустых строк нет: лист компактный");
 });

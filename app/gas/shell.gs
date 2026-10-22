@@ -846,7 +846,7 @@ function groupMonths_(sheet, fresh) {
   for (let r = 2; r <= last; r++) {
     const t = String(col[r - 1][0]).trim();
     if (MONTH_ROW_RE.test(t)) months.push({head: r, title: t, end: r, closed: false});
-    else if (t === PAST_DIVIDER_) { if (months.length) months[months.length - 1].closed = true; }
+    else if (t === PAST_DIVIDER_) { if (months.length) { const lm = months[months.length - 1]; lm.closed = true; lm.end = r - 1; } } // блок последнего актуального месяца включает свободные строки под ним: свернули — шапка октября оказалась прямо над разделителем и сентябрём
     else if (months.length && !months[months.length - 1].closed && !isBlankRow_([col[r - 1][0]])) months[months.length - 1].end = r; // пустые строки и разделитель в группу месяца не входят
   }
   if (!months.length) return;
