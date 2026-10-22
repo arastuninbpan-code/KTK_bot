@@ -190,3 +190,16 @@ test("при первом оформлении сверху главных ли�
   assert.equal(g.ss.getSheetByName(TABS.schedule).getDataRange().getDisplayValues()[2][0], "Дата");
   assert.equal(g.ss.getSheetByName(TABS.schedule).getDataRange().getDisplayValues()[3][0].length > 0, true);
 });
+
+test("оформление как в образце: шапки и верхние строки #04A9F1, высота 44, закреплены строки и колонки", () => {
+  const g = loadGas({tabs: {[TABS.schedule]: [HEAD, ["20.10.2026", "19:00", "21:00", "Будущее", "Малая сцена", "", "aaaaaaa3"]], [TABS.staff]: STAFF, [TABS.venues]: [["Площадка", "Заметка", "Цвет"], ["Малая сцена", "", "Розовый"]]}, props: {SHEET_ID: "x", TEST_USERS: "1", OWNER_PHONE: "9000000001"}, now: NOW});
+  g.run("styleSheets()");
+  for (const name of [TABS.schedule, TABS.staff, TABS.venues]) {
+    const log = g.ss.getSheetByName(name).styleLog;
+    assert.ok(log.some((x) => x[0] === "setBackground" && x[2] === "#04A9F1"), name + ": голубой цвет шапки");
+    assert.ok(log.some((x) => x[0] === "rowHeight" && x[1] === 1 && x[2] === 44), name + ": верхние строки по 44");
+    assert.ok(log.some((x) => x[0] === "frozen" && x[1] === 3), name + ": закреплены шапка и две верхние строки");
+  }
+  assert.ok(g.ss.getSheetByName(TABS.staff).styleLog.some((x) => x[0] === "frozenCols" && x[1] === 4));
+  assert.ok(g.ss.getSheetByName(TABS.venues).styleLog.some((x) => x[0] === "frozenCols" && x[1] === 3));
+});

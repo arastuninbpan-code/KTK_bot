@@ -77,7 +77,8 @@ const HEADER_TESTS_ = {
   [TABS.staff]: (c) => c.some((x) => /^(фио|сотрудник|имя)/i.test(x)) && c.some((x) => /телефон|номер/i.test(x)),
   [TABS.venues]: (c) => /^площадка\s*$/i.test(c[0] || "") && c.some((x) => /^цвет/i.test(x)),
 };
-const TOP_ROWS_DEFAULT_ = 2; // сколько строк оставить сверху (свойство TOP_ROWS)
+const TOP_ROWS_DEFAULT_ = 2;
+const FROZEN_COLS_ = {[TABS.staff]: 4, [TABS.venues]: 3}; // закреплённые колонки (ФИО…Логин; Площадка…Цвет), как в образце // сколько строк оставить сверху (свойство TOP_ROWS)
 
 /** Сколько строк лежит над шапкой таблицы (0 — шапка в первой строке). Результат запоминается на 10 минут и проверяется перед использованием. */
 function topOffset_(raw, tab) {
@@ -617,7 +618,7 @@ function deleteWebhook() {
 }
 
 // ---------- оформление таблицы (запустить один раз: styleSheets) ----------
-const C = {navy: "#1B3560", blue: "#0A96DC", light: "#D4F1FC", cream: "#FBF6DC", coral: "#F04E4A", orange: "#F2961E", white: "#FFFFFF"};
+const C = {navy: "#1B3560", head: "#04A9F1", blue: "#0A96DC", light: "#D4F1FC", cream: "#FBF6DC", coral: "#F04E4A", orange: "#F2961E", white: "#FFFFFF"};
 const MONTH_ROW_RE = /^[А-ЯЁ]+ \d{4}$/;
 const ROLE_LIST = ["Админ", "Редактор", "Читатель", "Заблокирован", "Заявка"];
 
@@ -634,7 +635,10 @@ function ensureTopRows_(ss) {
     const first = raw.getRange(1, 1, 1, Math.max(raw.getLastColumn(), 1)).getDisplayValues()[0].map((x) => String(x).trim());
     if (!HEADER_TESTS_[name](first)) return; // шапка не в первой строке (сверху уже что-то есть) или не узнана: ничего не вставляем
     raw.insertRowsBefore(1, n);
-    try { raw.setFrozenRows(n + 1); } catch (e) { /* закрепление не обязательно */ }
+    const lastCol = Math.max(raw.getLastColumn(), 4);
+    raw.getRange(1, 1, n, lastCol).setBackground(C.head); // фон под вашу картинку совпадает с шапкой таблицы: нет резкого перехода
+    for (let r = 1; r <= n; r++) raw.setRowHeight(r, 44);
+    try { raw.setFrozenRows(n + 1); const fc = FROZEN_COLS_[name] || 0; if (fc) raw.setFrozenColumns(fc); } catch (e) { /* закрепление не обязательно */ }
   });
   dropAllCaches_();
   CacheService.getScriptCache().removeAll(Object.keys(HEADER_TESTS_).map((t) => "TOP:" + t));
@@ -694,7 +698,7 @@ function seedVenues_(book) {
 }
 
 function styleHeader_(sheet, cols) {
-  sheet.getRange(1, 1, 1, cols).setBackground(C.blue).setFontColor(C.white).setFontWeight("bold").setHorizontalAlignment("center")
+  sheet.getRange(1, 1, 1, cols).setBackground(C.head).setFontColor(C.white).setFontWeight("bold").setHorizontalAlignment("center")
     .setVerticalAlignment("middle").setWrap(true);
   sheet.setRowHeight(1, 44);
   sheet.setFrozenRows(1);
@@ -1592,7 +1596,7 @@ function maintainDaily_(force) {
 function runMaintenance() { maintainDaily_(true); }
 
 function styleHeaderRange_(range) {
-  range.setBackground(C.blue).setFontColor(C.white).setFontWeight("bold").setHorizontalAlignment("center").setVerticalAlignment("middle").setWrap(true);
+  range.setBackground(C.head).setFontColor(C.white).setFontWeight("bold").setHorizontalAlignment("center").setVerticalAlignment("middle").setWrap(true);
 }
 
 function styleVenues_(sheet) {

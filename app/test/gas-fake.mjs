@@ -74,6 +74,7 @@ class Sheet {
   setRowHeight(r, h) { this.styleLog.push(["rowHeight", r, h]); }
   setColumnWidth(c, w) { this.styleLog.push(["colWidth", c, w]); }
   setFrozenRows(n) { this.styleLog.push(["frozen", n]); }
+  setFrozenColumns(n) { this.styleLog.push(["frozenCols", n]); }
   setConditionalFormatRules(rules) { this.rules = rules; }
   getConditionalFormatRules() { return this.rules; }
 }

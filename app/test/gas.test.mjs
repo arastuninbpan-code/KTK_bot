@@ -132,7 +132,7 @@ test("styleSheets: перенос в новый формат (копия сох�
   assert.ok(occ.some((r) => r[0] === "ОКТЯБРЬ 2026") && occ.some((r) => r[0] === "04.10" && r[1] === "11:00" && /Малая сцена/.test(r[2])), "занятость по месяцам и по времени");
   const log = g.ss.getSheetByName("Расписание").styleLog;
   assert.ok(log.some((l) => l[0] === "setBackground" && l[2] === "#1B3560")); // шапки месяцев
-  assert.ok(log.some((l) => l[0] === "setBackground" && l[2] === "#0A96DC")); // заголовки колонок
+  assert.ok(log.some((l) => l[0] === "setBackground" && l[2] === "#04A9F1")); // заголовки колонок
   assert.equal(g.ss.getSheetByName("Расписание").rules[0].calls[0][0], "whenFormulaSatisfied");
   assert.ok(log.some((l) => l[0] === "validation" && l[1].calls.some((c) => c[0] === "requireValueInRange"))); // площадка — выпадающий список
   const staff = g.ss.getSheetByName("Сотрудники");
@@ -474,7 +474,7 @@ test("новая колонка-группа в «Сотрудниках» оф�
   g.run(`onSheetChange({range: {getSheet: () => SpreadsheetApp.openById("x").getSheetByName("Сотрудники"), getRow: () => 1, getValue: () => "обычные"}, value: "обычные"})`);
   const log = staff.styleLog.slice(before);
   assert.ok(log.some((l) => l[0] === "validation" && l[1].calls.some((c) => c[0] === "requireCheckbox")), "галочки");
-  assert.ok(log.some((l) => l[0] === "setBackground" && l[2] === "#0A96DC"), "цвет шапки");
+  assert.ok(log.some((l) => l[0] === "setBackground" && l[2] === "#04A9F1"), "цвет шапки");
 });
 
 test("«Сотрудники» как в жизни: тысяча строк-заготовок и заявка, улетевшая вниз, — чистятся, заявка поднимается наверх", () => {
