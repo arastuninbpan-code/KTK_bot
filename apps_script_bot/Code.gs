@@ -1459,7 +1459,7 @@ function readToken(token, secret, now = Date.now()) {
 // ===== lib/api.mjs =====
 // API приложения. Чистая функция: запрос -> {status, body}. Синхронный код, никакой привязки к платформе.
 
-const SERVER_VERSION = "2026.10.22-24"; // меняется при каждом выпуске; приложение показывает её в профиле
+const SERVER_VERSION = "2026.10.22-25"; // меняется при каждом выпуске; приложение показывает её в профиле
 
 class HttpError extends Error {
   constructor(status, message, extra = {}) { super(message); this.status = status; this.extra = extra; }
@@ -1736,9 +1736,10 @@ function handleApi(req, deps) {
       }
       bumpRev();
       afterChange();
-      // при создании собрания рассылаем сразу; при редактировании — только по кнопке «Разослать» (meta.resend): так можно позже приложить документ с итогами и выложить его
+      // рассылка собрания по галочкам: сотрудникам в личные сообщения (meta.sendDm) и/или в группу ВК и канал (meta.publish).
+      // При создании рассылаем, если не отменили (announce: false); при редактировании — только когда приложение прислало resend (что-то отмечено).
       if (meta && id && meta.kind === "meeting" && (method === "POST" ? meta.announce !== false : meta.resend === true)) {
-        try { announce({kind: "meeting", event: {...event, id}, note: String(meta.note || ""), publish: meta.publish !== false}); } catch (e) { console.error(String(e.message || e)); }
+        try { announce({kind: "meeting", event: {...event, id}, note: String(meta.note || ""), publish: meta.publish !== false, dm: meta.sendDm !== false}); } catch (e) { console.error(String(e.message || e)); }
       }
       return {status: 200, body: {ok: true, id}};
     }
@@ -2307,7 +2308,7 @@ function announce_(a) {
   const btn = appButton(appUrl ? appUrl + "#event=" + encodeURIComponent(e.id || "") : "");
   const people = new Set(st.activeUsers().map((u) => u.phone));
   let sent = 0;
-  st.chats().filter((c) => people.has(c.phone)).forEach((c) => {
+  if (a.dm !== false) st.chats().filter((c) => people.has(c.phone)).forEach((c) => { // личные сообщения — по галочке «Разослать сотрудникам»
     try { if (SENDERS[c.channel]) { SENDERS[c.channel].send(c.chatId, text, btn); sent++; } }
     catch (err) { if (err instanceof Gone) st.unbind(c.channel, c.chatId); else console.error(String(err && err.message ? err.message : err)); }
   });

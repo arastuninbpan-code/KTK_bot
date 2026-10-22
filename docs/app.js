@@ -1144,8 +1144,8 @@ function saveEventOptimistic(orig, event, force, meta) {
 function editor(e) {
   const times = e && e.time ? e.time.split(/,\s*/) : [];
   const draft = e
-    ? {row: e.row, rev: e.rev, kind: (e.meta && e.meta.kind) || "event", note: (e.meta && e.meta.note) || "", publish: false, title: e.title, date: e.date, dateEnd: e.dateEnd || "", time: times[0] || "", extra: times.slice(1), end: e.end || "", hall: e.hall || "", roles: JSON.parse(JSON.stringify(e.roles))}
-    : {kind: "event", note: "", publish: true, title: "", date: state.today, dateEnd: "", time: "", extra: [], end: "", hall: "", roles: {}};
+    ? {row: e.row, rev: e.rev, kind: (e.meta && e.meta.kind) || "event", note: (e.meta && e.meta.note) || "", sendDm: false, publish: false, title: e.title, date: e.date, dateEnd: e.dateEnd || "", time: times[0] || "", extra: times.slice(1), end: e.end || "", hall: e.hall || "", roles: JSON.parse(JSON.stringify(e.roles))}
+    : {kind: "event", note: "", sendDm: true, publish: true, title: "", date: state.today, dateEnd: "", time: "", extra: [], end: "", hall: "", roles: {}};
   const {ov, close} = overlay("");
   const paint = () => {
     const venues = [...new Set([...state.venues, draft.hall].filter(Boolean))];
@@ -1195,26 +1195,25 @@ function editor(e) {
     }, ".docx,.odt,.txt,.md,text/plain")}, draft.reading ? "Читаю документ…" : "📄 Взять текст из документа");
     const docHint = h("div", {class: "hint-line"}, draft.row ? "Можно заменить текст или добавить документ (например, итоги после собрания). Чтобы разослать новый текст прямо сейчас, нажмите кнопку «Разослать» ниже." : "Прикрепите документ Word (.docx), .odt или .txt: его текст попадёт в описание, а оттуда в группу ВК и в личные сообщения всем сотрудникам. Перед отправкой текст можно поправить." + (draft.note.length > 3500 ? " Текст длинный: он уйдёт несколькими сообщениями." : ""));
     const fileList = h("div", {class: "files"}, docBtn, docHint);
-    const announceBox = !draft.row ? h("label", {class: "check"}, h("input", {type: "checkbox", checked: draft.publish, onchange: (ev) => (draft.publish = ev.target.checked)}), h("span", {}, "Когда рассылаете: выложить ещё и в группу ВК и канал")) : null;
-    // «Разослать»: сотрудникам в личные сообщения и (по галочке) в группу ВК и канал. Обычное «Создать» / «Сохранить» ничего не рассылает.
-    // Так можно создать собрание заранее, а разослать позже — или приложить документ с итогами и разослать уже после собрания.
-    const resendBtn = h("button", {class: "btn light", onclick: () => {
-      if (!draft.note.trim()) { toast("Сначала добавьте текст или документ", {bad: true}); return; }
-      confirmDialog(draft.row ? "Разослать собрание?" : "Создать и разослать?", `Текст уйдёт всем сотрудникам в личные сообщения${draft.row || draft.publish ? " и будет выложен в группе ВК и канале" : ""}. ${draft.row ? "Изменения в собрании тоже сохранятся." : "Собрание будет создано."}`, "Разослать", () => { draft.resend = true; if (draft.row) draft.publish = true; doSave(false); });
-    }}, draft.row ? "📣 Разослать сотрудникам и выложить в ВК" : "📣 Создать и разослать сотрудникам");
-    const meetingBlock = meeting ? h("div", {class: "meetblock"}, h("label", {class: "field"}, h("span", {}, "Текст собрания"), note), h("div", {class: "field"}, h("span", {}, "Документ"), fileList), announceBox, resendBtn) : null;
+    // две галочки: разослать сотрудникам в личные сообщения и/или выложить в группу ВК и канал. Отметили — уйдёт при «Создать» / «Сохранить».
+    // При создании обе включены; при редактировании выключены (поправили текст или приложили документ с итогами — отметьте, если нужно разослать).
+    const announceBox = h("div", {class: "sendbox"},
+      h("label", {class: "check"}, h("input", {type: "checkbox", checked: draft.sendDm, onchange: (ev) => (draft.sendDm = ev.target.checked)}), h("span", {}, "Разослать сотрудникам в личные сообщения")),
+      h("label", {class: "check"}, h("input", {type: "checkbox", checked: draft.publish, onchange: (ev) => (draft.publish = ev.target.checked)}), h("span", {}, "Выложить в группу ВК и канал")),
+      draft.row ? h("div", {class: "hint-line"}, "Если ничего не отмечено, собрание просто сохранится без рассылки.") : null);
+    const meetingBlock = meeting ? h("div", {class: "meetblock"}, h("label", {class: "field"}, h("span", {}, "Текст собрания"), note), h("div", {class: "field"}, h("span", {}, "Документ"), fileList), announceBox) : null;
     const save = h("button", {class: "btn", disabled: Boolean(draft.uploading)}, draft.row ? "Сохранить" : (meeting ? "Создать собрание" : "Создать"));
     const doSave = (force) => {
       err.textContent = "";
       const event = {title: draft.title.trim(), date: draft.date, dateEnd: draft.dateEnd || "", time: [draft.time, ...draft.extra].filter(Boolean).join(", "), end: draft.end, hall: draft.hall, roles: draft.roles};
-      if (!event.title) { draft.resend = false; return shakeBad(title, err, "Введите название события"); }
-      if (!event.date) { draft.resend = false; return shakeBad(date, err, "Укажите дату"); }
-      if (badPeople.length) { draft.resend = false; err.textContent = "Не могут работать в эти дни: " + badPeople.join(", ") + ". Уберите их или смените дату."; return; }
+      if (!event.title) return shakeBad(title, err, "Введите название события");
+      if (!event.date) return shakeBad(date, err, "Укажите дату");
+      if (badPeople.length) { err.textContent = "Не могут работать в эти дни: " + badPeople.join(", ") + ". Уберите их или смените дату."; return; }
       if (!force && clash.length) { confirmDialog("Площадка занята", `Площадка занята: ${clash.map((c) => `${c.title} (${timeLabel(c)})`).join("; ")}. Сохранить всё равно?`, "Сохранить", () => doSave(true)); return; }
       close();
       const meta = draft.kind === "meeting" || (e && e.meta && (e.meta.kind === "meeting" || e.meta.note))
-        ? {kind: draft.kind, note: draft.note.trim(), publish: draft.publish, ...(draft.resend ? {resend: true} : {}), ...(!draft.row && !draft.resend ? {announce: false} : {})} : null;
-      draft.resend = false;
+        ? {kind: draft.kind, note: draft.note.trim(), sendDm: draft.sendDm, publish: draft.publish,
+          ...(draft.kind === "meeting" && (draft.sendDm || draft.publish) ? (draft.row ? {resend: true} : {}) : {announce: false})} : null;
       saveEventOptimistic(e, event, force || clash.length > 0, meta);
     };
     save.addEventListener("click", () => doSave(false));

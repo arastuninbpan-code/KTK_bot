@@ -5,7 +5,7 @@ import {platform} from "./platform.mjs";
 import {archiveLine, buildReport, checkParams, parseArchive, reportCsv} from "./report.mjs";
 import {canEdit, cleanPhotoIds, colorName, ROLE_LABELS, TABS, VENUE_COLORS} from "./store.mjs";
 
-export const SERVER_VERSION = "2026.10.22-24"; // меняется при каждом выпуске; приложение показывает её в профиле
+export const SERVER_VERSION = "2026.10.22-25"; // меняется при каждом выпуске; приложение показывает её в профиле
 
 class HttpError extends Error {
   constructor(status, message, extra = {}) { super(message); this.status = status; this.extra = extra; }
@@ -282,9 +282,10 @@ export function handleApi(req, deps) {
       }
       bumpRev();
       afterChange();
-      // при создании собрания рассылаем сразу; при редактировании — только по кнопке «Разослать» (meta.resend): так можно позже приложить документ с итогами и выложить его
+      // рассылка собрания по галочкам: сотрудникам в личные сообщения (meta.sendDm) и/или в группу ВК и канал (meta.publish).
+      // При создании рассылаем, если не отменили (announce: false); при редактировании — только когда приложение прислало resend (что-то отмечено).
       if (meta && id && meta.kind === "meeting" && (method === "POST" ? meta.announce !== false : meta.resend === true)) {
-        try { announce({kind: "meeting", event: {...event, id}, note: String(meta.note || ""), publish: meta.publish !== false}); } catch (e) { console.error(String(e.message || e)); }
+        try { announce({kind: "meeting", event: {...event, id}, note: String(meta.note || ""), publish: meta.publish !== false, dm: meta.sendDm !== false}); } catch (e) { console.error(String(e.message || e)); }
       }
       return {status: 200, body: {ok: true, id}};
     }

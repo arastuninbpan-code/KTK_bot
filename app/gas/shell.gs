@@ -374,7 +374,7 @@ function announce_(a) {
   const btn = appButton(appUrl ? appUrl + "#event=" + encodeURIComponent(e.id || "") : "");
   const people = new Set(st.activeUsers().map((u) => u.phone));
   let sent = 0;
-  st.chats().filter((c) => people.has(c.phone)).forEach((c) => {
+  if (a.dm !== false) st.chats().filter((c) => people.has(c.phone)).forEach((c) => { // личные сообщения — по галочке «Разослать сотрудникам»
     try { if (SENDERS[c.channel]) { SENDERS[c.channel].send(c.chatId, text, btn); sent++; } }
     catch (err) { if (err instanceof Gone) st.unbind(c.channel, c.chatId); else console.error(String(err && err.message ? err.message : err)); }
   });
