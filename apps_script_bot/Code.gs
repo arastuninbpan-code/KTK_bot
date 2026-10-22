@@ -1433,7 +1433,7 @@ class Store {
   /** {ID события: {телефон: "ok"|"no"}} */
   ackMap() {
     const out = {};
-    for (const a of this.acks()) (out[a.eventId] ||= {})[a.phone] = a.status;
+    for (const a of this.acks()) { if (!out[a.eventId]) out[a.eventId] = {}; out[a.eventId][a.phone] = a.status; } // без «||=»: Apps Script его не понимает
     return out;
   }
   /** Записывает отметку (одна на человека и событие; можно передумать). -> true, если статус изменился. */
@@ -1528,7 +1528,7 @@ function readToken(token, secret, now = Date.now()) {
 // ===== lib/api.mjs =====
 // API приложения. Чистая функция: запрос -> {status, body}. Синхронный код, никакой привязки к платформе.
 
-const SERVER_VERSION = "2026.10.22-19"; // меняется при каждом выпуске; приложение показывает её в профиле
+const SERVER_VERSION = "2026.10.22-20"; // меняется при каждом выпуске; приложение показывает её в профиле
 
 class HttpError extends Error {
   constructor(status, message, extra = {}) { super(message); this.status = status; this.extra = extra; }

@@ -454,7 +454,7 @@ export class Store {
   /** {ID события: {телефон: "ok"|"no"}} */
   ackMap() {
     const out = {};
-    for (const a of this.acks()) (out[a.eventId] ||= {})[a.phone] = a.status;
+    for (const a of this.acks()) { if (!out[a.eventId]) out[a.eventId] = {}; out[a.eventId][a.phone] = a.status; } // без «||=»: Apps Script его не понимает
     return out;
   }
   /** Записывает отметку (одна на человека и событие; можно передумать). -> true, если статус изменился. */
