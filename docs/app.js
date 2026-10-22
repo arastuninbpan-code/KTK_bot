@@ -122,50 +122,102 @@ async function api(method, path, body) {
     data = await r.json().catch(() => ({}));
     status = r.status;
   }
-  if (status === 401 && state.token) { logout(); throw new Error("Войдите заново"); }
+  if (status === 401 && state.token) { logout(true); throw new Error("Войдите заново"); }
   if (status >= 400) { const e = new Error(data.error || "Ошибка"); e.status = status; e.data = data; throw e; }
   return data;
 }
 
-// ---------- «сразу и красиво»: изменения показываем мгновенно, а на сервер они уходят следом по очереди ----------
-// Ждать ответа Google не нужно: правка уже на экране. Если сервер отказал — покажем причину и вернём то, что у него на самом деле.
-const opQueue = [];
-let opRunning = false, opsRan = false, opsPending = 0;
+// ---------- «сразу и красиво»: всё меняется на экране мгновенно, а на сервер уходит своим ходом ----------
+// Каждая правка — маленькая запись в очереди. Очередь хранится на телефоне: если сервер не отвечает или нет интернета, запись
+// ждёт и уходит позже (даже после перезапуска приложения). Пока она не ушла, правка накладывается поверх данных с сервера,
+// поэтому на экране всё выглядит так, как задумал пользователь. Если сервер отказал по существу — покажем причину и вернём то, что у него.
+const QKEY = "ktk_queue";
+let queue = (() => { try { const q = JSON.parse(localStorage.getItem(QKEY) || "[]"); return Array.isArray(q) ? q : []; } catch (_) { return []; } })();
+let sending = false, retryTimer = 0, retryMs = 4000;
 const syncEl = (() => { const d = document.createElement("div"); d.className = "syncdot"; d.setAttribute("aria-hidden", "true"); document.body.append(d); return d; })();
-const syncMark = () => syncEl.classList.toggle("on", opsPending > 0);
-function enqueue(run) {
-  opsPending++; syncMark();
-  opQueue.push(run);
+const syncMark = () => syncEl.classList.toggle("on", queue.length > 0);
+const saveQueue = () => { try { localStorage.setItem(QKEY, JSON.stringify(queue)); } catch (_) {} syncMark(); };
+syncMark();
+const newEventId = () => Array.from(crypto.getRandomValues(new Uint8Array(4)), (b) => b.toString(16).padStart(2, "0")).join("");
+const colorHex = (name) => ((state.palette || []).find((c) => c.name === name) || {}).hex || FALLBACK_HEX;
+const tmpRow = (id) => -((parseInt(id || "0", 16) || Date.now()) + 1); // у ещё не отправленного события временный отрицательный номер строки
+
+/** Накладывает одну правку из очереди на то, что показано на экране (повторное наложение ничего не портит). */
+function applyOp(op) {
+  if (op.t === "evNew" || op.t === "evEdit") {
+    const prev = state.events.find((x) => (op.id ? x.id === op.id : x.row === op.row));
+    const mine = Object.entries(op.event.roles || {}).filter(([, names]) => names.includes(state.me.name)).map(([role]) => role);
+    const local = {...op.event, id: op.id || "", mine, rev: "tmp", pending: true, row: prev ? prev.row : tmpRow(op.id), comments: prev ? prev.comments : 0, meta: op.meta || (prev && prev.meta) || {kind: "event", note: ""}};
+    state.events = prev ? state.events.map((x) => (x === prev ? local : x)) : [...state.events, local];
+    sortEvents();
+  } else if (op.t === "evDel") {
+    state.events = state.events.filter((x) => (op.id ? x.id !== op.id : x.row !== op.row));
+  } else if (op.t === "vAdd") {
+    if (!state.venues.some((v) => hallKey(v) === hallKey(op.name))) state.venues = [...state.venues, op.name];
+    state.venueColors[op.name] = colorHex(op.color);
+  } else if (op.t === "vColor") {
+    state.venueColors[op.name] = colorHex(op.color);
+  } else if (op.t === "vDel") {
+    state.venues = state.venues.filter((v) => hallKey(v) !== hallKey(op.name));
+    delete state.venueColors[op.name];
+  } else if (op.t === "off") {
+    state.me.off = [...new Set([...(state.me.off || []).filter((d) => !op.remove.includes(d)), ...op.add])].sort();
+  }
+}
+const applyQueue = () => { for (const op of queue) { try { applyOp(op); } catch (_) {} } };
+
+/** Добавляет правку в очередь и сразу показывает её. Несколько правок одного события, ещё не ушедшие на сервер, сливаются в одну. */
+function enqueue(op) {
+  const evt = op.t.startsWith("ev");
+  const busy = (i) => sending && i === 0; // первая запись, пока уходит, не трогаем
+  if (evt && op.id) {
+    const at = queue.findIndex((q, i) => q.id === op.id && q.t.startsWith("ev") && !busy(i));
+    const found = at >= 0 ? queue[at] : null;
+    if (found && op.t === "evEdit" && (found.t === "evNew" || found.t === "evEdit")) { Object.assign(found, {event: op.event, meta: op.meta || found.meta, force: op.force || found.force}); }
+    else if (found && op.t === "evDel" && found.t === "evNew") { queue.splice(at, 1); } // создали и удалили, не отправив: на сервере ничего нет
+    else if (found && op.t === "evDel") { queue.splice(at, 1); queue.push(op); }
+    else queue.push(op);
+  } else queue.push(op);
+  applyOp(op);
+  saveQueue();
   pumpQueue();
 }
+const sendOp = (op) => {
+  const target = op.id ? "id-" + op.id : String(op.row);
+  const byRow = op.id ? {} : {rev: op.rev};
+  switch (op.t) {
+    case "evNew": return api("POST", "/api/events", {event: op.event, id: op.id, force: op.force || undefined, meta: op.meta || undefined});
+    case "evEdit": return api("PUT", `/api/events/${target}`, {event: op.event, ...byRow, force: op.force || undefined, meta: op.meta || undefined});
+    case "evDel": return api("DELETE", `/api/events/${target}`, byRow);
+    case "vAdd": return api("POST", "/api/venues", {name: op.name, color: op.color});
+    case "vColor": return api("PUT", "/api/venues", {name: op.name, color: op.color});
+    case "vDel": return api("DELETE", "/api/venues", {name: op.name});
+    case "off": return api("POST", "/api/off", {add: op.add, remove: op.remove});
+  }
+  return Promise.resolve();
+};
+/** Сервер просто не ответил (нет сети, сбой Google): правку не теряем, пробуем позже. Отказ по существу (4xx) — нет. */
+const retryable = (e) => Boolean(e.offline) || !e.status || e.status >= 500;
 async function pumpQueue() {
-  if (opRunning) return;
-  opRunning = true;
-  opsRan = false;
-  while (opQueue.length) {
-    const run = opQueue.shift();
-    try { await run(); } catch (e) { if (state.token) toast(e.message || "Не удалось сохранить", {bad: true}); }
-    opsRan = true;
-    opsPending--; syncMark();
+  if (sending || !state.token || !queue.length) return;
+  clearTimeout(retryTimer);
+  sending = true;
+  let drained = true;
+  while (queue.length && state.token) {
+    const op = queue[0];
+    try { await sendOp(op); queue.shift(); saveQueue(); retryMs = 4000; }
+    catch (e) {
+      if (!state.token) break;
+      if (retryable(e)) {
+        if (!e.offline) op.tries = (op.tries || 0) + 1;
+        if ((op.tries || 0) < 6) { saveQueue(); drained = false; retryTimer = setTimeout(pumpQueue, retryMs); retryMs = Math.min(retryMs * 1.7, 30000); break; }
+      }
+      queue.shift(); saveQueue(); // отказ: правка не принята
+      toast(e.message || "Не удалось сохранить", {bad: true});
+    }
   }
-  opRunning = false;
-  if (state.token) await load(false, true); // сверяемся с сервером: строки получают настоящие номера, отклонённое откатывается
-}
-/** Событие, которое правим/удаляем, на сервере могло сменить номер строки (предыдущие правки из очереди): находим его заново по содержимому. */
-async function resolveTarget(orig) {
-  if (!orig) return null;
-  if (orig.pending) { // ещё не дошло до сервера: ждём его ответа и находим событие по ID
-    const id = await orig._done;
-    const d = await api("GET", "/api/schedule");
-    const found = d.events.find((x) => (id && x.id === id) || (!id && x.title === orig.title && x.date === orig.date));
-    if (!found) throw new Error("Событие не найдено. Обновите страницу.");
-    return found;
-  }
-  if (!opsRan) return orig;
-  const d = await api("GET", "/api/schedule");
-  const found = d.events.find((x) => x.rev === orig.rev && x.title === orig.title);
-  if (!found) throw new Error("Событие уже изменили. Обновите страницу и повторите.");
-  return found;
+  sending = false;
+  if (state.token && drained) await load(false, true); // сверяемся с сервером: события получают настоящие номера, отклонённое откатывается
 }
 const sortEvents = () => state.events.sort((a, b) => (a.date + (a.time || "")).localeCompare(b.date + (b.time || "")));
 const offlineNow = () => state.offline || navigator.onLine === false;
@@ -177,8 +229,13 @@ function shakeBad(input, err, text) {
   try { input.scrollIntoView({block: "center", behavior: "smooth"}); input.focus({preventScroll: true}); } catch (_) {}
 }
 
-function logout() {
-  try { localStorage.removeItem("ktk_token"); localStorage.removeItem("ktk_cache"); } catch (_) {}
+/** keepQueue: вход «истёк» сам, не по кнопке — несохранённые правки не выбрасываем, они уйдут после нового входа. */
+function logout(keepQueue = false) {
+  clearTimeout(retryTimer);
+  if (!keepQueue) queue = [];
+  try { localStorage.removeItem("ktk_token"); localStorage.removeItem("ktk_cache"); if (!keepQueue) localStorage.removeItem(QKEY); } catch (_) {}
+  sending = false;
+  syncMark();
   Object.assign(state, {token: "", me: null, events: [], ready: false});
   render();
 }
@@ -287,6 +344,7 @@ function loginView() {
     try {
       const r = await api("POST", "/api/login", {login: input.value.trim()});
       state.token = r.token; localStorage.setItem("ktk_token", r.token);
+      if (queue.length) pumpQueue(); // правки, оставшиеся с прошлого входа
       await load();
     } catch (e) { input.disabled = false; reject(e.message); input.focus(); } finally { busy = false; btn.disabled = false; btn.textContent = "Войти"; }
   }
@@ -459,12 +517,12 @@ function chatCacheWrite(id, items) {
 /** Фоном подгружаем переписки событий, где появились новые сообщения, чтобы при входе они уже были на телефоне. */
 let prefetching = false;
 async function prefetchChats() {
-  if (prefetching || offlineNow() || opsPending > 0) return;
+  if (prefetching || offlineNow() || queue.length > 0) return;
   prefetching = true;
   try {
     const todo = state.events.filter((e) => e.id && e.comments > 0 && upcoming(e) && ((chatCacheRead(e.id) || {items: []}).items.length !== e.comments)).slice(0, 6);
     for (const e of todo) {
-      if (offlineNow() || opsPending > 0) break;
+      if (offlineNow() || queue.length > 0) break;
       try { const r = await api("GET", "/api/comments", {event: e.id}); chatCacheWrite(e.id, r.items); for (const m of r.items.slice(-6)) for (const pid of m.photos || []) photoData(pid).catch(() => {}); } catch (_) { break; }
     }
   } finally { prefetching = false; }
@@ -611,6 +669,7 @@ async function pumpChat() {
 
 /** Переписка по событию: как в мессенджере — пузыри, аватарки, вложения, поле ввода внизу. Писать и прикладывать файлы может любой сотрудник. */
 function chatSheet(e) {
+  if (e.pending) return toast("Обсуждение откроется, когда событие дойдёт до сервера", {bad: true});
   if (!e.id) return toast("Событие ещё готовится. Попробуйте через минуту.", {bad: true});
   const cached = chatCacheRead(e.id);
   let polling = false, items = cached ? cached.items.slice() : [], lastTs = items.reduce((a, m) => Math.max(a, m.ts), 0), attach = [], loaded = Boolean(cached);
@@ -805,13 +864,10 @@ function addVenueSheet(onAdded) {
   const add = h("button", {class: "btn", onclick: async () => {
     const name = input.value.trim().split(/\s+/).join(" ");
     if (!name) return shakeBad(input, err, "Введите название площадки");
-    if (offlineNow()) { err.textContent = "Нет интернета: добавить можно, когда появится сеть."; return; }
     close();
-    if (!state.venues.some((v) => hallKey(v) === hallKey(name))) state.venues.push(name);
-    state.venueColors[name] = ((state.palette || []).find((c) => c.name === color) || {}).hex || FALLBACK_HEX;
+    enqueue({t: "vAdd", name, color});
     render();
     if (onAdded) onAdded(name);
-    enqueue(async () => { await api("POST", "/api/venues", {name, color}); });
   }}, "Добавить");
   const {close} = overlay(sheet(h("h2", {}, "Новая площадка"), h("label", {class: "field"}, h("span", {}, "Название"), input),
     h("div", {class: "field"}, h("span", {}, "Цвет"), pick), err,
@@ -826,11 +882,9 @@ function venueSheet(name) {
   const current = (palette.find((c) => c.hex === hexOfHall(name)) || {}).name || "";
   const body = h("div", {});
   const paint = (sel) => body.replaceChildren(swatches(sel, (color) => {
-    if (offlineNow()) return toast("Нет интернета: цвет можно сменить, когда появится сеть", {bad: true});
     paint(color);
-    state.venueColors[name] = (palette.find((c) => c.name === color) || {}).hex || FALLBACK_HEX;
-    render(); // календарь за панелью перекрашивается сразу
-    enqueue(async () => { await api("PUT", "/api/venues", {name, color}); });
+    enqueue({t: "vColor", name, color});
+    render(); // календарь и плашки событий за панелью перекрашиваются сразу
   }));
   const {close} = overlay(sheet(h("h2", {}, cap(name)), h("div", {class: "field"}, h("span", {}, "Цвет"), body),
     h("div", {class: "actions"},
@@ -840,12 +894,9 @@ function venueSheet(name) {
 }
 
 function removeVenue(name) {
-  if (offlineNow()) return toast("Нет интернета: убрать площадку можно, когда появится сеть", {bad: true});
   if (state.events.some((e) => hallKey(e.hall) === hallKey(name) && upcoming(e))) return toast("На этой площадке есть будущие события. Сначала перенесите их.", {bad: true});
-  state.venues = state.venues.filter((v) => hallKey(v) !== hallKey(name));
-  delete state.venueColors[name];
+  enqueue({t: "vDel", name});
   render();
-  enqueue(async () => { await api("DELETE", "/api/venues", {name}); });
 }
 
 /** Плашка «нет интернета»: показываем последнее, что удалось загрузить, и когда это было. */
@@ -855,7 +906,7 @@ function offlineBar() {
   const hhmm = d ? d.toLocaleTimeString("ru-RU", {hour: "2-digit", minute: "2-digit"}) : "";
   const same = d && d.toDateString() === new Date().toDateString();
   const when = d ? (same ? "сегодня в " + hhmm : d.toLocaleDateString("ru-RU", {day: "numeric", month: "long"}) + " в " + hhmm) : "";
-  return h("div", {class: "note offline", role: "status"}, icon("alert"), h("span", {}, "Нет интернета. Показано последнее сохранённое" + (when ? " (" + when + ")" : "") + ". Изменить расписание можно, когда появится сеть."));
+  return h("div", {class: "note offline", role: "status"}, icon("alert"), h("span", {}, "Нет интернета. Показано последнее сохранённое" + (when ? " (" + when + ")" : "") + ". Менять можно как обычно: правки видны сразу и отправятся, когда появится связь."));
 }
 function setOffline(on) { if (state.offline !== on) { state.offline = on; render(); } }
 
@@ -906,11 +957,10 @@ function profileSheet() {
     save.disabled = !dirty();
   };
   save.addEventListener("click", () => {
-    if (offlineNow()) return toast("Нет интернета: сохранить можно, когда появится сеть", {bad: true});
     const add = [...off].filter((d) => !orig.has(d)), remove = [...orig].filter((d) => !off.has(d));
     state.me.off = [...off].sort();
     close();
-    enqueue(async () => { await api("POST", "/api/off", {add, remove}); });
+    enqueue({t: "off", add, remove});
   });
   const {close} = overlay(sheet(
     h("div", {class: "profhead"}, (state.avatars[me.uid] ? avatarEl(me.uid, me.name, "avatar big") : h("img", {class: "avatar big", src: "avatar.webp", alt: ""})), h("div", {}, h("h2", {}, me.name), h("span", {class: "badge " + me.role}, me.roleLabel))),
@@ -1010,20 +1060,21 @@ function render() {
   window.scrollTo(0, scroll);
 }
 
-let loading = false;
+let loading = false, loadAgain = false;
 async function load(manual = false, force = false) {
   if (!state.token) return render();
-  if (loading) return;
-  if (opsPending > 0 && !force) return; // идёт отправка правок: подгрузка стёрла бы то, что на экране
+  if (loading) { if (force) loadAgain = true; return; } // идёт загрузка: после неё сверимся ещё раз
   if (navigator.onLine === false && state.ready) { setOffline(true); if (manual) toast("Нет интернета: показано последнее сохранённое", {bad: true}); return; }
   loading = true;
   try {
     const d = await api("GET", "/api/schedule");
     const next = {me: d.me, events: d.events, roles: d.roles, allRoles: d.allRoles || d.roles, staff: d.staff || [], venues: d.venues || [], venueColors: d.venueColors || {}, palette: d.palette || [], unavailable: d.unavailable || {}, groups: d.groups || [], layout: d.layout || 2, rev: d.rev || "", today: d.today};
     Object.assign(state, next, {ready: true, offline: false, savedAt: Date.now(), serverVersion: d.version || ""});
+    const server = JSON.stringify({...next, savedAt: 0}); // кеш на телефоне — то, что на сервере; ещё не ушедшие правки накладываем поверх ниже
+    applyQueue();
     if (d.avatarKey && d.avatarKey !== state.avatarKey) loadAvatars(d.avatarKey);
     setTimeout(prefetchChats, 1500); // после показа расписания фоном подгружаем переписки // аватарки меняются редко: грузим только при смене ключа
-    try { localStorage.setItem("ktk_cache", JSON.stringify({...next, savedAt: state.savedAt})); } catch (_) {}
+    try { localStorage.setItem("ktk_cache", JSON.stringify({...JSON.parse(server), savedAt: state.savedAt})); } catch (_) {}
     render();
     if (manual) toast("Обновлено");
   } catch (e) {
@@ -1032,7 +1083,7 @@ async function load(manual = false, force = false) {
     toast(e.message, {bad: true});
     if (!state.ready) root.replaceChildren(h("div", {class: "loading"}, h("div", {class: "empty"}, cloud(), h("h3", {}, "Не удалось загрузить"), h("p", {}, e.message),
       h("div", {class: "stack"}, h("button", {class: "btn", onclick: () => { render(); load(); }}, "Повторить"), h("button", {class: "btn light", onclick: logout}, "Выйти")))));
-  } finally { loading = false; }
+  } finally { loading = false; if (loadAgain) { loadAgain = false; load(false, true); } }
 }
 
 // ---------- редактирование: администратор и редактор ----------
@@ -1043,31 +1094,17 @@ function actionSheet(e) {
 }
 
 function remove(e) {
-  if (offlineNow()) return toast("Нет интернета: удалить можно, когда появится сеть", {bad: true});
-  state.events = state.events.filter((x) => x.row !== e.row);
+  enqueue({t: "evDel", id: e.id || "", row: e.row, rev: e.rev});
   render();
-  enqueue(async () => {
-    const t = await resolveTarget(e);
-    await api("DELETE", `/api/events/${t.row}`, {rev: t.rev});
-  });
 }
 
-/** Сохранение события: сразу показываем его в списке, на сервер отправляем в очереди. */
+/** Сохранение события: сразу показываем его в списке, на сервер отправляем в очереди (ID у нового события придумывает приложение). */
 function saveEventOptimistic(orig, event, force, meta) {
-  const mine = Object.entries(event.roles).filter(([, names]) => names.includes(state.me.name)).map(([role]) => role);
-  const local = {...event, mine, rev: "tmp", pending: true, row: orig ? orig.row : -Date.now(), id: orig ? orig.id : "", comments: orig ? orig.comments : 0, meta: meta || (orig && orig.meta) || {kind: "event", note: ""}};
-  if (orig) state.events = state.events.map((x) => (x.row === orig.row ? local : x)); else state.events.push(local);
-  let finish, fail;
-  local._done = new Promise((res, rej) => { finish = res; fail = rej; });
-  local._done.catch(() => {});
-  sortEvents(); render();
-  enqueue(async () => {
-    try {
-      const t = await resolveTarget(orig);
-      const r = await api(orig ? "PUT" : "POST", orig ? `/api/events/${t.row}` : "/api/events", {event, rev: t && t.rev, force: force || undefined, meta: meta || undefined});
-      finish((r && r.id) || "");
-    } catch (err) { fail(err); throw err; }
-  });
+  const op = orig
+    ? {t: "evEdit", id: orig.id || "", row: orig.row, rev: orig.rev, event, meta: meta || undefined, force: force || undefined}
+    : {t: "evNew", id: newEventId(), event, meta: meta || undefined, force: force || undefined};
+  enqueue(op);
+  render();
 }
 
 function editor(e) {
@@ -1132,7 +1169,6 @@ function editor(e) {
       const event = {title: draft.title.trim(), date: draft.date, dateEnd: draft.dateEnd || "", time: [draft.time, ...draft.extra].filter(Boolean).join(", "), end: draft.end, hall: draft.hall, roles: draft.roles};
       if (!event.title) return shakeBad(title, err, "Введите название события");
       if (!event.date) return shakeBad(date, err, "Укажите дату");
-      if (offlineNow()) { err.textContent = "Нет интернета: сохранить можно, когда появится сеть."; return; }
       if (badPeople.length) { err.textContent = "Не могут работать в эти дни: " + badPeople.join(", ") + ". Уберите их или смените дату."; return; }
       if (!force && clash.length) { confirmDialog("Площадка занята", `Площадка занята: ${clash.map((c) => `${c.title} (${timeLabel(c)})`).join("; ")}. Сохранить всё равно?`, "Сохранить", () => doSave(true)); return; }
       close();
@@ -1204,11 +1240,12 @@ function picker(role, selected, onDone, ctx = {}) {
 // ---------- старт и быстрое обновление ----------
 if (state.token) {
   // сначала показываем прошлое расписание, чтобы не ждать сервер, потом обновляем
-  try { const c = JSON.parse(localStorage.getItem("ktk_cache") || "null"); if (c && c.events && c.me) Object.assign(state, c, {ready: true}); } catch (_) {}
+  try { const c = JSON.parse(localStorage.getItem("ktk_cache") || "null"); if (c && c.events && c.me) Object.assign(state, c, {ready: true}); applyQueue(); } catch (_) {}
   try { const a = JSON.parse(localStorage.getItem("ktk_avatars") || "null"); if (a && a.items) Object.assign(state, {avatars: a.items, avatarKey: a.key || ""}); } catch (_) {}
   if (navigator.onLine === false && state.ready) state.offline = true;
 }
 render();
+if (state.token && queue.length) pumpQueue(); // правки, не ушедшие в прошлый раз
 if (state.token) load().then(() => {
   const m = /^#event=([0-9a-f]+)/.exec(location.hash || ""); // ссылка из уведомления о собрании
   if (m && state.ready) { const ev = state.events.find((x) => x.id === m[1]); if (ev) eventDetails(ev); history.replaceState(null, "", location.pathname + location.search); }
@@ -1216,13 +1253,13 @@ if (state.token) load().then(() => {
 
 // Раз в несколько секунд спрашиваем сервер «версия данных изменилась?» (дёшево: таблицу он при этом не читает) и подгружаем новое.
 async function poll() {
-  if (!state.token || !state.ready || document.hidden || loading || opsPending > 0 || navigator.onLine === false) return;
+  if (!state.token || !state.ready || document.hidden || loading || queue.length > 0 || navigator.onLine === false) return;
   try { const r = await api("GET", "/api/ping", {rev: state.rev}); if (r.changed || state.offline) await load(); } catch (_) { /* нет связи — молча ждём следующий раз */ }
 }
 setInterval(poll, 8000);
-document.addEventListener("visibilitychange", () => { if (!document.hidden) poll(); });
+document.addEventListener("visibilitychange", () => { if (!document.hidden) { if (queue.length) pumpQueue(); poll(); } });
 window.addEventListener("focus", poll);
-window.addEventListener("online", () => { if (state.token) load(); });
+window.addEventListener("online", () => { if (state.token) { if (queue.length) pumpQueue(); else load(); } });
 window.addEventListener("offline", () => { if (state.token && state.ready) setOffline(true); });
 if ("serviceWorker" in navigator && !window.KTK_DEMO && /^https?:$/.test(location.protocol)) navigator.serviceWorker.register("sw.js").catch(() => {}); // страница открывается и без интернета
 // масштаб страницы отключён: щипок (на iOS — «жестовые» события) блокируем здесь, двойное касание — в стилях (touch-action: manipulation), чтобы быстрые нажатия по кнопкам не терялись

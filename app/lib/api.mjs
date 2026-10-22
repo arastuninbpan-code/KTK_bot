@@ -5,7 +5,7 @@ import {platform} from "./platform.mjs";
 import {buildReport, checkParams, reportCsv} from "./report.mjs";
 import {canEdit, cleanPhotoIds, colorName, ROLE_LABELS, TABS, VENUE_COLORS} from "./store.mjs";
 
-export const SERVER_VERSION = "2026.10.22-3"; // меняется при каждом выпуске; приложение показывает её в профиле
+export const SERVER_VERSION = "2026.10.22-4"; // меняется при каждом выпуске; приложение показывает её в профиле
 
 class HttpError extends Error {
   constructor(status, message, extra = {}) { super(message); this.status = status; this.extra = extra; }
@@ -200,11 +200,21 @@ export function handleApi(req, deps) {
       const table = store.book.get(TABS.schedule);
       const roles = headerRoles(table);
       const layout = layoutOf(table);
-      const rowNo = Number(path.split("/")[3] || 0);
+      // событие можно назвать номером строки (/api/events/5) или своим ID (/api/events/id-1a2b3c4d): по ID приложение
+      // правит и то, что отправляло из очереди с задержкой (строки за это время могли сдвинуться)
+      const seg = path.split("/")[3] || "";
+      const byId = /^id-[0-9a-f]{8}$/.test(seg) ? seg.slice(3) : "";
+      const rowNo = byId ? ((parseEvents(table, today).find((e) => e.id === byId) || {}).row || 0) : Number(seg || 0);
+      // ID для нового события может прийти от приложения: повторная отправка (связь оборвалась на ответе) ничего не задваивает
+      const wantId = /^[0-9a-f]{8}$/.test(String(body.id || "")) ? String(body.id) : "";
+      if (method === "POST" && wantId && parseEvents(table, today).some((e) => e.id === wantId)) return {status: 200, body: {ok: true, id: wantId, duplicate: true}};
 
       if (method !== "POST") {
-        if (!(rowNo >= 2) || !table[rowNo - 1]) throw new HttpError(404, "Событие не найдено (возможно, его уже удалили).");
-        if (body.rev !== undefined && body.rev !== rev(table[rowNo - 1])) throw new HttpError(409, "Событие уже изменили. Обновите страницу и повторите.");
+        if (!(rowNo >= 2) || !table[rowNo - 1]) {
+          if (byId && method === "DELETE") return {status: 200, body: {ok: true, gone: true}}; // уже удалено: цель достигнута
+          throw new HttpError(404, "Событие не найдено (возможно, его уже удалили).");
+        }
+        if (!byId && body.rev !== undefined && body.rev !== rev(table[rowNo - 1])) throw new HttpError(409, "Событие уже изменили. Обновите страницу и повторите.");
       }
       if (method === "DELETE") {
         store.book.remove(TABS.schedule, rowNo);
@@ -246,7 +256,7 @@ export function handleApi(req, deps) {
       const meta = body.meta && typeof body.meta === "object" ? body.meta : null;
       if (meta && !hasId) throw new HttpError(409, "Таблица ещё готовится (появляется служебная колонка). Повторите через минуту.");
       const old = method === "PUT" ? parseEvents(table, today).find((e) => e.row === rowNo) : null;
-      const id = hasId ? ((old && old.id) || newId()) : "";
+      const id = hasId ? ((old && old.id) || wantId || newId()) : "";
       const cells = buildRow(event, columns, today, layout, id);
 
       if (method === "POST") {

@@ -29,7 +29,7 @@
   const slots = (e) => { const s = String(e.time || "").split(/,\s*/).map(toMin).filter((x) => x !== null); if (e.dateEnd || !s.length) return [[0, 1440]]; const en = s.length === 1 ? toMin(e.end) : null; return s.map((a) => [a, en !== null && en > a ? en : a + 120]); };
   const clashes = (c) => c.hall ? events.filter((e) => e.row !== c.row && key(e.hall) === key(c.hall) && e.date <= (c.dateEnd || c.date) && c.date <= (e.dateEnd || e.date) && slots(e).some(([a, b]) => slots(c).some(([x, y]) => a < y && x < b))) : [];
   const metas = {}, chat = {}, photos = {}; // демо: метаданные событий и переписка живут в памяти страницы
-  const view = (u) => events.slice().sort((a, b) => (a.date + a.time).localeCompare(b.date + b.time)).map((e) => ({...e, id: "d" + e.row, meta: metas["d" + e.row] || {kind: "event", note: ""}, comments: (chat["d" + e.row] || []).length, mine: Object.entries(e.roles).filter(([, n]) => n.includes(u.name)).map(([r]) => r)}));
+  const view = (u) => events.slice().sort((a, b) => (a.date + a.time).localeCompare(b.date + b.time)).map((e) => ({...e, id: e.id || "d" + e.row, meta: metas[e.id || "d" + e.row] || {kind: "event", note: ""}, comments: (chat["d" + e.row] || []).length, mine: Object.entries(e.roles).filter(([, n]) => n.includes(u.name)).map(([r]) => r)}));
   window.KTK_DEMO = {
     call(method, path, body, token) {
       if (method === "POST" && path === "/api/login") { const k = String(body.login).toUpperCase(); if (k === "NOACCESS") return {status: 403, data: {error: "Доступ закрыт. Обратитесь к администратору."}}; return users[k] ? {status: 200, data: {token: "demo:" + k, user: users[k]}} : {status: 401, data: {error: "В демо-режиме логины: ADMIN (админ), READER (читатель) и NOACCESS (без доступа)"}}; }
@@ -68,14 +68,17 @@
         else { if (events.some((e) => key(e.hall) === key(name))) return {status: 409, data: {error: "На этой площадке есть будущие события. Сначала перенесите их."}}; venues = venues.filter((v) => key(v) !== key(name)); }
         rev++; return {status: 200, data: {ok: true, venues, venueColors}};
       }
-      const row = Number(path.split("/")[3] || 0);
-      if (method === "DELETE") { events.splice(events.findIndex((e) => e.row === row), 1); rev++; return {status: 200, data: {ok: true}}; }
+      const seg = path.split("/")[3] || "", byId = seg.indexOf("id-") === 0 ? seg.slice(3) : "";
+      const row = byId ? ((events.find((e) => (e.id || "d" + e.row) === byId) || {}).row || 0) : Number(seg);
+      if (method === "POST" && body.id && events.some((e) => e.id === body.id)) return {status: 200, data: {ok: true, id: body.id, duplicate: true}};
+      if (method === "DELETE") { const at = events.findIndex((e) => e.row === row); if (at >= 0) events.splice(at, 1); rev++; return {status: 200, data: {ok: true}}; }
+      if (method !== "POST" && !events.some((e) => e.row === row)) return {status: 404, data: {error: "Событие не найдено (возможно, его уже удалили)."}};
       if (!body.event.title) return {status: 400, data: {error: "Укажите название"}};
       const clash = body.force ? [] : clashes({...body.event, row: method === "PUT" ? row : -1});
       if (clash.length) return {status: 409, data: {error: `Площадка «${body.event.hall}» занята: ${clash[0].title} (${clash[0].time}${clash[0].end ? "–" + clash[0].end : ""})`, conflicts: clash}};
       const ev = {...body.event, rev: "d" + Math.random()};
-      if (method === "POST") { events.push({...ev, row: ++seq}); if (body.meta) metas["d" + seq] = {kind: body.meta.kind, note: body.meta.note || ""}; }
-      else Object.assign(events.find((e) => e.row === row), ev);
+      if (method === "POST") { events.push({...ev, row: ++seq, id: body.id || undefined}); if (body.meta) metas[body.id || "d" + seq] = {kind: body.meta.kind, note: body.meta.note || ""}; }
+      else { const tgt = events.find((e) => e.row === row); Object.assign(tgt, ev); if (body.meta) metas[tgt.id || "d" + row] = {kind: body.meta.kind, note: body.meta.note || ""}; }
       rev++;
       return {status: 200, data: {ok: true}};
     },
