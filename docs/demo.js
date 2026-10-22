@@ -29,7 +29,7 @@
   const slots = (e) => { const s = String(e.time || "").split(/,\s*/).map(toMin).filter((x) => x !== null); if (e.dateEnd || !s.length) return [[0, 1440]]; const en = s.length === 1 ? toMin(e.end) : null; return s.map((a) => [a, en !== null && en > a ? en : a + 120]); };
   const clashes = (c) => c.hall ? events.filter((e) => e.row !== c.row && key(e.hall) === key(c.hall) && e.date <= (c.dateEnd || c.date) && c.date <= (e.dateEnd || e.date) && slots(e).some(([a, b]) => slots(c).some(([x, y]) => a < y && x < b))) : [];
   const metas = {}, chat = {}, photos = {}; // демо: метаданные событий и переписка живут в памяти страницы
-  const view = (u) => events.slice().sort((a, b) => (a.date + a.time).localeCompare(b.date + b.time)).map((e) => ({...e, id: e.id || "d" + e.row, myAck: (e.ackOf || {})[u.name], acks: u.canEdit && e.ackOf ? e.ackOf : undefined, meta: metas[e.id || "d" + e.row] || {kind: "event", note: ""}, comments: (chat["d" + e.row] || []).length, mine: Object.entries(e.roles).filter(([, n]) => n.includes(u.name)).map(([r]) => r)}));
+  const view = (u) => events.slice().sort((a, b) => (a.date + a.time).localeCompare(b.date + b.time)).map((e) => ({...e, id: e.id || "d" + e.row, meta: metas[e.id || "d" + e.row] || {kind: "event", note: ""}, comments: (chat["d" + e.row] || []).length, mine: Object.entries(e.roles).filter(([, n]) => n.includes(u.name)).map(([r]) => r)}));
   window.KTK_DEMO = {
     call(method, path, body, token) {
       if (method === "POST" && path === "/api/login") { const k = String(body.login).toUpperCase(); if (k === "NOACCESS") return {status: 403, data: {error: "Доступ закрыт. Обратитесь к администратору."}}; return users[k] ? {status: 200, data: {token: "demo:" + k, user: users[k]}} : {status: 401, data: {error: "В демо-режиме логины: ADMIN (админ), READER (читатель) и NOACCESS (без доступа)"}}; }
@@ -42,12 +42,6 @@
         const rows = list.map((e) => [e.date.split("-").reverse().join("."), e.time || "", e.hall || "", e.title, "Событие", "", Object.values(e.roles || {}).flat().join(", ")]);
         const report = {kind: body.kind, kindLabel: "Демо", value: body.value || "", from: body.from, to: body.to, columns: ["Дата", "Время", "Площадка", "Событие", "Тип", "Часы", "Состав"], rows, summary: [["Записей", String(rows.length)], ["", ""], ["", ""], ["", ""]], total: ["ИТОГО", "", "", String(rows.length), "", "", ""], note: "демо-режим"};
         return {status: 200, data: {report, saved: body.save ? {number: 1} : undefined, csv: body.csv ? rows.map((r) => r.join(";")).join("\n") : undefined}};
-      }
-      if (path === "/api/ack" && method === "POST") {
-        const ev = events.find((e) => (e.id || "d" + e.row) === body.event);
-        if (!ev) return {status: 409, data: {error: "Это событие уже удалено"}};
-        (ev.ackOf ||= {})[u.name] = body.status; rev++;
-        return {status: 200, data: {ok: true, status: body.status}};
       }
       if (path === "/api/avatars") return {status: 200, data: {items: {}, key: "demo"}};
       if (path === "/api/photos") {

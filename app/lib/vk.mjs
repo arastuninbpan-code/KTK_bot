@@ -1,4 +1,4 @@
-import {ACK_LABELS, MENU_LABELS, menuRows} from "./format.mjs";
+import {MENU_LABELS, menuRows} from "./format.mjs";
 // ВКонтакте: разбор входящих событий (Callback API) и подготовка сообщений. Сеть — в gas/shell.gs.
 // Сообщения у нас написаны в HTML-разметке Telegram (<b>, <s>, <code>); у VK такой разметки нет, поэтому переводим в простой текст.
 
@@ -22,17 +22,6 @@ export function vkKeyboard(options) {
       : {action: {type: "text", label: label.slice(0, 40)}})));
     return JSON.stringify({one_time: false, inline: false, buttons: rows});
   }
-  if (options && options.acks && options.acks.length) { // несколько событий в одном сообщении: по строке «✅ / 🚫» на каждое (в ВК не больше двух: у клавиатуры мало места)
-    const rows = options.acks.slice(0, 2).map((x) => ["ok", "no"].map((st) => ({action: {type: "callback", label: `${st === "ok" ? "✅" : "🚫"} ${x.label}`.slice(0, 40), payload: JSON.stringify({a: "ack", s: st, e: x.eventId})}, color: st === "ok" ? "positive" : "negative"})));
-    if (options.button) rows.push([{action: {type: "open_link", link: options.button.url, label: String(options.button.text).slice(0, 40)}}]);
-    return JSON.stringify({inline: true, buttons: rows});
-  }
-  if (options && options.ack) { // «Увидел(а)» и «Не могу»: кнопки с обратным вызовом (VK пришлёт событие message_event)
-    const cb = (status, color) => ({action: {type: "callback", label: ACK_LABELS[status].slice(0, 40), payload: JSON.stringify({a: "ack", s: status, e: options.ack.eventId})}, color});
-    const rows = [[cb("ok", "positive"), cb("no", "negative")]];
-    if (options.button) rows.push([{action: {type: "open_link", link: options.button.url, label: String(options.button.text).slice(0, 40)}}]);
-    return JSON.stringify({inline: true, buttons: rows});
-  }
   if (!options || !options.button) return undefined;
   return JSON.stringify({inline: true, buttons: [[{action: {type: "open_link", link: options.button.url, label: String(options.button.text).slice(0, 40)}}]]});
 }
@@ -51,13 +40,3 @@ export function vkEvent(update) {
 
 /** Коды ошибок messages.send, при которых человеку писать нельзя (запретил сообщения или не начинал диалог). */
 export const VK_CANT_WRITE = [901, 902, 900];
-
-/** Нажатие кнопки «Увидел(а)» / «Не могу» (событие message_event) -> {chatId, userId, eventId, status, eventKey, convId} или null. */
-export function vkButtonEvent(update) {
-  if (!update || update.type !== "message_event") return null;
-  const o = update.object || {};
-  let p = o.payload;
-  if (typeof p === "string") { try { p = JSON.parse(p); } catch (e) { p = null; } }
-  if (!p || p.a !== "ack" || !/^[0-9a-f]{8}$/.test(String(p.e || "")) || (p.s !== "ok" && p.s !== "no")) return null;
-  return {chatId: String(o.peer_id || o.user_id || ""), userId: String(o.user_id || o.peer_id || ""), eventId: String(p.e), status: p.s, eventKey: String(o.event_id || ""), convId: o.conversation_message_id || 0};
-}

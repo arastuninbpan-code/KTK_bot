@@ -12,10 +12,3 @@ export function telegramEvent(update) {
   const label = "Telegram " + ([f.first_name, f.last_name].filter(Boolean).join(" ") || "без имени") + (f.username ? " @" + f.username : " (tg://user?id=" + (f.id || m.chat.id) + ")");
   return {chatId: m.chat.id, text: m.text || "", phone: own ? m.contact.phone_number : null, date: m.date || 0, label, name: [f.first_name, f.last_name].filter(Boolean).join(" ")};
 }
-
-/** Нажатие кнопки под сообщением -> {id, chatId, messageId, data} (только личные чаты). */
-export function telegramCallback(update) {
-  const q = update.callback_query;
-  if (!q || !q.message || !q.message.chat || q.message.chat.type !== "private") return null;
-  return {id: q.id, chatId: q.message.chat.id, messageId: q.message.message_id, data: q.data || "", markup: q.message.reply_markup || null};
-}

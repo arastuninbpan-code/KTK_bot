@@ -72,25 +72,6 @@ const tagStyle = (role) => { const all = state.allRoles && state.allRoles.length
 const tag = (role) => h("span", {class: "tag", style: tagStyle(role)}, roleText(role));
 
 /** Смена начинается в ближайший час (по Москве)? Тогда карточка «срочная». */
-/** Отметка человека на событии: зелёная галочка «увидел(а)» или красный крестик «не может». */
-const ackMark = (st) => (st === "ok" ? h("span", {class: "ack ok", title: "Увидел(а)", "aria-label": "увидел(а)"}, "✓") : st === "no" ? h("span", {class: "ack no", title: "Не может", "aria-label": "не может"}, "✕") : null);
-/** Имена людей: у администратора рядом с каждым видно, кто что отметил; у себя — своя отметка. */
-function namesWithAcks(e, names) {
-  const out = [];
-  names.forEach((n, i) => {
-    if (i) out.push(", ");
-    const st = (e.acks && e.acks[n]) || (n === state.me.name ? e.myAck : "");
-    out.push(st ? h("span", {class: "nm"}, n, ackMark(st)) : n);
-  });
-  return out;
-}
-/** Моя отметка на событии: из бота или из приложения (в очереди, как остальные правки). */
-function setAck(e, status) {
-  if (!e.id) return toast("Событие ещё сохраняется. Попробуйте через минуту.", {bad: true});
-  enqueue({t: "ack", id: e.id, status});
-  render();
-}
-
 /** Событие идёт прямо сейчас: сегодня, время начала уже наступило, конец (или 2 часа без указанного конца) ещё нет. */
 function isNow(e) {
   if (e.dateEnd || !e.time) return false;
@@ -193,9 +174,6 @@ function applyOp(op) {
   } else if (op.t === "vDel") {
     state.venues = state.venues.filter((v) => hallKey(v) !== hallKey(op.name));
     delete state.venueColors[op.name];
-  } else if (op.t === "ack") {
-    const ev = state.events.find((x) => x.id === op.id);
-    if (ev) { ev.myAck = op.status; if (ev.acks) ev.acks[state.me.name] = op.status; }
   } else if (op.t === "off") {
     state.me.off = [...new Set([...(state.me.off || []).filter((d) => !op.remove.includes(d)), ...op.add])].sort();
   }
@@ -240,7 +218,6 @@ const sendOp = (op) => {
     case "vColor": return api("PUT", "/api/venues", {name: op.name, color: op.color});
     case "vDel": return api("DELETE", "/api/venues", {name: op.name});
     case "off": return api("POST", "/api/off", {add: op.add, remove: op.remove});
-    case "ack": return api("POST", "/api/ack", {event: op.id, status: op.status});
   }
   return Promise.resolve();
 };
@@ -420,7 +397,7 @@ function eventCard(e) {
   const range = e.dateEnd ? h("span", {class: "hall", style: "background:var(--cream)"}, `${shortDate(e.date)} — ${shortDate(e.dateEnd)}`) : null;
   const hall = e.hall ? h("span", {class: "hall"}, icon("pin"), cap(e.hall)) : null;
   const roles = Object.entries(e.roles).filter(([r]) => state.tab !== "mine" || e.mine.includes(r));
-  const list = h("ul", {class: "roles"}, roles.map(([role, names]) => h("li", {class: e.mine.includes(role) ? "me" : ""}, tag(role), h("div", {class: "n"}, namesWithAcks(e, names)))));
+  const list = h("ul", {class: "roles"}, roles.map(([role, names]) => h("li", {class: e.mine.includes(role) ? "me" : ""}, tag(role), h("div", {class: "n"}, names.join(", ")))));
   const live = isNow(e);
   const urgent = !live && isSoon(e);
   const hex = e.hall ? hexOfHall(e.hall) : "";
@@ -834,9 +811,7 @@ function eventDetails(e) {
     e.meta && e.meta.kind === "meeting" ? h("div", {class: "meet-tag"}, "📋 Собрание") : null,
     e.meta && e.meta.note ? h("p", {class: "meet-note"}, e.meta.note) : null,
     e.mine && e.mine.length ? h("div", {class: "note ok"}, icon("check"), h("span", {}, "Вы заняты: " + e.mine.map(roleText).join(", "))) : null,
-    e.mine && e.mine.length ? h("div", {class: "ackbar"}, h("span", {}, "Ваша отметка"),
-      h("div", {class: "ackbtns"}, ["ok", "no"].map((st) => h("button", {class: "ackbtn " + st + (e.myAck === st ? " on" : ""), "aria-pressed": String(e.myAck === st), onclick: () => { setAck(e, st); close(); eventDetails(Object.assign(e, {myAck: st})); }}, st === "ok" ? "✅ Увидел(а)" : "🚫 Не могу")))) : null,
-    roles.length ? h("div", {class: "field"}, h("span", {}, "Кто занят"), h("ul", {class: "roles"}, roles.map(([role, names]) => h("li", {class: (e.mine || []).includes(role) ? "me" : ""}, tag(role), h("div", {class: "n"}, namesWithAcks(e, names)))))) : h("div", {class: "hint-line"}, "Людей на событие пока не назначили"),
+    roles.length ? h("div", {class: "field"}, h("span", {}, "Кто занят"), h("ul", {class: "roles"}, roles.map(([role, names]) => h("li", {class: (e.mine || []).includes(role) ? "me" : ""}, tag(role), h("div", {class: "n"}, names.join(", ")))))) : h("div", {class: "hint-line"}, "Людей на событие пока не назначили"),
     h("button", {class: "btn chat-open", onclick: () => { close(); chatSheet(e); }}, "💬 Обсуждение" + (e.comments ? ` · ${e.comments}` : "")),
     h("div", {class: "actions"},
       canEdit ? h("button", {class: "btn light", onclick: () => { close(); confirmDialog("Удалить событие?", `«${e.title}» пропадёт из расписания, а сотрудникам придёт сообщение об отмене.`, "Удалить", () => remove(e)); }}, icon("trash"), "Удалить") : null,

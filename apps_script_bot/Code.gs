@@ -609,19 +609,6 @@ function meetingPostText(e, note = "") {
   return `📋 Собрание: ${e.title}\n🗓 ${meetingWhen(e)}${place}${note ? `\n\n${note}` : ""}`;
 }
 
-// ---- подтверждение смены: две кнопки под уведомлением ----
-const ACK_LABELS = {ok: "✅ Увидел(а)", no: "🚫 Не могу"};
-/** Подпись кнопки; выбранная помечена галочкой. */
-const ackLabel = (status, chosen) => ACK_LABELS[status] + (chosen === status ? " ✓" : "");
-const ackCallback = (status, eventId) => `ack:${status}:${eventId}`;
-/** "ack:ok:4284e0ea" -> {status, eventId} или null. */
-function parseAck(data) {
-  const m = /^ack:(ok|no):([0-9a-f]{8})$/.exec(String(data || ""));
-  return m ? {status: m[1], eventId: m[2]} : null;
-}
-const ackToast = {ok: "Отмечено: вы увидели ✅", no: "Отмечено: вы не можете 🚫. Администратору сообщили."};
-const msgAckNo = (name, e) => `⚠️ <b>${esc(name)}</b> отметил(а), что <b>не может</b>:\n${esc(e.title || "Смена")}, ${e.date.slice(8, 10)}.${e.date.slice(5, 7)}${e.time ? " " + esc(e.time) : ""}${e.hall ? " · " + esc(e.hall) : ""}`;
-
 // ===== lib/telegram.mjs =====
 // Разбор сообщений Telegram (отправка делается в оболочке платформы).
 
@@ -636,13 +623,6 @@ function telegramEvent(update) {
   const f = m.from || {};
   const label = "Telegram " + ([f.first_name, f.last_name].filter(Boolean).join(" ") || "без имени") + (f.username ? " @" + f.username : " (tg://user?id=" + (f.id || m.chat.id) + ")");
   return {chatId: m.chat.id, text: m.text || "", phone: own ? m.contact.phone_number : null, date: m.date || 0, label, name: [f.first_name, f.last_name].filter(Boolean).join(" ")};
-}
-
-/** Нажатие кнопки под сообщением -> {id, chatId, messageId, data} (только личные чаты). */
-function telegramCallback(update) {
-  const q = update.callback_query;
-  if (!q || !q.message || !q.message.chat || q.message.chat.type !== "private") return null;
-  return {id: q.id, chatId: q.message.chat.id, messageId: q.message.message_id, data: q.data || "", markup: q.message.reply_markup || null};
 }
 
 // ===== lib/vk.mjs =====
@@ -669,17 +649,6 @@ function vkKeyboard(options) {
       : {action: {type: "text", label: label.slice(0, 40)}})));
     return JSON.stringify({one_time: false, inline: false, buttons: rows});
   }
-  if (options && options.acks && options.acks.length) { // несколько событий в одном сообщении: по строке «✅ / 🚫» на каждое (в ВК не больше двух: у клавиатуры мало места)
-    const rows = options.acks.slice(0, 2).map((x) => ["ok", "no"].map((st) => ({action: {type: "callback", label: `${st === "ok" ? "✅" : "🚫"} ${x.label}`.slice(0, 40), payload: JSON.stringify({a: "ack", s: st, e: x.eventId})}, color: st === "ok" ? "positive" : "negative"})));
-    if (options.button) rows.push([{action: {type: "open_link", link: options.button.url, label: String(options.button.text).slice(0, 40)}}]);
-    return JSON.stringify({inline: true, buttons: rows});
-  }
-  if (options && options.ack) { // «Увидел(а)» и «Не могу»: кнопки с обратным вызовом (VK пришлёт событие message_event)
-    const cb = (status, color) => ({action: {type: "callback", label: ACK_LABELS[status].slice(0, 40), payload: JSON.stringify({a: "ack", s: status, e: options.ack.eventId})}, color});
-    const rows = [[cb("ok", "positive"), cb("no", "negative")]];
-    if (options.button) rows.push([{action: {type: "open_link", link: options.button.url, label: String(options.button.text).slice(0, 40)}}]);
-    return JSON.stringify({inline: true, buttons: rows});
-  }
   if (!options || !options.button) return undefined;
   return JSON.stringify({inline: true, buttons: [[{action: {type: "open_link", link: options.button.url, label: String(options.button.text).slice(0, 40)}}]]});
 }
@@ -698,16 +667,6 @@ function vkEvent(update) {
 
 /** Коды ошибок messages.send, при которых человеку писать нельзя (запретил сообщения или не начинал диалог). */
 const VK_CANT_WRITE = [901, 902, 900];
-
-/** Нажатие кнопки «Увидел(а)» / «Не могу» (событие message_event) -> {chatId, userId, eventId, status, eventKey, convId} или null. */
-function vkButtonEvent(update) {
-  if (!update || update.type !== "message_event") return null;
-  const o = update.object || {};
-  let p = o.payload;
-  if (typeof p === "string") { try { p = JSON.parse(p); } catch (e) { p = null; } }
-  if (!p || p.a !== "ack" || !/^[0-9a-f]{8}$/.test(String(p.e || "")) || (p.s !== "ok" && p.s !== "no")) return null;
-  return {chatId: String(o.peer_id || o.user_id || ""), userId: String(o.user_id || o.peer_id || ""), eventId: String(p.e), status: p.s, eventKey: String(o.event_id || ""), convId: o.conversation_message_id || 0};
-}
 
 // ===== lib/layout.mjs =====
 // Колонки таблицы можно двигать и переименовывать: система находит нужные по названиям в шапке.
@@ -982,9 +941,8 @@ const archiveCutoff = (today, months = 12) => new Date(Date.UTC(+today.slice(0, 
 // ===== lib/store.mjs =====
 // Хранилище поверх таблицы: сотрудники и роли, чаты, снимок расписания, коды входа, блокировка.
 
-const TABS = {schedule: "Расписание", staff: "Сотрудники", venues: "Площадки", reports: "Отчёты", archive: "Архив", deleted: "_удалённое", acks: "_подтверждения", chats: "Подписчики", requests: "_заявки", people: "_люди", off: "_недоступность", comments: "_комментарии", meta: "_события", avatars: "_аватары", photos: "_фото", state: "_служебное", lock: "_замок"};
+const TABS = {schedule: "Расписание", staff: "Сотрудники", venues: "Площадки", reports: "Отчёты", archive: "Архив", deleted: "_удалённое", chats: "Подписчики", requests: "_заявки", people: "_люди", off: "_недоступность", comments: "_комментарии", meta: "_события", avatars: "_аватары", photos: "_фото", state: "_служебное", lock: "_замок"};
 const REQUESTS_HEADER = ["Канал", "ID чата", "Телефон"];
-const ACK_HEADER = ["ID события", "Телефон", "Статус", "Время", "Имя"];
 const COMMENT_HEADER = ["ID события", "ID", "Время", "Телефон", "Имя", "Текст", "Фото"];
 const META_HEADER = ["ID события", "Тип", "Описание", "—", "Автор", "Создано"];
 const AVATAR_HEADER = ["Телефон", "Канал", "Фото", "Обновлено"];
@@ -1423,33 +1381,6 @@ class Store {
   }
 
   /** Всем сотрудникам без логина выдаёт случайный (6 знаков, без похожих букв и цифр). Возвращает число выданных. */
-  /** Отметки сотрудников «увидел(а)» / «не могу» на событиях: [{eventId, phone, status: "ok"|"no", ts, name}]. */
-  acks() {
-    if (!this.book.has(TABS.acks)) return [];
-    return this.book.get(TABS.acks).slice(1)
-      .map((r) => ({eventId: String(r[0] || ""), phone: normPhone(r[1] || ""), status: String(r[2] || "") === "no" ? "no" : "ok", ts: Number(r[3]) || 0, name: String(r[4] || "")}))
-      .filter((a) => a.eventId && a.phone);
-  }
-  /** {ID события: {телефон: "ok"|"no"}} */
-  ackMap() {
-    const out = {};
-    for (const a of this.acks()) { if (!out[a.eventId]) out[a.eventId] = {}; out[a.eventId][a.phone] = a.status; } // без «||=»: Apps Script его не понимает
-    return out;
-  }
-  /** Записывает отметку (одна на человека и событие; можно передумать). -> true, если статус изменился. */
-  setAck(eventId, user, status) {
-    this.book.ensure(TABS.acks, ACK_HEADER);
-    const st = status === "no" ? "no" : "ok";
-    const rows = this.book.get(TABS.acks);
-    const at = rows.findIndex((r, i) => i > 0 && String(r[0] || "") === eventId && normPhone(r[1] || "") === user.phone);
-    const line = [eventId, user.phone, st, String(this.now()), user.name || ""];
-    if (at >= 0) {
-      if (String(rows[at][2] || "") === st) return false;
-      this.book.set(TABS.acks, at + 1, line);
-    } else this.book.append(TABS.acks, line);
-    return true;
-  }
-
   /** Удалённое событие не пропадает насовсем: его копия остаётся в скрытом листе «_удалённое». */
   archiveDeleted(line, by) {
     this.book.ensure(TABS.deleted, DELETED_HEADER);
@@ -1528,7 +1459,7 @@ function readToken(token, secret, now = Date.now()) {
 // ===== lib/api.mjs =====
 // API приложения. Чистая функция: запрос -> {status, body}. Синхронный код, никакой привязки к платформе.
 
-const SERVER_VERSION = "2026.10.22-20"; // меняется при каждом выпуске; приложение показывает её в профиле
+const SERVER_VERSION = "2026.10.22-21"; // меняется при каждом выпуске; приложение показывает её в профиле
 
 class HttpError extends Error {
   constructor(status, message, extra = {}) { super(message); this.status = status; this.extra = extra; }
@@ -1579,7 +1510,7 @@ const publicUser = (u) => ({name: u.name, role: u.role, roleLabel: ROLE_LABELS[u
 const connections = (store, me) => ({login: me.login, channels: [...new Set(store.chats().filter((c) => c.phone === me.phone).map((c) => c.channel))]});
 
 function handleApi(req, deps) {
-  const {store, secret, now = () => Date.now(), afterChange = () => {}, getRev = () => "", bumpRev = () => {}, announce = () => {}, flush = () => ({pending: false}), senders = {}, appUrl = "", afterVenues = () => {}, saveReport = () => ({number: 0})} = deps;
+  const {store, secret, now = () => Date.now(), afterChange = () => {}, getRev = () => "", bumpRev = () => {}, announce = () => {}, flush = () => ({pending: false}), afterVenues = () => {}, saveReport = () => ({number: 0})} = deps;
   const {method, path, body = {}, token} = req;
   try {
     // --- без входа ---
@@ -1605,16 +1536,12 @@ function handleApi(req, deps) {
       const table = store.book.get(TABS.schedule);
       const metaMap = store.metaMap();
       const counts = store.commentCounts();
-      const ackMap = store.ackMap();
-      const nameOf = new Map(users.map((u) => [u.phone, u.name]));
       const events = parseEvents(table, today)
         .filter((e) => (e.dateEnd || e.date) >= addDays(today, -62)) // два месяца назад: для календаря на вкладке «Площадки»
         .sort((a, b) => (a.date + a.time).localeCompare(b.date + b.time))
         .map((e) => ({...e, rev: rev(table[e.row - 1]),
           meta: e.id && metaMap[e.id] ? {kind: metaMap[e.id].kind, note: metaMap[e.id].note} : {kind: "event", note: ""},
           comments: (e.id && counts[e.id] && counts[e.id].n) || 0,
-          myAck: (e.id && ackMap[e.id] && ackMap[e.id][me.phone]) || undefined, // моя отметка: ok / no
-          acks: canEdit(me.role) && e.id && ackMap[e.id] ? Object.fromEntries(Object.entries(ackMap[e.id]).map(([ph, st]) => [nameOf.get(ph) || ph, st])) : undefined, // у администраторов: кто что отметил
           mine: Object.entries(e.roles).filter(([, names]) => names.some((n) => matchPhones(n, users).includes(me.phone))).map(([role]) => role)}));
       // площадки: список из листа «Площадки» + все, что уже вписано в события
       const venues = [...store.venues()];
@@ -1637,16 +1564,6 @@ function handleApi(req, deps) {
       if (body.save) out.saved = saveReport(report, me.name);
       if (body.csv) out.csv = reportCsv(report);
       return {status: 200, body: out};
-    }
-
-    // --- «увидел(а)» / «не могу» на событии (то же, что кнопки под уведомлением в мессенджере) ---
-    if (path === "/api/ack" && method === "POST") {
-      const st = body.status === "no" ? "no" : body.status === "ok" ? "ok" : "";
-      if (!st || !/^[0-9a-f]{8}$/.test(String(body.event || ""))) throw new HttpError(400, "Не указано событие или отметка");
-      const r = recordAck({store, user: me, status: st, eventId: String(body.event), appUrl, senders, now: now(), log: console});
-      if (!r.ok) throw new HttpError(409, r.toast);
-      if (r.changed) bumpRev();
-      return {status: 200, body: {ok: true, status: st}};
     }
 
     // --- «разошлите уведомления»: приложение просит после тишины, чтобы правки подряд дали одно сообщение ---
@@ -1980,26 +1897,14 @@ function runCycle({store, senders, now = Date.now(), appUrl = "", log = console}
     const g = changeGroups.get(k);
     if (g) { if (c.row.role && !g.roles.includes(c.row.role)) g.roles.push(c.row.role); } else changeGroups.set(k, {c, roles: c.row.role ? [c.row.role] : []});
   }
-  const events = parseEvents(table, todayIso(now));
-  // под уведомлением о назначении и переносе — кнопки «Увидел(а)» / «Не могу» (нужен ID события)
-  const ackFor = (c) => {
-    if (c.kind !== "added" && c.kind !== "changed") return "";
-    const e = events.find((x) => x.id && daysOf(x).includes(c.row.date) && norm(x.title) === norm(c.row.event));
-    return e ? e.id : "";
-  };
   // всё, что изменилось у одного человека за этот проход (назначили на одно, перенесли другое, сняли с третьего), — одно сообщение
   const byPhone = new Map();
   for (const {c, roles} of changeGroups.values()) {
     const list = byPhone.get(c.phone) || [];
-    list.push({kind: c.kind, row: {...c.row, role: roles.join(", ")}, old: c.old, ack: ackFor(c)});
+    list.push({kind: c.kind, row: {...c.row, role: roles.join(", ")}, old: c.old});
     byPhone.set(c.phone, list);
   }
-  const shortName = (r) => `${r.date.slice(8, 10)}.${r.date.slice(5, 7)} ${String(r.event || "Смена").slice(0, 14)}`;
-  const messages = [...byPhone].map(([phone, items]) => ({
-    phone,
-    text: items.length === 1 ? msgChange(items[0].kind, items[0].row, items[0].old) : msgChangesDigest(items),
-    acks: [...new Map(items.filter((i) => i.ack).map((i) => [i.ack, {eventId: i.ack, label: shortName(i.row)}])).values()],
-  }));
+  const messages = [...byPhone].map(([phone, items]) => ({phone, text: items.length === 1 ? msgChange(items[0].kind, items[0].row, items[0].old) : msgChangesDigest(items)}));
   const groups = new Map();
   for (const r of plan.reminders) {
     const k = r.phone + "\t" + r.kind;
@@ -2014,7 +1919,7 @@ function runCycle({store, senders, now = Date.now(), appUrl = "", log = console}
   for (const m of messages) {
     for (const c of chats.filter((x) => x.phone === m.phone)) {
       try {
-        senders[c.channel]?.send(c.chatId, m.text, m.acks && m.acks.length === 1 ? {...(btn || {}), ack: {eventId: m.acks[0].eventId}} : m.acks && m.acks.length > 1 ? {...(btn || {}), acks: m.acks} : btn);
+        senders[c.channel]?.send(c.chatId, m.text, btn);
         sent++;
       } catch (err) {
         if (err instanceof Gone) store.unbind(c.channel, c.chatId);
@@ -2023,34 +1928,6 @@ function runCycle({store, senders, now = Date.now(), appUrl = "", log = console}
     }
   }
   return {sent};
-}
-
-/** Человек отметил под событием «увидел(а)» или «не могу» (из бота или из приложения). -> {ok, changed, status, toast}. */
-function recordAck({store, user, status, eventId, appUrl = "", senders = {}, now = Date.now(), log = console}) {
-  const users = store.users();
-  const ev = parseEvents(store.book.get(TABS.schedule), todayIso(now)).find((e) => e.id === eventId);
-  if (!ev) return {ok: false, toast: "Это событие уже удалено"};
-  const mine = Object.values(ev.roles).some((names) => names.some((n) => matchPhones(n, users).includes(user.phone)));
-  if (!mine) return {ok: false, toast: "Вас уже нет в составе этого события"};
-  const changed = store.setAck(eventId, user, status);
-  if (changed && status === "no") { // администраторам и редакторам сразу сообщаем, что человек не может
-    const text = msgAckNo(user.name, ev);
-    const btn = appButton(appUrl ? appUrl + "#event=" + eventId : "");
-    const editors = new Set(store.activeUsers().filter((u) => canEdit(u.role) && u.phone !== user.phone).map((u) => u.phone));
-    for (const c of store.chats().filter((x) => editors.has(x.phone))) {
-      try { senders[c.channel]?.send(c.chatId, text, btn); }
-      catch (err) { if (err instanceof Gone) store.unbind(c.channel, c.chatId); else log.error(String(err.message || err)); }
-    }
-  }
-  return {ok: true, changed, status, toast: ackToast[status]};
-}
-
-/** Нажатие кнопки под уведомлением в мессенджере: чат -> сотрудник -> отметка. */
-function handleAck({store, channel, chatId, status, eventId, appUrl = "", senders = {}, now = Date.now(), log = console}) {
-  const chat = store.chats().find((c) => c.channel === channel.name && c.chatId === String(chatId));
-  const user = chat ? store.users().find((u) => u.phone === chat.phone && u.role !== "blocked") : null;
-  if (!user) return {ok: false, toast: "Этот чат не подключён к сотруднику"};
-  return recordAck({store, user, status, eventId, appUrl, senders, now, log});
 }
 
 
@@ -2092,7 +1969,7 @@ function secret_() {
 // Чтение листа из таблицы — самое медленное место (около 0,4 с на лист). Часто нужные листы держим в кэше Google и
 // сбрасываем при любой правке: скриптом (GasBook), на сайте (тоже через GasBook) и руками (onSheetChange).
 const PLAN_KIND_ = {[TABS.staff]: "staff", [TABS.schedule]: "schedule"};
-const CACHED_TABS_ = [TABS.schedule, TABS.staff, TABS.venues, TABS.chats, TABS.requests, TABS.off, TABS.meta, TABS.comments, TABS.avatars, TABS.acks]; // каждый запрос расписания читает и их: без кеша это лишние ~0,5 с на лист
+const CACHED_TABS_ = [TABS.schedule, TABS.staff, TABS.venues, TABS.chats, TABS.requests, TABS.off, TABS.meta, TABS.comments, TABS.avatars]; // каждый запрос расписания читает и их: без кеша это лишние ~0,5 с на лист
 const CACHE_TTL_ = 600; // запас: даже если сброс почему-то не сработал, через 10 минут данные обновятся
 const CACHE_PART_ = 30000; // значение в кэше Google ограничено 100 КБ, режем на куски
 
@@ -2318,17 +2195,6 @@ const store_ = () => new Store(new GasBook(), {secret: secret_(), owner: owner_(
 let netMs_ = 0; // сколько миллисекунд ушло на обращения к Telegram/ВК за текущий запуск (для журнала скорости)
 const fetchTimed_ = (url, opts) => { const t = Date.now(); try { return UrlFetchApp.fetch(url, opts); } finally { netMs_ += Date.now() - t; } };
 
-/** Кнопки под уведомлением о смене: «Увидел(а)» и «Не могу» (выбранная помечена галочкой), ниже — ссылка на приложение. */
-function tgAckRows_(eventId, chosen, button) {
-  const rows = [[{text: ackLabel("ok", chosen), callback_data: ackCallback("ok", eventId)}, {text: ackLabel("no", chosen), callback_data: ackCallback("no", eventId)}]];
-  if (button) rows.push([{text: button.text, url: button.url}]);
-  return rows;
-}
-function tgApi_(method, body) {
-  const r = fetchTimed_("https://api.telegram.org/bot" + prop_("TELEGRAM_BOT_TOKEN") + "/" + method, {method: "post", contentType: "application/json", payload: JSON.stringify(body), muteHttpExceptions: true});
-  return r.getResponseCode();
-}
-
 function tgSend_(chatId, text, options) {
   const pieces = chunkText(text);
   pieces.forEach((piece, i) => {
@@ -2337,14 +2203,10 @@ function tgSend_(chatId, text, options) {
       if (options === "contact") body.reply_markup = {keyboard: [[{text: "📱 Поделиться номером", request_contact: true}]], resize_keyboard: true, one_time_keyboard: true};
       else if (options === "remove") body.reply_markup = {remove_keyboard: true};
       else if (options && options.menu) body.reply_markup = {keyboard: menuRows(options.menu).map((row) => row.map((text) => ({text}))), resize_keyboard: true, is_persistent: true}; // главное меню под полем ввода
-      else if (options && (options.button || options.copy || options.ack || options.acks)) {
+      else if (options && (options.button || options.copy)) {
         const rows = [];
         if (options.copy) rows.push([{text: options.copy.text, copy_text: {text: options.copy.value}}]); // кнопка «скопировать» одним нажатием
-        if (options.acks && options.acks.length) { // несколько событий в одном сообщении: по строке на событие (не больше трёх)
-          options.acks.slice(0, 3).forEach((x) => rows.push([{text: ("✅ " + x.label).slice(0, 30), callback_data: ackCallback("ok", x.eventId)}, {text: ("🚫 " + x.label).slice(0, 30), callback_data: ackCallback("no", x.eventId)}]));
-          if (options.button) rows.push([{text: options.button.text, url: options.button.url}]);
-        } else if (options.ack) rows.push(...tgAckRows_(options.ack.eventId, "", options.button)); // «Увидел(а)» / «Не могу» (+ «Открыть в приложении»)
-        else if (options.button) rows.push([{text: options.button.text, url: options.button.url}]);
+        if (options.button) rows.push([{text: options.button.text, url: options.button.url}]);
         body.reply_markup = {inline_keyboard: rows};
       }
     }
@@ -2482,23 +2344,12 @@ const bumpRev_ = () => PropertiesService.getScriptProperties().setProperty("DATA
 const SYNC_DELAY_MS = 8000; // сколько ждём тишины после правки таблицы, чтобы не рассылать недописанное
 
 /** Таймер раз в минуту: страховка (если быстрая сверка не сработала) и проверка напоминаний раз в ~5 минут. */
-const WEBHOOK_VERSION_ = "2"; // поднимайте, когда меняется набор событий Telegram (сейчас: сообщения + нажатия кнопок)
-/** После обновления один раз заново настраиваем вебхук Telegram: иначе нажатия кнопок под уведомлениями не доходят. */
-function refreshWebhook_(p) {
-  if (p.getProperty("WEBHOOK_VER") === WEBHOOK_VERSION_) return;
-  if (!prop_("TELEGRAM_BOT_TOKEN") || !(prop_("RELAY_URL") || prop_("WEBAPP_URL"))) return;
-  p.setProperty("WEBHOOK_VER", WEBHOOK_VERSION_);
-  try { setWebhook(); diag_("Telegram: вебхук обновлён (теперь доходят нажатия кнопок)"); }
-  catch (err) { diag_("Telegram: вебхук не обновился — " + String(err && err.message ? err.message : err)); }
-}
-
 function everyMinute() {
   const p = PropertiesService.getScriptProperties();
   const now = Date.now();
   const dirty = Number(p.getProperty("dirty") || 0);
   const last = Number(p.getProperty("last_cycle") || 0);
   const dueDirty = dirty && now - dirty >= 15000;
-  refreshWebhook_(p);
   autoStyle_(p);
   seedTestUsers_(p);
   const todayStr = todayIso(Date.now());
@@ -2572,8 +2423,6 @@ function apiCall_(req) {
     secret: secret_(),
     announce: announce_,
     saveReport: saveReport_,
-    senders: SENDERS,
-    appUrl: prop_("APP_URL") || "",
     afterVenues: () => { PropertiesService.getScriptProperties().setProperty("regroup", "1"); occupancyNow_(); }, // цвета в таблице занятости обновляются сразу
     getRev: getRev_,
     bumpRev: bumpRev_,
@@ -2597,35 +2446,12 @@ function apiCall_(req) {
   return Object.assign({}, r.body, {_status: r.status});
 }
 
-/** Нажали «Увидел(а)» или «Не могу» под уведомлением: записываем отметку, отвечаем и помечаем выбранную кнопку. */
-function tgAck_(cb) {
-  const a = parseAck(cb.data);
-  try {
-    if (!a) { tgApi_("answerCallbackQuery", {callback_query_id: cb.id}); return; }
-    const appUrl = prop_("APP_URL") || "";
-    const r = withLock_(() => handleAck({store: store_(), channel: SENDERS.telegram, chatId: cb.chatId, status: a.status, eventId: a.eventId, appUrl, senders: SENDERS, now: Date.now(), log: console}));
-    if (r.ok && r.changed) bumpRev_(); // приложение подхватит отметку
-    tgApi_("answerCallbackQuery", {callback_query_id: cb.id, text: String(r.toast).slice(0, 190), show_alert: !r.ok});
-    if (r.ok) {
-      const mark = (btn) => (btn.callback_data && btn.callback_data.indexOf("ack:") === 0 && btn.callback_data.slice(-8) === a.eventId
-        ? {text: btn.text.replace(/ ✓$/, "") + (btn.callback_data.indexOf("ack:" + a.status + ":") === 0 ? " ✓" : ""), callback_data: btn.callback_data} : btn);
-      const rows = cb.markup && cb.markup.inline_keyboard ? cb.markup.inline_keyboard.map((row) => row.map(mark)) : tgAckRows_(a.eventId, a.status, appUrl ? {text: "Открыть в приложении", url: appUrl} : null);
-      tgApi_("editMessageReplyMarkup", {chat_id: cb.chatId, message_id: cb.messageId, reply_markup: {inline_keyboard: rows}});
-    }
-  } catch (err) {
-    diag_("TG: ОШИБКА кнопки — " + (err && err.message ? err.message : err));
-    try { tgApi_("answerCallbackQuery", {callback_query_id: cb.id, text: "Не получилось, попробуйте ещё раз"}); } catch (e2) { /* ответ не обязателен */ }
-  }
-}
-
 function telegramUpdate_(e) {
   if (e.parameter.secret !== prop_("WEBHOOK_SECRET")) return ok_();
   const update = JSON.parse(e.postData.contents);
   const cache = CacheService.getScriptCache();
   if (cache.get("u" + update.update_id)) return ok_(); // Telegram может прислать то же сообщение повторно
   cache.put("u" + update.update_id, "1", 21600);
-  const cb = telegramCallback(update);
-  if (cb) { tgAck_(cb); return ok_(); }
   const ev = telegramEvent(update);
   if (ev) {
     const t0 = Date.now();
@@ -2663,29 +2489,12 @@ function diag_(text) {
   } catch (err) { console.error("не удалось записать журнал: " + (err && err.message)); }
 }
 
-/** Нажали «Увидел(а)» или «Не могу» в ВК: записываем отметку и показываем подтверждение всплывающей подсказкой. */
-function vkAck_(be) {
-  const cache = CacheService.getScriptCache();
-  if (be.eventKey && cache.get("ve" + be.eventKey)) return; // повтор того же нажатия
-  if (be.eventKey) cache.put("ve" + be.eventKey, "1", 3600);
-  let text = "Не получилось, попробуйте ещё раз";
-  try {
-    const r = withLock_(() => handleAck({store: store_(), channel: SENDERS.vk, chatId: be.chatId, status: be.status, eventId: be.eventId, appUrl: prop_("APP_URL") || "", senders: SENDERS, now: Date.now(), log: console}));
-    if (r.ok && r.changed) bumpRev_();
-    text = r.toast;
-  } catch (err) { diag_("VK: ОШИБКА кнопки — " + (err && err.message ? err.message : err)); }
-  try { vkCall_("messages.sendMessageEventAnswer", {event_id: be.eventKey, user_id: be.userId, peer_id: be.chatId, event_data: JSON.stringify({type: "show_snackbar", text: String(text).slice(0, 90)})}); }
-  catch (err) { diag_("VK: ответ на кнопку не отправлен — " + (err && err.message ? err.message : err)); }
-}
-
 function vkUpdate_(e) {
   try {
     if (e.parameter.secret !== prop_("WEBHOOK_SECRET")) { diag_("VK: пропущено — secret в адресе воркера (GAS_URL) не совпал с WEBHOOK_SECRET"); return ok_(); }
     const update = JSON.parse(e.postData.contents);
     if (update.type === "confirmation") return ContentService.createTextOutput(prop_("VK_CONFIRM") || "");
     if (prop_("VK_SECRET") && update.secret !== prop_("VK_SECRET")) { diag_("VK: пропущено — секретный ключ Callback API не совпал с VK_SECRET"); return ok_(); }
-    const be = vkButtonEvent(update);
-    if (be) { vkAck_(be); return ok_(); }
     const ev = vkEvent(update);
     if (!ev) { diag_("VK: пропущено — событие «" + update.type + "» не личное сообщение человека"); return ok_(); }
     const cache = CacheService.getScriptCache();
@@ -2737,7 +2546,7 @@ function setWebhook() {
   console.log("Вебхук будет на: " + hostOf_(target));
   const r = UrlFetchApp.fetch("https://api.telegram.org/bot" + prop_("TELEGRAM_BOT_TOKEN") + "/setWebhook", {
     method: "post", contentType: "application/json", muteHttpExceptions: true,
-    payload: JSON.stringify({url: target, allowed_updates: ["message", "callback_query"]}),
+    payload: JSON.stringify({url: target, allowed_updates: ["message"]}),
   });
   console.log(r.getContentText());
 }
