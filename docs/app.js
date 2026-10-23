@@ -5,7 +5,7 @@ const WD = ["Вс", "Пн", "Вт", "Ср", "Чт", "Пт", "Сб"];
 // цвета меток разделов (Администратор, Гардероб, Касса…): по порядку колонок таблицы, из палитры
 const TAG_COLORS = [["#0A96DC", "#fff"], ["#F2961E", "#fff"], ["#F04E4A", "#fff"], ["#F4C79A", "#1B3560"], ["#1B3560", "#fff"], ["#D4F1FC", "#1B3560"]];
 
-const state = {token: localStorage.getItem("ktk_token") || "", me: null, events: [], roles: [], allRoles: [], staff: [], venues: [], venueColors: {}, palette: [], groups: [], layout: 2, rev: "", today: "", day: "", calMonth: "", tab: "all", ready: false, offline: false, savedAt: 0, unavailable: {}, avatars: {}, avatarKey: ""};
+const state = {venueFilter: "", token: localStorage.getItem("ktk_token") || "", me: null, events: [], roles: [], allRoles: [], staff: [], venues: [], venueColors: {}, palette: [], groups: [], layout: 2, rev: "", today: "", day: "", calMonth: "", tab: "all", ready: false, offline: false, savedAt: 0, unavailable: {}, avatars: {}, avatarKey: ""};
 const root = document.getElementById("root");
 
 // ---------- разметка без innerHTML ----------
@@ -47,6 +47,7 @@ const cloud = () => { const w = h("div", {class: "cloud", "aria-hidden": "true"}
 const roleText = (r) => String(r || "").replace(/\s*\/\s*/g, " / ");
 const dateParts = (iso) => { const [y, m, d] = iso.split("-").map(Number); return {d, m: MONTHS[m - 1], wd: WD[new Date(Date.UTC(y, m - 1, d)).getUTCDay()]}; };
 const dayTitle = (iso) => { const p = dateParts(iso); return `${p.wd}, ${p.d} ${p.m}`; };
+const weekStartOf = (iso) => addDays(iso, -((new Date(iso + "T00:00:00Z").getUTCDay() + 6) % 7));
 const addDays = (iso, n) => new Date(Date.parse(iso + "T00:00:00Z") + n * 864e5).toISOString().slice(0, 10);
 const shortDate = (iso) => { const p = dateParts(iso); return `${p.d} ${p.m.slice(0, 3)}`; };
 const cap = (s) => (s ? s[0].toUpperCase() + s.slice(1) : s);
@@ -454,9 +455,10 @@ const upcoming = (e) => (e.dateEnd || e.date) >= state.today;
 const startMin = (e) => { const m = toMin(String(e.time || "").split(/,\s*/)[0]); return m === null ? -1 : m; };
 
 /** События по дням в промежутке [from, to] (многодневные попадают во все свои дни). */
-function eventsByDay(from, to) {
+function eventsByDay(from, to, keep) {
   const map = new Map();
   for (const e of state.events) {
+    if (keep && !keep(e)) continue;
     const a = e.date > from ? e.date : from, b = (e.dateEnd || e.date) < to ? (e.dateEnd || e.date) : to;
     for (let d = a, guard = 0; d <= b && guard < 70; d = addDays(d, 1), guard++) { if (!map.has(d)) map.set(d, []); map.get(d).push(e); }
   }
@@ -841,7 +843,9 @@ function venuesBody(canEdit) {
   const start = addDays(first, -dow);
   const end = addDays(start, weeks * 7 - 1);
   const day = state.day && state.day >= start && state.day <= end && state.day.slice(0, 7) === ym ? state.day : (ym === thisYM ? state.today : first);
-  const byDay = eventsByDay(start, end);
+  if (state.venueFilter && !state.venues.some((v) => hallKey(v) === hallKey(state.venueFilter))) state.venueFilter = "";
+  const only = state.venueFilter;
+  const byDay = eventsByDay(start, end, only ? (e) => hallKey(e.hall) === hallKey(only) : null);
   const go = (n) => { state.calMonth = monthShift(ym, n); state.day = ""; render(); };
 
   const head = h("div", {class: "calhead"},
@@ -867,16 +871,18 @@ function venuesBody(canEdit) {
 
   const venues = state.venues.slice();
   const legend = h("div", {class: "vlegend"},
-    ...venues.map((v) => h(canEdit ? "button" : "span", {class: "vchip", ...(canEdit ? {onclick: () => venueSheet(v), "aria-label": `Площадка «${v}»: цвет и удаление`} : {})},
-      h("i", {style: `background:${hexOfHall(v)}`}), cap(v))),
+    h("button", {class: "vchip all" + (!only ? " on" : ""), "aria-pressed": String(!only), onclick: () => { state.venueFilter = ""; render(); }}, "Все"),
+    ...venues.map((v) => { const on = only && hallKey(only) === hallKey(v); return h("button", {class: "vchip" + (on ? " on" : ""), "aria-pressed": String(Boolean(on)), "aria-label": `Показать только «${v}»`, onclick: () => { state.venueFilter = on ? "" : v; render(); }},
+      h("i", {style: `background:${hexOfHall(v)}`}), cap(v)); }),
     canEdit ? h("button", {class: "vchip add", onclick: () => addVenueSheet()}, icon("plus"), "Площадка") : null);
+  const editSel = canEdit && only ? h("div", {class: "vsel"}, h("span", {}, `Только «${cap(only)}»`), h("button", {class: "link", onclick: () => venueSheet(state.venues.find((v) => hallKey(v) === hallKey(only)) || only)}, "Цвет и удаление")) : (only ? h("div", {class: "vsel"}, h("span", {}, `Только «${cap(only)}»`)) : null);
 
   const list = byDay.get(day) || [];
   const dayBox = h("section", {class: "dayevents", "aria-live": "polite"},
     h("h2", {class: "vday"}, dayTitle(day)),
     list.length ? h("div", {class: "plaques"}, ...list.map(plaque))
-      : h("div", {class: "empty small"}, h("div", {}, "На этот день событий нет")));
-  const body = h("div", {class: "venues"}, h("section", {class: "calendar"}, head, wd, grid), legend, dayBox);
+      : h("div", {class: "empty small"}, h("div", {}, only ? `На этот день на площадке «${cap(only)}» событий нет` : "На этот день событий нет")));
+  const body = h("div", {class: "venues"}, h("section", {class: "calendar"}, head, wd, grid), legend, editSel, dayBox);
   if (!venues.length && !canEdit) body.append(h("div", {class: "hint-line"}, "Площадки добавит администратор"));
   // листаем месяцы свайпом по календарю
   let x0 = null;
@@ -1016,7 +1022,7 @@ function reportSheet() {
   const allLabel = () => f.kind === "venue" ? "Все площадки" : f.kind === "person" ? "Все сотрудники (по каждому)" : "Все отделы";
   const body = h("div", {});
   const out = h("div", {class: "rep-out"});
-  const quick = (label, from, to) => h("button", {class: "vchip", onclick: () => { f.from = from; f.to = to; result = null; paint(); }}, label);
+  const quick = (label, from, to) => h("button", {class: "vchip" + (f.from === from && f.to === to ? " on" : ""), "aria-pressed": String(f.from === from && f.to === to), onclick: () => { f.from = from; f.to = to; result = null; paint(); }}, label);
   const monthEnd = (ym) => addDays(monthShift(ym, 1) + "-01", -1);
   const run = async (extra) => {
     if (busy) return null;
@@ -1057,9 +1063,12 @@ function reportSheet() {
           h("input", {type: "date", class: "input", value: f.from, "aria-label": "С даты", onchange: (e) => { f.from = e.target.value; result = null; paintOut(); }}),
           h("input", {type: "date", class: "input", value: f.to, "aria-label": "По дату", onchange: (e) => { f.to = e.target.value; result = null; paintOut(); }})),
         h("div", {class: "vchips"},
+          quick("Эта неделя", weekStartOf(state.today), addDays(weekStartOf(state.today), 6)),
+          quick("Прошлая неделя", addDays(weekStartOf(state.today), -7), addDays(weekStartOf(state.today), -1)),
           quick("Этот месяц", first, monthEnd(state.today.slice(0, 7))),
           quick("Прошлый месяц", monthShift(state.today.slice(0, 7), -1) + "-01", addDays(first, -1)),
-          quick("30 дней", addDays(state.today, -29), state.today))));
+          quick("30 дней", addDays(state.today, -29), state.today),
+          quick("Год", addDays(state.today, -364), state.today))));
   };
   const {close} = overlay(sheet(h("h2", {}, "Отчёт за период"), body, h("div", {class: "actions"}, h("button", {class: "btn", onclick: show}, "Показать")), out, h("div", {class: "actions"}, h("button", {class: "btn light", onclick: () => close()}, "Закрыть"))));
   paint();
@@ -1151,8 +1160,20 @@ function editor(e) {
     const venues = [...new Set([...state.venues, draft.hall].filter(Boolean))];
     const err = h("div", {class: "error", role: "alert"});
     const title = h("input", {class: "input", value: draft.title, placeholder: "Например, Спектакль «Бука»", oninput: (ev) => { draft.title = ev.target.value; ev.target.classList.remove("bad"); err.textContent = ""; }});
-    const date = h("input", {class: "input", type: "date", value: draft.date, onchange: (ev) => { draft.date = ev.target.value; paint(); }});
-    const dateEnd = h("input", {class: "input", type: "date", value: draft.dateEnd, min: draft.date, onchange: (ev) => { draft.dateEnd = ev.target.value; paint(); }});
+    const openPicker = (ev) => { try { ev.target.showPicker && ev.target.showPicker(); } catch (_) { /* не везде есть */ } }; // на компьютере календарь открывается по клику в любое место поля
+    const setDate = (d) => { // дату меняем целиком вместе с «По»: длина события сохраняется
+      if (!d) return;
+      if (draft.dateEnd && draft.date) { const span = Math.round((Date.parse(draft.dateEnd) - Date.parse(draft.date)) / 864e5); draft.dateEnd = addDays(d, Math.max(span, 0)); }
+      draft.date = d; paint();
+    };
+    const date = h("input", {class: "input", type: "date", value: draft.date, onclick: openPicker, onchange: (ev) => setDate(ev.target.value)});
+    const dateEnd = h("input", {class: "input", type: "date", value: draft.dateEnd, min: draft.date, onclick: openPicker, onchange: (ev) => { draft.dateEnd = ev.target.value; paint(); }});
+    const dayBtns = h("div", {class: "chips datequick"},
+      h("button", {class: "chip", "aria-label": "На день раньше", onclick: () => setDate(addDays(draft.date || state.today, -1))}, "‹ день"),
+      h("button", {class: "chip", "aria-label": "На день позже", onclick: () => setDate(addDays(draft.date || state.today, 1))}, "день ›"),
+      h("button", {class: "chip" + (draft.date === state.today ? " on" : ""), onclick: () => setDate(state.today)}, "Сегодня"),
+      h("button", {class: "chip" + (draft.date === addDays(state.today, 1) ? " on" : ""), onclick: () => setDate(addDays(state.today, 1))}, "Завтра"),
+      h("button", {class: "chip", onclick: () => setDate(addDays(draft.date || state.today, 7))}, "+ неделя"));
     // время меняем «на месте», без перерисовки окна: иначе системное колесо выбора времени закрывается при каждом движении и приложение «вылетает»
     const start = h("input", {class: "input", type: "time", value: draft.time, "aria-label": "Начало", onchange: (ev) => { draft.time = ev.target.value; if (!draft.time) { draft.end = ""; end.value = ""; } end.disabled = !draft.time; refreshClash(); }});
     const end = h("input", {class: "input", type: "time", value: draft.end, "aria-label": "Окончание", disabled: !draft.time, onchange: (ev) => { draft.end = ev.target.value; refreshClash(); }});
@@ -1224,6 +1245,7 @@ function editor(e) {
       meetingBlock,
       h("div", {class: "row2"}, h("label", {class: "field", style: "flex:1"}, h("span", {}, "Дата"), date),
         draft.dateEnd || draft.multi ? h("label", {class: "field", style: "flex:1"}, h("span", {}, "По"), dateEnd) : null),
+      dayBtns,
       draft.dateEnd || draft.multi ? null : h("button", {class: "link", onclick: () => { draft.multi = true; paint(); }}, "Несколько дней"),
       h("div", {class: "row2"},
         h("label", {class: "field", style: "flex:1"}, h("span", {}, "Начало"), start),
