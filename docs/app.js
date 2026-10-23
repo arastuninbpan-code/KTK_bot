@@ -870,9 +870,9 @@ function venuesBody(canEdit) {
   const grid = h("div", {class: "calgrid"}, ...cells);
 
   const venues = state.venues.slice();
-  const legend = h("div", {class: "vlegend"},
+  const legend = h("div", {class: "vlegend" + (only ? " filtered" : "")},
     h("button", {class: "vchip all" + (!only ? " on" : ""), "aria-pressed": String(!only), onclick: () => { state.venueFilter = ""; render(); }}, "Все"),
-    ...venues.map((v) => { const on = only && hallKey(only) === hallKey(v); return h("button", {class: "vchip" + (on ? " on" : ""), "aria-pressed": String(Boolean(on)), "aria-label": `Показать только «${v}»`, onclick: () => { state.venueFilter = on ? "" : v; render(); }},
+    ...venues.map((v) => { const on = only && hallKey(only) === hallKey(v); return h("button", {class: "vchip" + (on ? " on" : ""), style: on ? `--vc:${hexOfHall(v)};--vk:${inkOn(hexOfHall(v))}` : "", "aria-pressed": String(Boolean(on)), "aria-label": `Показать только «${v}»`, onclick: () => { state.venueFilter = on ? "" : v; render(); }},
       h("i", {style: `background:${hexOfHall(v)}`}), cap(v)); }),
     canEdit ? h("button", {class: "vchip add", onclick: () => addVenueSheet()}, icon("plus"), "Площадка") : null);
   const editSel = canEdit && only ? h("div", {class: "vsel"}, h("span", {}, `Только «${cap(only)}»`), h("button", {class: "link", onclick: () => venueSheet(state.venues.find((v) => hallKey(v) === hallKey(only)) || only)}, "Цвет и удаление")) : (only ? h("div", {class: "vsel"}, h("span", {}, `Только «${cap(only)}»`)) : null);
@@ -1160,20 +1160,20 @@ function editor(e) {
     const venues = [...new Set([...state.venues, draft.hall].filter(Boolean))];
     const err = h("div", {class: "error", role: "alert"});
     const title = h("input", {class: "input", value: draft.title, placeholder: "Например, Спектакль «Бука»", oninput: (ev) => { draft.title = ev.target.value; ev.target.classList.remove("bad"); err.textContent = ""; }});
-    const openPicker = (ev) => { try { ev.target.showPicker && ev.target.showPicker(); } catch (_) { /* не везде есть */ } }; // на компьютере календарь открывается по клику в любое место поля
-    const setDate = (d) => { // дату меняем целиком вместе с «По»: длина события сохраняется
-      if (!d) return;
-      if (draft.dateEnd && draft.date) { const span = Math.round((Date.parse(draft.dateEnd) - Date.parse(draft.date)) / 864e5); draft.dateEnd = addDays(d, Math.max(span, 0)); }
-      draft.date = d; paint();
-    };
-    const date = h("input", {class: "input", type: "date", value: draft.date, onclick: openPicker, onchange: (ev) => setDate(ev.target.value)});
-    const dateEnd = h("input", {class: "input", type: "date", value: draft.dateEnd, min: draft.date, onclick: openPicker, onchange: (ev) => { draft.dateEnd = ev.target.value; paint(); }});
-    const dayBtns = h("div", {class: "chips datequick"},
-      h("button", {class: "chip", "aria-label": "На день раньше", onclick: () => setDate(addDays(draft.date || state.today, -1))}, "‹ день"),
-      h("button", {class: "chip", "aria-label": "На день позже", onclick: () => setDate(addDays(draft.date || state.today, 1))}, "день ›"),
-      h("button", {class: "chip" + (draft.date === state.today ? " on" : ""), onclick: () => setDate(state.today)}, "Сегодня"),
-      h("button", {class: "chip" + (draft.date === addDays(state.today, 1) ? " on" : ""), onclick: () => setDate(addDays(state.today, 1))}, "Завтра"),
-      h("button", {class: "chip", onclick: () => setDate(addDays(draft.date || state.today, 7))}, "+ неделя"));
+    // дату меняем «на месте», без перерисовки окна: иначе при наборе с клавиатуры поле теряет фокус на каждой цифре года
+    const validDate = (v) => /^\d{4}-\d{2}-\d{2}$/.test(v) && v.slice(0, 4) >= "2000";
+    const date = h("input", {class: "input", type: "date", value: draft.date, onchange: (ev) => {
+      const v = ev.target.value;
+      if (!validDate(v)) return;
+      draft.date = v;
+      if (draft.dateEnd && draft.dateEnd < v) { draft.dateEnd = v; dateEnd.value = v; }
+      dateEnd.min = v; refreshClash(); refreshOff();
+    }});
+    const dateEnd = h("input", {class: "input", type: "date", value: draft.dateEnd, min: draft.date, onchange: (ev) => {
+      const v = ev.target.value;
+      if (v && !validDate(v)) return;
+      draft.dateEnd = v; refreshClash(); refreshOff();
+    }});
     // время меняем «на месте», без перерисовки окна: иначе системное колесо выбора времени закрывается при каждом движении и приложение «вылетает»
     const start = h("input", {class: "input", type: "time", value: draft.time, "aria-label": "Начало", onchange: (ev) => { draft.time = ev.target.value; if (!draft.time) { draft.end = ""; end.value = ""; } end.disabled = !draft.time; refreshClash(); }});
     const end = h("input", {class: "input", type: "time", value: draft.end, "aria-label": "Окончание", disabled: !draft.time, onchange: (ev) => { draft.end = ev.target.value; refreshClash(); }});
@@ -1188,10 +1188,17 @@ function editor(e) {
     };
     refreshClash();
     const origNames = new Set(e ? Object.values(e.roles || {}).flat() : []);
-    const dDays = eventDays(draft);
-    const badPeople = [...new Set(Object.values(draft.roles).flat())].filter((n) => !origNames.has(n) && blockedDays(n, dDays).length);
-    const blockSave = badPeople.length && !isAdmin();
-    const warnOff = badPeople.length ? h("div", {class: "warn"}, icon("alert"), h("span", {}, `Не могут работать в эти дни: ${badPeople.map((n) => `${n} (${blockedDays(n, dDays).map(shortDate).join(", ")})`).join("; ")}. ${isAdmin() ? "Вы можете оставить их — решение за администратором." : "Уберите их или смените дату."}`)) : null;
+    const offState = () => {
+      const dDays = eventDays(draft);
+      const bad = [...new Set(Object.values(draft.roles).flat())].filter((n) => !origNames.has(n) && blockedDays(n, dDays).length);
+      return {bad, dDays, block: Boolean(bad.length) && !isAdmin()};
+    };
+    const warnOff = h("div", {});
+    const refreshOff = () => {
+      const {bad, dDays} = offState();
+      warnOff.replaceChildren(...(bad.length ? [h("div", {class: "warn"}, icon("alert"), h("span", {}, `Не могут работать в эти дни: ${bad.map((n) => `${n} (${blockedDays(n, dDays).map(shortDate).join(", ")})`).join("; ")}. ${isAdmin() ? "Вы можете оставить их — решение за администратором." : "Уберите их или смените дату."}`))] : []));
+    };
+    refreshOff();
     // должности — группы из «Сотрудников»; плюс те, где на этом событии уже кто-то стоит (чтобы старые записи не потерялись)
     const editRoles = [...state.roles, ...Object.keys(draft.roles).filter((r) => !state.roles.includes(r))];
     const roleBlocks = editRoles.map((role) => {
@@ -1230,7 +1237,8 @@ function editor(e) {
       const event = {title: draft.title.trim(), date: draft.date, dateEnd: draft.dateEnd || "", time: [draft.time, ...draft.extra].filter(Boolean).join(", "), end: draft.end, hall: draft.hall, roles: draft.roles};
       if (!event.title) return shakeBad(title, err, "Введите название события");
       if (!event.date) return shakeBad(date, err, "Укажите дату");
-      if (blockSave) { err.textContent = "Не могут работать в эти дни: " + badPeople.join(", ") + ". Уберите их или смените дату."; return; }
+      const off = offState();
+      if (off.block) { err.textContent = "Не могут работать в эти дни: " + off.bad.join(", ") + ". Уберите их или смените дату."; return; }
       if (!force && clash.length) { confirmDialog("Площадка занята", `Площадка занята: ${clash.map((c) => `${c.title} (${timeLabel(c)})`).join("; ")}. Сохранить всё равно?`, "Сохранить", () => doSave(true)); return; }
       close();
       const meta = draft.kind === "meeting" || (e && e.meta && (e.meta.kind === "meeting" || e.meta.note))
@@ -1245,7 +1253,6 @@ function editor(e) {
       meetingBlock,
       h("div", {class: "row2"}, h("label", {class: "field", style: "flex:1"}, h("span", {}, "Дата"), date),
         draft.dateEnd || draft.multi ? h("label", {class: "field", style: "flex:1"}, h("span", {}, "По"), dateEnd) : null),
-      dayBtns,
       draft.dateEnd || draft.multi ? null : h("button", {class: "link", onclick: () => { draft.multi = true; paint(); }}, "Несколько дней"),
       h("div", {class: "row2"},
         h("label", {class: "field", style: "flex:1"}, h("span", {}, "Начало"), start),
