@@ -36,7 +36,7 @@ test("/shifts, /schedule, /login с кнопкой «Открыть в прил�
   say(ctx, ch, 5, "/schedule@k_t_k_bot");
   assert.match(lastTo(ch, 5).text, /💬 <b>Афиша<\/b>/);
   say(ctx, ch, 5, "/login");
-  const login = lastTo(ch, 5).text.match(/<code>([^<]+)<\/code>/)[1];
+  const login = lastTo(ch, 5).text.match(/ID: ([^\n<]+)/)[1];
   assert.equal(ctx.store.findByLogin(login).phone, "9000000001");
   say(ctx, ch, 5, "/login"); // логин постоянный
   assert.match(lastTo(ch, 5).text, new RegExp(login));
@@ -65,15 +65,15 @@ test("разовый код -> сотрудник выбирает постоя�
   ctx.store.ensureLogins();
   const once = ctx.store.users().find((u) => u.name === "Петрова Л.Н.").login;
   say(ctx, ch, 77, once);
-  assert.match(lastTo(ch, 77).text, /одноразовый код принят/i);
+  assert.match(lastTo(ch, 77).text, /ID принят/i);
   say(ctx, ch, 77, "12");
   assert.match(lastTo(ch, 77).text, /ровно из шести цифр/i);
   say(ctx, ch, 77, once);
-  assert.match(lastTo(ch, 77).text, /отличаться от одноразового/i);
+  assert.match(lastTo(ch, 77).text, /Не удалось сохранить PIN/i);
   say(ctx, ch, 77, "654321");
-  assert.match(lastTo(ch, 77).text, /Ваш постоянный код: <code>654321<\/code>/);
+  assert.match(lastTo(ch, 77).text, /ID: 246810[\s\S]*PIN: 654321/);
   const u = ctx.store.users().find((x) => x.name === "Петрова Л.Н.");
-  assert.equal(u.login, "654321"); assert.equal(u.temporary, false);
+  assert.equal(u.login, "246810"); assert.equal(u.pin, "654321"); assert.equal(u.temporary, false);
   assert.equal(ctx.store.chats().find((c) => c.chatId === "77").phone, u.phone);
   assert.equal(ctx.book.get(TABS.staff)[2][4], "Активирован");
 });
@@ -81,7 +81,8 @@ test("разовый код -> сотрудник выбирает постоя�
 test("постоянный код подключает второй мессенджер, но код в уже подключённом чате не меняет сотрудника", () => {
   const ctx = setup(); const tg = fakeChannel("telegram"); const vk = fakeChannel("vk");
   say(ctx, tg, 10, "", "9000000001"); // безопасный контакт Telegram: Иванова
-  say(ctx, vk, 20, "100001"); // тот же постоянный код во ВК
+  say(ctx, vk, 20, "100001"); // ID Ивановой
+  say(ctx, vk, 20, "100001"); // старый тестовый PIN совпадает с ID
   assert.equal(ctx.store.chats().find((c) => c.channel === "vk" && c.chatId === "20").phone, "9000000001");
   say(ctx, tg, 10, "100002"); // случайно прислала код Петровой в уже подключённом чате
   assert.equal(ctx.store.chats().find((c) => c.channel === "telegram" && c.chatId === "10").phone, "9000000001");

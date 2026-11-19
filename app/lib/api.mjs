@@ -3,9 +3,9 @@ import {makeToken, readToken} from "./auth.mjs";
 import {addDays, buildRow, daysOf, findConflicts, headerRoles, isIdColumn, layoutOf, rowColumns, matchPhones, norm, parseDate, parseEvents, todayIso, validateEvent} from "./core.mjs";
 import {platform} from "./platform.mjs";
 import {archiveLine, buildReport, checkParams, parseArchive, reportCsv} from "./report.mjs";
-import {canEdit, cleanPhotoIds, colorName, ROLE_LABELS, TABS, VENUE_COLORS} from "./store.mjs";
+import {canEdit, cleanPhotoIds, colorName, normLogin, ROLE_LABELS, TABS, VENUE_COLORS} from "./store.mjs";
 
-export const SERVER_VERSION = "2026.11.19-30"; // меняется при каждом выпуске; приложение показывает её в профиле
+export const SERVER_VERSION = "2026.11.19-31"; // меняется при каждом выпуске; приложение показывает её в профиле
 
 class HttpError extends Error {
   constructor(status, message, extra = {}) { super(message); this.status = status; this.extra = extra; }
@@ -60,23 +60,30 @@ export function handleApi(req, deps) {
   const {method, path, body = {}, token} = req;
   try {
     // --- без входа ---
+    if (method === "POST" && path === "/api/identify") {
+      store.ensureLogins();
+      const user = store.findByLogin(body.login);
+      if (!user) { platform.sleep(400); throw new HttpError(401, "Не удалось продолжить. Проверьте ID."); }
+      if (user.role === "blocked") throw new HttpError(403, "Доступ закрыт. Обратитесь к администратору.");
+      return {status: 200, body: {ok: true, activation: user.temporary || !user.pin, name: user.name}};
+    }
     if (method === "POST" && path === "/api/login") {
       store.ensureLogins();
       const user = store.findByLogin(body.login);
-      if (!user) { platform.sleep(400); throw new HttpError(401, "Неверный код."); }
+      const suppliedPin = String(body.pin == null ? body.login : body.pin).trim(); // старые клиенты передавали одно поле; после миграции это сработает только у старых записей ID=PIN
+      if (!user || user.temporary || !user.pin || normLogin(user.pin) !== normLogin(suppliedPin)) { platform.sleep(400); throw new HttpError(401, "ID или PIN указан неверно."); }
       if (user.role === "blocked") throw new HttpError(403, "Доступ закрыт. Обратитесь к администратору.");
-      if (user.temporary) throw new HttpError(409, "Придумайте новый шестизначный код", {activation: true, name: user.name});
-      return {status: 200, body: {token: makeToken({sub: user.phone, l: store.loginMark(user.login)}, secret, undefined, now()), user: publicUser(user)}};
+      return {status: 200, body: {token: makeToken({sub: user.phone, l: store.loginMark(user.login, user.pin)}, secret, undefined, now()), user: publicUser(user)}};
     }
     if (method === "POST" && path === "/api/activate") {
       store.ensureLogins();
-      const user = store.findByLogin(body.temporary);
+      const user = store.findByLogin(body.login);
       if (!user || !user.temporary) { platform.sleep(400); throw new HttpError(401, "Разовый код неверный или уже использован."); }
       if (user.role === "blocked") throw new HttpError(403, "Доступ закрыт. Обратитесь к администратору.");
-      if (String(body.temporary || "").trim() === String(body.login || "").trim()) throw new HttpError(400, "Новый код должен отличаться от разового.");
-      if (!store.setPermanentLogin(user.phone, body.login)) throw new HttpError(409, "Введите другой шестизначный код: этот код уже занят или имеет неверный формат.");
+      if (normLogin(user.login) === normLogin(body.pin)) throw new HttpError(400, "PIN должен отличаться от ID сотрудника.");
+      if (!store.setPermanentLogin(user.phone, body.pin)) throw new HttpError(400, "PIN должен состоять ровно из шести цифр.");
       const fresh = store.users().find((u) => u.phone === user.phone);
-      return {status: 200, body: {token: makeToken({sub: fresh.phone, l: store.loginMark(fresh.login)}, secret, undefined, now()), user: publicUser(fresh)}};
+      return {status: 200, body: {token: makeToken({sub: fresh.phone, l: store.loginMark(fresh.login, fresh.pin)}, secret, undefined, now()), user: publicUser(fresh)}};
     }
 
     // --- нужен вход ---
@@ -86,7 +93,7 @@ export function handleApi(req, deps) {
     if (path === "/api/ping") { const rv = getRev(); return {status: 200, body: {rev: rv, changed: body.rev !== rv}}; }
     const users = store.users();
     const me = users.find((u) => u.phone === session.sub);
-    if (!me || me.role === "blocked" || !me.login || session.l !== store.loginMark(me.login)) throw new HttpError(401, "Нужно войти");
+    if (!me || me.role === "blocked" || !me.login || !me.pin || session.l !== store.loginMark(me.login, me.pin)) throw new HttpError(401, "Нужно войти");
     const today = todayIso(now());
 
     if (method === "GET" && path === "/api/schedule") {

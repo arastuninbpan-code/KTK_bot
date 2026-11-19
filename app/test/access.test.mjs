@@ -151,7 +151,7 @@ test("главное меню: после подключения кнопки в
   say(7, MENU_LABELS.schedule);
   assert.match(last(7).text, /./);
   say(7, MENU_LABELS.login);
-  assert.match(last(7).text, /логин/i);
+  assert.match(last(7).text, /ID сотрудника|Данные для входа/i);
   say(7, "/start");
   assert.match(last(7).text, /уже авторизованы: Петрова|чат защищён/i);
   say(7, "что-то непонятное");

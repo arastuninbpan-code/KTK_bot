@@ -1,6 +1,6 @@
 // Диалог с сотрудником (одинаков для любого мессенджера) и рассылка уведомлений. Синхронный код.
 import {matchPhones, parseEvents, parseGrid, planCycle, todayIso} from "./core.mjs";
-import {afishaText, appButton, MENU_COMMANDS, msgAlreadyLinked, msgApp, msgMenu, msgNoApp, msgChangesDigest, msgAskPhone, msgIntro, msgAuthLocked, msgBlocked, msgChange, msgAccessGranted, msgChoosePin, msgLogin, msgPinInvalid, msgPinSame, msgPinSaved, msgPinUsed, msgPostEmpty, msgPostNoRights, msgPostNotConfigured, msgPostPreview, msgPostResult, msgReminder, msgStopped, msgWelcome, msgWrongCode, publicAfishaText, shiftsText} from "./format.mjs";
+import {afishaText, appButton, MENU_COMMANDS, msgAlreadyLinked, msgApp, msgMenu, msgNoApp, msgChangesDigest, msgAskPhone, msgIntro, msgAuthLocked, msgBlocked, msgChange, msgAccessGranted, msgChoosePin, msgEnterPin, msgLogin, msgPinInvalid, msgPinSaved, msgPinUsed, msgPostEmpty, msgPostNoRights, msgPostNotConfigured, msgPostPreview, msgPostResult, msgReminder, msgStopped, msgWelcome, msgWrongCode, publicAfishaText, shiftsText} from "./format.mjs";
 import {Gone} from "./telegram.mjs";
 import {canEdit, normLogin, TABS, validPin} from "./store.mjs";
 
@@ -20,7 +20,8 @@ export function handleMessage({store, channel, ev, appUrl = "", now = Date.now()
   // Разовый шестизначный код выдаёт директор. Он только начинает активацию; постоянным кодом войти в новый чат нельзя.
   const startPayload = ev.start || (/^\/start(?:@\w+)?\s+(\S+)/i.exec(text) || [])[1] || "";
   const loginText = startPayload || (text && !text.startsWith("/") ? text : "");
-  // Telegram гарантирует, что contact.user_id совпадает с отправителем. Такой контакт можно оставить как безопасный запасной способ.
+  // Совместимость для уже заведённых сотрудников: собственный контакт Telegram безопасен,
+  // но новая регистрация и обычный вход номера телефона не требуют.
   if (ev.phone) {
     const digits = String(ev.phone).replace(/\D/g, "").replace(/^8(?=\d{10}$)/, "7");
     const key = digits.length === 11 && digits.startsWith("7") ? digits.slice(1) : digits;
@@ -35,26 +36,27 @@ export function handleMessage({store, channel, ev, appUrl = "", now = Date.now()
     if (pending) {
       if (!validPin(text)) return channel.send(chat, msgPinInvalid);
       const current = store.users().find((x) => x.phone === pending.person);
-      if (current && normLogin(current.login) === normLogin(text)) return channel.send(chat, msgPinSame);
-      if (!store.setPermanentLogin(pending.person, text)) return channel.send(chat, msgPinUsed);
+      if (!current || current.role === "blocked") return channel.send(chat, msgBlocked);
+      if (pending.mode === "login") {
+        if (String(current.pin) !== text) {
+          const failed = store.authFailed(channel.name, chat);
+          return channel.send(chat, failed.blockedUntil ? msgAuthLocked : msgWrongCode(5 - failed.attempts));
+        }
+      } else if (!store.setPermanentLogin(pending.person, text)) return channel.send(chat, msgPinUsed);
       const fresh = store.users().find((x) => x.phone === pending.person);
       store.cancelActivation(channel.name, chat);
       store.authSucceeded(channel.name, chat);
       store.bind(channel.name, chat, fresh.phone, fresh.name);
-      return channel.send(chat, msgPinSaved(fresh.name, fresh.login), {menu: menuFor(fresh)});
+      const credentials = `ID: ${fresh.login}\nPIN: ${fresh.pin}`;
+      return channel.send(chat, msgPinSaved(fresh.name, fresh.login, fresh.pin), {menu: menuFor(fresh), copy: {text: "📋 Скопировать ID и PIN", value: credentials}});
     }
     const auth = store.authState(channel.name, chat);
     if (auth.blockedUntil > now) return channel.send(chat, msgAuthLocked);
     const byLogin = loginText && validPin(loginText) ? users.find((x) => normLogin(x.login) === normLogin(loginText)) : null;
     if (byLogin) {
       if (byLogin.role === "blocked") return channel.send(chat, msgBlocked);
-      store.authSucceeded(channel.name, chat);
-      if (byLogin.temporary) {
-        store.beginActivation(channel.name, chat, byLogin.phone);
-        return channel.send(chat, msgChoosePin(byLogin.name));
-      }
-      store.bind(channel.name, chat, byLogin.phone, byLogin.name);
-      return channel.send(chat, msgWelcome(byLogin.name, byLogin.login), {menu: menuFor(byLogin)});
+      store.beginActivation(channel.name, chat, byLogin.phone, byLogin.temporary || !byLogin.pin ? "activate" : "login");
+      return channel.send(chat, byLogin.temporary || !byLogin.pin ? msgChoosePin(byLogin.name) : msgEnterPin(byLogin.name));
     }
     if (loginText && validPin(loginText)) {
       const failed = store.authFailed(channel.name, chat);
@@ -83,7 +85,8 @@ export function handleMessage({store, channel, ev, appUrl = "", now = Date.now()
   }
   if (cmd === "/login") {
     const fresh = store.users().find((x) => x.phone === user.phone);
-    return channel.send(chat, msgLogin(fresh.login), {...btn, copy: {text: "📋 Скопировать логин", value: fresh.login}});
+    const credentials = `ID: ${fresh.login}\nPIN: ${fresh.pin}`;
+    return channel.send(chat, msgLogin(fresh.login, fresh.pin), {...btn, copy: {text: "📋 Скопировать ID и PIN", value: credentials}});
   }
   if (cmd === "/post") {
     if (!canEdit(user.role)) return channel.send(chat, msgPostNoRights);

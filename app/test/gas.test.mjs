@@ -18,7 +18,7 @@ const sentTo = (g, chat) => g.fetches.filter((f) => f.url.endsWith("/sendMessage
 test("Telegram: подключение по контакту, ответ красиво оформлен, токен не попал в лог", () => {
   const g = G();
   assert.equal(tg(g, msg(5, "/start")), "ok");
-  assert.match(sentTo(g, 5).at(-1).body.text, /одноразовый код/i);
+  assert.match(sentTo(g, 5).at(-1).body.text, /ID сотрудника/i);
   tg(g, msg(5, "", {user_id: 5, phone_number: "+7 900 000-00-01"}));
   const hello = sentTo(g, 5).at(-1).body;
   assert.equal(hello.parse_mode, "HTML");
@@ -44,10 +44,11 @@ test("вход по коду из бота и работа приложения:
   tg(g, msg(6, "", {user_id: 6, phone_number: "9000000002"})); // Петрова (Читатель)
   g.run("everyMinute()"); // первый снимок расписания (тихо)
   tg(g, msg(6, "/login"));
-  const code = sentTo(g, 6).at(-1).body.text.match(/<code>([^<]+)<\/code>/)[1];
-  const login = api(g, {method: "POST", path: "/api/login", body: {login: code}});
+  const readerText = sentTo(g, 6).at(-1).body.text;
+  const code = readerText.match(/ID: ([^\n<]+)/)[1], readerPin = readerText.match(/PIN: ([^\n<]+)/)[1];
+  const login = api(g, {method: "POST", path: "/api/login", body: {login: code, pin: readerPin}});
   assert.equal(login._status, 200); assert.equal(login.user.roleLabel, "Читатель");
-  assert.equal(api(g, {method: "POST", path: "/api/login", body: {login: code}})._status, 200); // логин постоянный
+  assert.equal(api(g, {method: "POST", path: "/api/login", body: {login: code, pin: readerPin}})._status, 200);
 
   const sched = api(g, {method: "GET", path: "/api/schedule", token: login.token});
   assert.deepEqual(sched.events.map((e) => e.title), ["Спектакль «Бука»", "Сказки из старого чемодана"]);
@@ -55,8 +56,9 @@ test("вход по коду из бота и работа приложения:
   assert.equal(api(g, {method: "POST", path: "/api/events", token: login.token, body: {event: {date: "2026-10-06", title: "X"}}})._status, 403);
 
   tg(g, msg(5, "/login")); // админ
-  const adminCode = sentTo(g, 5).at(-1).body.text.match(/<code>([^<]+)<\/code>/)[1];
-  const admin = api(g, {method: "POST", path: "/api/login", body: {login: adminCode}});
+  const adminText = sentTo(g, 5).at(-1).body.text;
+  const adminCode = adminText.match(/ID: ([^\n<]+)/)[1], adminPin = adminText.match(/PIN: ([^\n<]+)/)[1];
+  const admin = api(g, {method: "POST", path: "/api/login", body: {login: adminCode, pin: adminPin}});
   assert.equal(admin.user.canEdit, true);
   const before = sentTo(g, 6).length;
   const ev = {date: "2026-10-06", time: "15:00", title: "Экскурсия", hall: "большая сцена", roles: {"Администратор/ Капельдинер": ["Петрова Л.Н."]}};

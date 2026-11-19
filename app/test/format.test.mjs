@@ -41,7 +41,7 @@ test("список смен и афиша группируются по дням
 
 test("экранирование, код входа, кнопка, разбиение длинного текста", () => {
   assert.equal(esc("<b>&"), "&lt;b&gt;&amp;");
-  assert.match(msgLogin("654321"), /<code>654321<\/code>[\s\S]*постоянный шестизначный код/);
+  assert.match(msgLogin("654321", "123456"), /ID: 654321[\s\S]*PIN: 123456/);
   assert.deepEqual(appButton("https://x.y"), {button: {text: "Открыть в приложении", url: "https://x.y"}});
   assert.equal(appButton(""), undefined);
   const long = Array.from({length: 200}, (_, i) => `блок ${i} ${"я".repeat(50)}`).join("\n\n");

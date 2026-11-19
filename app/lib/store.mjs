@@ -30,7 +30,7 @@ export function colorName(value) {
 export const colorHex = (name) => (VENUE_COLORS.find((c) => c.name === name) || {}).hex || "";
 const CHECKED_RE = /^(true|да|yes|1|✓|✔|x|х)$/i; // галочка в таблице: TRUE / ✓ / «да»
 export const SUBS_HEADER = ["Канал", "ID чата", "Телефон", "ФИО"];
-export const ACTIVATION_HEADER = ["Канал", "ID чата", "ID сотрудника"];
+export const ACTIVATION_HEADER = ["Канал", "ID чата", "ID сотрудника", "Режим"];
 export const AUTH_HEADER = ["Канал", "ID чата", "Ошибок", "Заблокирован до"];
 export const ROLE_LABELS = {admin: "Админ", editor: "Редактор", reader: "Читатель", blocked: "Заблокирован"};
 const CHUNK = 40000; // лимит ячейки Google — 50 000 знаков
@@ -70,15 +70,16 @@ export class Store {
     const access = find(/^доступ$/i);
     const comment = find(/^комментарий$/i);
     const status = find(/^статус входа$/i);
+    const pin = find(/^pin$/i);
     const id = find(/^_id$/i);
-    const service = new Set([access, comment, status, id]);
+    const service = new Set([access, comment, status, pin, id]);
     const groups = head.map((name, col) => ({name, col})).filter((g) => g.col >= 4 && g.name && !g.name.startsWith("_") && !service.has(g.col));
-    return {access, comment, status, id, groups};
+    return {access, comment, status, pin, id, groups};
   }
 
   users() {
     const rows = this.book.get(TABS.staff);
-    const {access, status, id, groups: defs} = this.staffCols_(rows);
+    const {access, status, pin, id, groups: defs} = this.staffCols_(rows);
     const out = [];
     for (let ri = 1; ri < rows.length; ri++) {
       const row = rows[ri];
@@ -92,13 +93,15 @@ export class Store {
       const ids = phonesIn(phones);
       const internal = id >= 0 ? String(row[id] || "").trim() : "";
       const identity = ids[0] || internal;
-      if (identity) out.push({name: n, phone: identity, role: hasAccess ? parseRole(role) : "blocked", login: String(login).trim(), temporary: status >= 0 && /^разов/i.test(String(row[status] || "").trim()), groups, pending, row: ri + 1});
+      const temporary = status >= 0 && /^разов/i.test(String(row[status] || "").trim());
+      const pinValue = pin >= 0 ? String(row[pin] || "").trim() : (!temporary ? String(login).trim() : ""); // совместимость со старой схемой ID=PIN
+      if (identity) out.push({name: n, phone: identity, role: hasAccess ? parseRole(role) : "blocked", login: String(login).trim(), pin: pinValue, temporary, groups, pending, row: ri + 1});
     }
     const o = this.owner;
     if (o) {
       const mine = out.filter((u) => u.phone === o.phone);
-      if (!mine.length) out.push({name: o.name || "Владелец", phone: o.phone, role: "admin", login: o.login || "", groups: [], pending: false});
-      for (const u of mine) { u.role = "admin"; u.pending = false; } // даже если строку испортили в таблице
+      if (!mine.length) out.push({name: o.name || "Владелец", phone: o.phone, role: "admin", login: o.login || "", pin: o.login || "", temporary: false, groups: [], pending: false});
+      for (const u of mine) { u.role = "admin"; u.pending = false; if (!u.pin && o.login) u.pin = o.login; } // даже если строку испортили в таблице
     }
     return out;
   }
@@ -180,12 +183,12 @@ export class Store {
 
   activations() {
     if (!this.book.has(TABS.activation)) return [];
-    return this.book.get(TABS.activation).slice(1).map((r, i) => ({row: i + 2, channel: String(r[0] || ""), chatId: String(r[1] || ""), person: String(r[2] || "")})).filter((r) => r.channel && r.chatId && r.person);
+    return this.book.get(TABS.activation).slice(1).map((r, i) => ({row: i + 2, channel: String(r[0] || ""), chatId: String(r[1] || ""), person: String(r[2] || ""), mode: String(r[3] || "activate")})).filter((r) => r.channel && r.chatId && r.person);
   }
-  beginActivation(channel, chatId, person) {
+  beginActivation(channel, chatId, person, mode = "activate") {
     this.book.ensure(TABS.activation, ACTIVATION_HEADER);
     this.cancelActivation(channel, chatId);
-    this.book.append(TABS.activation, [channel, String(chatId), person]);
+    this.book.append(TABS.activation, [channel, String(chatId), person, mode]);
   }
   cancelActivation(channel, chatId) {
     for (const r of this.activations().filter((x) => x.channel === channel && x.chatId === String(chatId)).reverse()) this.book.clearRow(TABS.activation, r.row);
@@ -472,7 +475,7 @@ export class Store {
   hash(text) { return platform.sha256hex(`${this.secret}:${text}`).slice(0, 32); }
 
   /** Отметка логина внутри сессии: после смены логина в таблице старые входы перестают работать. */
-  loginMark(login) { return this.hash("login:" + normLogin(login)); }
+  loginMark(login, pin = "") { return this.hash("login:" + normLogin(login) + ":" + String(pin)); }
 
   /** Сотрудник по шестизначному коду (с учётом заблокированных — решает вызывающий). */
   findByLogin(text) {
@@ -480,15 +483,15 @@ export class Store {
     return key ? this.users().find((u) => normLogin(u.login) === key) || null : null;
   }
 
-  setPermanentLogin(person, login) {
-    if (!validPin(login)) return false;
-    const users = this.users();
-    if (users.some((u) => u.phone !== person && normLogin(u.login) === normLogin(login))) return false;
-    const u = users.find((x) => x.phone === person);
+  setPermanentLogin(person, pinValue) {
+    if (!validPin(pinValue)) return false;
+    const u = this.users().find((x) => x.phone === person);
     if (!u) return false;
+    if (normLogin(u.login) === normLogin(pinValue)) return false;
     const rows = this.book.get(TABS.staff);
-    const {status} = this.staffCols_(rows);
-    this.book.setCell(TABS.staff, u.row, 4, String(login).trim());
+    const {status, pin} = this.staffCols_(rows);
+    if (pin < 0) return false;
+    this.book.setCell(TABS.staff, u.row, pin + 1, String(pinValue).trim());
     if (status >= 0) this.book.setCell(TABS.staff, u.row, status + 1, "Активирован");
     return true;
   }
@@ -512,8 +515,10 @@ export class Store {
     if (rows.length < 2) return 0;
     let cols = this.staffCols_(rows);
     const legacyWithoutStatus = cols.status < 0;
+    const legacyWithoutPin = cols.pin < 0;
     let width = Math.max(...rows.map((r) => r.length), 4);
     if (cols.status < 0) { this.book.setCell(TABS.staff, 1, ++width, "Статус входа"); cols = this.staffCols_(this.book.get(TABS.staff)); }
+    if (cols.pin < 0) { this.book.setCell(TABS.staff, 1, ++width, "PIN"); cols = this.staffCols_(this.book.get(TABS.staff)); }
     if (cols.id < 0) { this.book.setCell(TABS.staff, 1, ++width, "_ID"); cols = this.staffCols_(this.book.get(TABS.staff)); }
     const freshRows = this.book.get(TABS.staff);
     const used = new Set(rows.slice(1).map((r) => normLogin(r[3])).filter(Boolean));
@@ -524,6 +529,7 @@ export class Store {
       if (!String(r[cols.id] || "").trim()) this.book.setCell(TABS.staff, i + 1, cols.id + 1, "u" + this.hash(`staff:${i}:${r[0]}:${this.now()}`).slice(0, 12));
       if (normLogin(r[3])) {
         if (!String(r[cols.status] || "").trim()) this.book.setCell(TABS.staff, i + 1, cols.status + 1, legacyWithoutStatus ? "Активирован" : "Разовый");
+        if (legacyWithoutPin && !/^разов/i.test(String(r[cols.status] || ""))) this.book.setCell(TABS.staff, i + 1, cols.pin + 1, String(r[3]));
         continue;
       }
       let login;

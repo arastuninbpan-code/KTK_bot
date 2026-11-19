@@ -27,26 +27,27 @@ test("вход по коду: верный, повторный, неверный
   assert.equal(ctx.call("POST", "/api/login", "", {login: "нет-такого"}).status, 401);
   // директор поменял логин в таблице: старый логин и старые входы перестали работать
   const staff = ctx.store.book.get("Сотрудники"); const i = staff.findIndex((r) => r[3] === login);
-  ctx.store.book.set("Сотрудники", i + 1, [staff[i][0], staff[i][1], staff[i][2], "НОВЫЙ-77", "Активирован"]);
+  const changed = staff[i].slice(); changed[3] = "НОВЫЙ-77"; ctx.store.book.set("Сотрудники", i + 1, changed);
   assert.equal(ctx.call("POST", "/api/login", "", {login}).status, 401);
   assert.equal(ctx.call("GET", "/api/schedule", ok.body.token).status, 401);
-  assert.equal(ctx.call("POST", "/api/login", "", {login: "новый 77"}).status, 200);
+  assert.equal(ctx.call("POST", "/api/login", "", {login: "новый 77", pin: login}).status, 200);
   assert.equal(ctx.call("GET", "/api/schedule", "мусор").status, 401);
   assert.equal(ctx.login("9000000005").status, 403); // Орлова заблокирована
 });
 
-test("разовый код в приложении требует новый и сразу активирует вход", () => {
+test("ID в приложении определяет сотрудника, затем новый PIN активирует вход", () => {
   const ctx = make();
   const rows = ctx.book.get(TABS.staff);
   rows[2][3] = "246810"; rows[2][4] = "Разовый"; ctx.book.set(TABS.staff, 3, rows[2]);
-  const first = ctx.call("POST", "/api/login", "", {login: "246810"});
-  assert.equal(first.status, 409); assert.equal(first.body.activation, true);
-  assert.equal(ctx.call("POST", "/api/activate", "", {temporary: "246810", login: "246810"}).status, 400);
-  const done = ctx.call("POST", "/api/activate", "", {temporary: "246810", login: "654321"});
+  const first = ctx.call("POST", "/api/identify", "", {login: "246810"});
+  assert.equal(first.status, 200); assert.equal(first.body.activation, true);
+  assert.equal(ctx.call("POST", "/api/activate", "", {login: "246810", pin: "246810"}).status, 400);
+  const done = ctx.call("POST", "/api/activate", "", {login: "246810", pin: "654321"});
   assert.equal(done.status, 200);
   assert.equal(readToken(done.body.token, "s3", NOW).sub, "9000000002");
-  assert.equal(ctx.store.findByLogin("654321").temporary, false);
-  assert.equal(ctx.call("POST", "/api/activate", "", {temporary: "246810", login: "777777"}).status, 401);
+  assert.equal(ctx.store.findByLogin("246810").temporary, false);
+  assert.equal(ctx.store.findByLogin("246810").pin, "654321");
+  assert.equal(ctx.call("POST", "/api/activate", "", {login: "246810", pin: "777777"}).status, 401);
 });
 
 test("расписание: события, «мои» смены, список сотрудников только тем, кто может править", () => {
