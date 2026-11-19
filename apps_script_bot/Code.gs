@@ -533,6 +533,7 @@ const msgNoApp = "💬 Адрес приложения пока не задан.
 
 const loginLine = (login) => (login ? `\n\n🔑 Логин для входа в приложение: <code>${esc(login)}</code>` : "");
 const msgWelcome = (name, login = "") => `✈️ <b>Готово, ${esc(name)}!</b>\nТеперь я буду присылать уведомления о ваших сменах. Меню — внизу.${loginLine(login)}`;
+const msgAlreadyLinked = (name, login = "") => `✅ <b>Вы уже авторизованы: ${esc(name)}</b>\n\nЭтот чат защищён и не переключится на другого сотрудника, если сюда случайно отправить чужой код.${loginLine(login)}\n\nЭтот же код работает в приложении, Telegram и ВКонтакте. Чтобы полностью отключить этот чат от уведомлений, используйте /stop.`;
 const msgIntro = "👋 <b>Добро пожаловать в КТК!</b>\nВведите шестизначный одноразовый код, который выдал директор. После этого я попрошу придумать ваш постоянный код для входа.";
 const msgAskPhone = "💬 <b>Введите шестизначный одноразовый код</b>, который выдал директор.";
 const msgChoosePin = (name) => `✅ <b>${esc(name)}, одноразовый код принят.</b>\n\nТеперь придумайте и отправьте свой новый шестизначный код. Он станет постоянным кодом для входа в приложение.`;
@@ -1879,6 +1880,12 @@ function handleMessage({store, channel, ev, appUrl = "", now = Date.now(), publi
     return channel.send(chat, /^\/start/i.test(text) || !text ? msgIntro : msgAskPhone);
   }
   if (user.role === "blocked") return channel.send(chat, msgBlocked);
+
+  // /start в уже привязанном чате не должен запускать повторную авторизацию: иначе случайный код
+  // мог бы переключить чат на другого сотрудника. Показываем это явно, а не маскируем главным меню.
+  if (/^\/start(?:@\w+)?(?:\s|$)/i.test(text)) {
+    return channel.send(chat, msgAlreadyLinked(user.name, user.login), {menu: menuFor(user)});
+  }
 
   const asked = MENU_COMMANDS[text] || MENU_COMMANDS[text.toLowerCase()] || text; // нажатие кнопки меню = команда
   const [first = "", ...rest] = asked.split(/\s+/);

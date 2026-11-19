@@ -138,7 +138,7 @@ test.skip("устаревшая защита ручного номера", () =>
   assert.equal(store.requests().length, 0);
 });
 
-test("главное меню: после подключения кнопки вместо списка команд; нажатие кнопки = команда; /start и любое слово — меню; у редактора есть «В группу»", async () => {
+test("главное меню: после подключения кнопки вместо списка команд; /start показывает защищённую привязку; у редактора есть «В группу»", async () => {
   const {MENU_LABELS, menuRows} = await import("../lib/format.mjs");
   const {vkKeyboard} = await import("../lib/vk.mjs");
   const {store, ch, say, last} = make();
@@ -153,7 +153,7 @@ test("главное меню: после подключения кнопки в
   say(7, MENU_LABELS.login);
   assert.match(last(7).text, /логин/i);
   say(7, "/start");
-  assert.match(last(7).text, /Главное меню/);
+  assert.match(last(7).text, /уже авторизованы: Петрова|чат защищён/i);
   say(7, "что-то непонятное");
   assert.match(last(7).text, /Главное меню/);
   assert.ok(last(7).options.menu);

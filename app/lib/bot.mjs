@@ -1,6 +1,6 @@
 // Диалог с сотрудником (одинаков для любого мессенджера) и рассылка уведомлений. Синхронный код.
 import {matchPhones, parseEvents, parseGrid, planCycle, todayIso} from "./core.mjs";
-import {afishaText, appButton, MENU_COMMANDS, msgApp, msgMenu, msgNoApp, msgChangesDigest, msgAskPhone, msgIntro, msgAuthLocked, msgBlocked, msgChange, msgAccessGranted, msgChoosePin, msgLogin, msgPinInvalid, msgPinSaved, msgPinUsed, msgPostEmpty, msgPostNoRights, msgPostNotConfigured, msgPostPreview, msgPostResult, msgReminder, msgStopped, msgWelcome, msgWrongCode, publicAfishaText, shiftsText} from "./format.mjs";
+import {afishaText, appButton, MENU_COMMANDS, msgAlreadyLinked, msgApp, msgMenu, msgNoApp, msgChangesDigest, msgAskPhone, msgIntro, msgAuthLocked, msgBlocked, msgChange, msgAccessGranted, msgChoosePin, msgLogin, msgPinInvalid, msgPinSaved, msgPinUsed, msgPostEmpty, msgPostNoRights, msgPostNotConfigured, msgPostPreview, msgPostResult, msgReminder, msgStopped, msgWelcome, msgWrongCode, publicAfishaText, shiftsText} from "./format.mjs";
 import {Gone} from "./telegram.mjs";
 import {canEdit, normLogin, TABS, validPin} from "./store.mjs";
 
@@ -61,6 +61,12 @@ export function handleMessage({store, channel, ev, appUrl = "", now = Date.now()
     return channel.send(chat, /^\/start/i.test(text) || !text ? msgIntro : msgAskPhone);
   }
   if (user.role === "blocked") return channel.send(chat, msgBlocked);
+
+  // /start в уже привязанном чате не должен запускать повторную авторизацию: иначе случайный код
+  // мог бы переключить чат на другого сотрудника. Показываем это явно, а не маскируем главным меню.
+  if (/^\/start(?:@\w+)?(?:\s|$)/i.test(text)) {
+    return channel.send(chat, msgAlreadyLinked(user.name, user.login), {menu: menuFor(user)});
+  }
 
   const asked = MENU_COMMANDS[text] || MENU_COMMANDS[text.toLowerCase()] || text; // нажатие кнопки меню = команда
   const [first = "", ...rest] = asked.split(/\s+/);
