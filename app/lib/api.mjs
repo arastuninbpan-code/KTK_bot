@@ -63,7 +63,7 @@ export function handleApi(req, deps) {
     if (method === "POST" && path === "/api/login") {
       store.ensureLogins();
       const user = store.findByLogin(body.login);
-      if (!user) { platform.sleep(400); throw new HttpError(401, "Такого логина нет. Отправьте боту /login: он пришлёт ваш логин."); }
+      if (!user || user.temporary) { platform.sleep(400); throw new HttpError(401, "Неверный код. Если вы ещё не активировались, сначала отправьте разовый код боту."); }
       if (user.role === "blocked") throw new HttpError(403, "Доступ закрыт. Обратитесь к администратору.");
       return {status: 200, body: {token: makeToken({sub: user.phone, l: store.loginMark(user.login)}, secret, undefined, now()), user: publicUser(user)}};
     }

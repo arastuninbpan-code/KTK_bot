@@ -533,8 +533,14 @@ const msgNoApp = "💬 Адрес приложения пока не задан.
 
 const loginLine = (login) => (login ? `\n\n🔑 Логин для входа в приложение: <code>${esc(login)}</code>` : "");
 const msgWelcome = (name, login = "") => `✈️ <b>Готово, ${esc(name)}!</b>\nТеперь я буду присылать уведомления о ваших сменах. Меню — внизу.${loginLine(login)}`;
-const msgIntro = "👋 <b>Добро пожаловать в КТК!</b>\nЭто рабочее пространство сотрудников театра. Здесь ваши смены, расписание, собрания и обсуждения, а я сам напомню, когда и где вы работаете.\n\n<b>Как начать</b>\n1️⃣ Нажмите кнопку «Поделиться номером» ниже (или напишите свой номер сообщением). Я пришлю ваш логин.\n2️⃣ Откройте приложение и введите логин (кнопка появится после подключения).\n3️⃣ Добавьте приложение на экран телефона.\n\nЕсли вас нет в списке, я передам заявку администратору. Хорошей работы!";
-const msgAskPhone = "💬 <b>Здравствуйте!</b>\nЧтобы получать уведомления о сменах, поделитесь номером телефона (кнопка ниже, если она есть) или просто напишите сообщением свой номер либо логин, который выдал администратор.";
+const msgIntro = "👋 <b>Добро пожаловать в КТК!</b>\nВведите шестизначный одноразовый код, который выдал директор. После этого я попрошу придумать ваш постоянный код для входа.";
+const msgAskPhone = "💬 <b>Введите шестизначный одноразовый код</b>, который выдал директор.";
+const msgChoosePin = (name) => `✅ <b>${esc(name)}, одноразовый код принят.</b>\n\nТеперь придумайте и отправьте свой новый шестизначный код. Он станет постоянным кодом для входа в приложение.`;
+const msgPinInvalid = "Код должен состоять ровно из шести цифр. Попробуйте ещё раз.";
+const msgPinUsed = "Такой код уже использует другой сотрудник. Придумайте другой шестизначный код.";
+const msgPinSaved = (name, login) => `✈️ <b>Готово, ${esc(name)}!</b>\nВаш постоянный код: <code>${esc(login)}</code>\n\nТеперь вы подключены и будете получать уведомления о сменах.`;
+const msgWrongCode = (left) => `Неверный код.${left > 0 ? ` Осталось попыток: ${left}.` : ""}`;
+const msgAuthLocked = "Слишком много неверных попыток. Вход заблокирован на 15 минут.";
 const msgUnknownPhone = "💬 <b>Этого номера нет в списке сотрудников.</b>\nОбратитесь к администратору, чтобы вас добавили. Если у вас есть логин, просто пришлите его сюда.";
 const msgStopped = "💬 <b>Уведомления отключены.</b>\nЧтобы включить снова, напишите /start.";
 const msgConnected = (name) => `💬 <b>${esc(name)}</b>, вы подключены.\n\n${msgMenu}`;
@@ -547,7 +553,7 @@ const msgLogin = (login) => `🔑 <b>Ваш логин</b>
 
 <code>${esc(login)}</code>
 
-Введите его в приложении. Логин постоянный: его выдаёт и может изменить администратор.`;
+Введите его в приложении. Это ваш постоянный шестизначный код.`;
 
 // ---------- публикация афиши (в группу ВКонтакте и/или Telegram-канал) ----------
 /**
@@ -676,8 +682,8 @@ const RESTORE_LABEL = "↺ Вернуть исходный вид";
 const RESTORE_CONFIRM = "✔ Да, вернуть";
 
 // Основные колонки по порядку: [подпись в исходном виде, как узнать в шапке]
-const STAFF_MAIN = [["ФИО", /^(фио|сотрудник|имя)/i], ["Телефон", /телефон|номер/i], ["Роль", /^роль/i], ["Логин", /^логин/i]];
-const STAFF_EXTRA = [["Доступ", /^доступ$/i], ["Комментарий", /^комментарий$/i]];
+const STAFF_MAIN = [["ФИО", /^(фио|сотрудник|имя)/i], ["Телефон", /телефон|номер/i], ["Роль", /^роль/i], ["Код входа", /^(логин|код входа)$/i]];
+const STAFF_EXTRA = [["Доступ", /^доступ$/i], ["Комментарий", /^комментарий$/i], ["Статус входа", /^статус входа$/i], ["_ID", /^_id$/i]];
 const SCHEDULE_MAIN = [["Дата", /^дата/i], ["Начало", /начал/i], ["Конец", /конец|оконч/i], ["Событие", /событие|спектакль|мероприят/i], ["Площадка", /площадк/i]];
 
 /**
@@ -941,7 +947,7 @@ const archiveCutoff = (today, months = 12) => new Date(Date.UTC(+today.slice(0, 
 // ===== lib/store.mjs =====
 // Хранилище поверх таблицы: сотрудники и роли, чаты, снимок расписания, коды входа, блокировка.
 
-const TABS = {schedule: "Расписание", staff: "Сотрудники", venues: "Площадки", reports: "Отчёты", archive: "Архив", deleted: "_удалённое", chats: "Подписчики", requests: "_заявки", people: "_люди", off: "_недоступность", comments: "_комментарии", meta: "_события", avatars: "_аватары", photos: "_фото", state: "_служебное", lock: "_замок"};
+const TABS = {schedule: "Расписание", staff: "Сотрудники", venues: "Площадки", reports: "Отчёты", archive: "Архив", deleted: "_удалённое", chats: "Подписчики", requests: "_заявки", activation: "_активация", auth: "_попытки_входа", people: "_люди", off: "_недоступность", comments: "_комментарии", meta: "_события", avatars: "_аватары", photos: "_фото", state: "_служебное", lock: "_замок"};
 const REQUESTS_HEADER = ["Канал", "ID чата", "Телефон"];
 const COMMENT_HEADER = ["ID события", "ID", "Время", "Телефон", "Имя", "Текст", "Фото"];
 const META_HEADER = ["ID события", "Тип", "Описание", "—", "Автор", "Создано"];
@@ -968,6 +974,8 @@ function colorName(value) {
 const colorHex = (name) => (VENUE_COLORS.find((c) => c.name === name) || {}).hex || "";
 const CHECKED_RE = /^(true|да|yes|1|✓|✔|x|х)$/i; // галочка в таблице: TRUE / ✓ / «да»
 const SUBS_HEADER = ["Канал", "ID чата", "Телефон", "ФИО"];
+const ACTIVATION_HEADER = ["Канал", "ID чата", "ID сотрудника"];
+const AUTH_HEADER = ["Канал", "ID чата", "Ошибок", "Заблокирован до"];
 const ROLE_LABELS = {admin: "Админ", editor: "Редактор", reader: "Читатель", blocked: "Заблокирован"};
 const CHUNK = 40000; // лимит ячейки Google — 50 000 знаков
 
@@ -984,7 +992,7 @@ function parseRole(text) {
 }
 /** Логин для сравнения: без регистра, пробелов и дефисов. */
 const normLogin = (t) => String(t || "").toLowerCase().replace(/[\s\-_.]/g, "");
-const LOGIN_ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZ23456789";
+const validPin = (t) => /^\d{6}$/.test(String(t || "").trim());
 const canEdit = (role) => role === "admin" || role === "editor";
 
 class Store {
@@ -1005,15 +1013,19 @@ class Store {
     const find = (re) => head.findIndex((h, i) => i >= 4 && re.test(h));
     const access = find(/^доступ$/i);
     const comment = find(/^комментарий$/i);
-    const groups = head.map((name, col) => ({name, col})).filter((g) => g.col >= 4 && g.name && g.col !== access && g.col !== comment);
-    return {access, comment, groups};
+    const status = find(/^статус входа$/i);
+    const id = find(/^_id$/i);
+    const service = new Set([access, comment, status, id]);
+    const groups = head.map((name, col) => ({name, col})).filter((g) => g.col >= 4 && g.name && !g.name.startsWith("_") && !service.has(g.col));
+    return {access, comment, status, id, groups};
   }
 
   users() {
     const rows = this.book.get(TABS.staff);
-    const {access, groups: defs} = this.staffCols_(rows);
+    const {access, status, id, groups: defs} = this.staffCols_(rows);
     const out = [];
-    for (const row of rows.slice(1)) {
+    for (let ri = 1; ri < rows.length; ri++) {
+      const row = rows[ri];
       const [name = "", phones = "", role = "", login = ""] = row;
       const n = String(name).trim();
       if (!n) continue;
@@ -1021,9 +1033,10 @@ class Store {
       const pending = isPendingRow(n, role) && !ticked; // заявка одобрена, когда поставили галочку «Доступ» или сменили роль
       const hasAccess = !pending && (access < 0 || ticked); // галочка «Доступ» снята — как «Заблокирован»
       const groups = defs.filter((g) => CHECKED_RE.test(String(row[g.col] || "").trim())).map((g) => g.name);
-      for (const phone of phonesIn(phones)) {
-        out.push({name: n, phone, role: hasAccess ? parseRole(role) : "blocked", login: String(login).trim(), groups, pending});
-      }
+      const ids = phonesIn(phones);
+      const internal = id >= 0 ? String(row[id] || "").trim() : "";
+      const identity = ids[0] || internal;
+      if (identity) out.push({name: n, phone: identity, role: hasAccess ? parseRole(role) : "blocked", login: String(login).trim(), temporary: status >= 0 && /^разов/i.test(String(row[status] || "").trim()), groups, pending, row: ri + 1});
     }
     const o = this.owner;
     if (o) {
@@ -1107,6 +1120,37 @@ class Store {
 
   removeRequest(channel, chatId) {
     for (const r of this.requests().filter((x) => x.channel === channel && x.chatId === String(chatId)).reverse()) this.book.clearRow(TABS.requests, r.row);
+  }
+
+  activations() {
+    if (!this.book.has(TABS.activation)) return [];
+    return this.book.get(TABS.activation).slice(1).map((r, i) => ({row: i + 2, channel: String(r[0] || ""), chatId: String(r[1] || ""), person: String(r[2] || "")})).filter((r) => r.channel && r.chatId && r.person);
+  }
+  beginActivation(channel, chatId, person) {
+    this.book.ensure(TABS.activation, ACTIVATION_HEADER);
+    this.cancelActivation(channel, chatId);
+    this.book.append(TABS.activation, [channel, String(chatId), person]);
+  }
+  cancelActivation(channel, chatId) {
+    for (const r of this.activations().filter((x) => x.channel === channel && x.chatId === String(chatId)).reverse()) this.book.clearRow(TABS.activation, r.row);
+  }
+
+  authRows() {
+    if (!this.book.has(TABS.auth)) return [];
+    return this.book.get(TABS.auth).slice(1).map((r, i) => ({row: i + 2, channel: String(r[0] || ""), chatId: String(r[1] || ""), attempts: Number(r[2]) || 0, blockedUntil: Number(r[3]) || 0})).filter((r) => r.channel && r.chatId);
+  }
+  authState(channel, chatId) { return this.authRows().find((r) => r.channel === channel && r.chatId === String(chatId)) || {attempts: 0, blockedUntil: 0}; }
+  authFailed(channel, chatId) {
+    this.book.ensure(TABS.auth, AUTH_HEADER);
+    const old = this.authState(channel, chatId);
+    const attempts = old.attempts + 1;
+    const blockedUntil = attempts >= 5 ? this.now() + 15 * 60 * 1000 : 0;
+    const values = [channel, String(chatId), blockedUntil ? "0" : String(attempts), String(blockedUntil)];
+    if (old.row) this.book.set(TABS.auth, old.row, values); else this.book.append(TABS.auth, values);
+    return {attempts, blockedUntil};
+  }
+  authSucceeded(channel, chatId) {
+    for (const r of this.authRows().filter((x) => x.channel === channel && x.chatId === String(chatId)).reverse()) this.book.clearRow(TABS.auth, r.row);
   }
 
   // --- «Не могу работать»: даты, которые сотрудник отметил в приложении (скрытый лист «_недоступность»: телефон | ФИО | дата) ---
@@ -1374,13 +1418,26 @@ class Store {
   /** Отметка логина внутри сессии: после смены логина в таблице старые входы перестают работать. */
   loginMark(login) { return this.hash("login:" + normLogin(login)); }
 
-  /** Сотрудник по логину (с учётом заблокированных — решает вызывающий). */
+  /** Сотрудник по шестизначному коду (с учётом заблокированных — решает вызывающий). */
   findByLogin(text) {
     const key = normLogin(text);
     return key ? this.users().find((u) => normLogin(u.login) === key) || null : null;
   }
 
-  /** Всем сотрудникам без логина выдаёт случайный (6 знаков, без похожих букв и цифр). Возвращает число выданных. */
+  setPermanentLogin(person, login) {
+    if (!validPin(login)) return false;
+    const users = this.users();
+    if (users.some((u) => u.phone !== person && normLogin(u.login) === normLogin(login))) return false;
+    const u = users.find((x) => x.phone === person);
+    if (!u) return false;
+    const rows = this.book.get(TABS.staff);
+    const {status} = this.staffCols_(rows);
+    this.book.setCell(TABS.staff, u.row, 4, String(login).trim());
+    if (status >= 0) this.book.setCell(TABS.staff, u.row, status + 1, "Активирован");
+    return true;
+  }
+
+  /** Всем сотрудникам без кода выдаёт случайный одноразовый шестизначный код и внутренний ID. */
   /** Удалённое событие не пропадает насовсем: его копия остаётся в скрытом листе «_удалённое». */
   archiveDeleted(line, by) {
     this.book.ensure(TABS.deleted, DELETED_HEADER);
@@ -1397,21 +1454,32 @@ class Store {
   ensureLogins() {
     const rows = this.book.get(TABS.staff);
     if (rows.length < 2) return 0;
+    let cols = this.staffCols_(rows);
+    const legacyWithoutStatus = cols.status < 0;
+    let width = Math.max(...rows.map((r) => r.length), 4);
+    if (cols.status < 0) { this.book.setCell(TABS.staff, 1, ++width, "Статус входа"); cols = this.staffCols_(this.book.get(TABS.staff)); }
+    if (cols.id < 0) { this.book.setCell(TABS.staff, 1, ++width, "_ID"); cols = this.staffCols_(this.book.get(TABS.staff)); }
+    const freshRows = this.book.get(TABS.staff);
     const used = new Set(rows.slice(1).map((r) => normLogin(r[3])).filter(Boolean));
     let n = 0;
-    for (let i = 1; i < rows.length; i++) {
-      const r = rows[i];
-      if (!String(r[0] || "").trim() || normLogin(r[3])) continue;
+    for (let i = 1; i < freshRows.length; i++) {
+      const r = freshRows[i];
+      if (!String(r[0] || "").trim()) continue;
+      if (!String(r[cols.id] || "").trim()) this.book.setCell(TABS.staff, i + 1, cols.id + 1, "u" + this.hash(`staff:${i}:${r[0]}:${this.now()}`).slice(0, 12));
+      if (normLogin(r[3])) {
+        if (!String(r[cols.status] || "").trim()) this.book.setCell(TABS.staff, i + 1, cols.status + 1, legacyWithoutStatus ? "Активирован" : "Разовый");
+        continue;
+      }
       let login;
       do {
-        login = LOGIN_ALPHABET[platform.randomInt(23)]; // первый знак — буква, чтобы логин не путали с номером
-        for (let k = 0; k < 5; k++) login += LOGIN_ALPHABET[platform.randomInt(LOGIN_ALPHABET.length)];
+        login = String(platform.randomInt(1000000)).padStart(6, "0");
       } while (used.has(normLogin(login)));
       used.add(normLogin(login));
-      this.book.setCell(TABS.staff, i + 1, 4, login); // только колонка «Логин»: галочки групп правее не трогаем
+      this.book.setCell(TABS.staff, i + 1, 4, login);
+      this.book.setCell(TABS.staff, i + 1, cols.status + 1, "Разовый");
       n++;
     }
-    if (n && !String(rows[0][3] || "").trim()) this.book.setCell(TABS.staff, 1, 4, "Логин");
+    if (!String(rows[0][3] || "").trim()) this.book.setCell(TABS.staff, 1, 4, "Код входа");
     return n;
   }
 
@@ -1517,7 +1585,7 @@ function handleApi(req, deps) {
     if (method === "POST" && path === "/api/login") {
       store.ensureLogins();
       const user = store.findByLogin(body.login);
-      if (!user) { platform.sleep(400); throw new HttpError(401, "Такого логина нет. Отправьте боту /login: он пришлёт ваш логин."); }
+      if (!user || user.temporary) { platform.sleep(400); throw new HttpError(401, "Неверный код. Если вы ещё не активировались, сначала отправьте разовый код боту."); }
       if (user.role === "blocked") throw new HttpError(403, "Доступ закрыт. Обратитесь к администратору.");
       return {status: 200, body: {token: makeToken({sub: user.phone, l: store.loginMark(user.login)}, secret, undefined, now()), user: publicUser(user)}};
     }
@@ -1762,60 +1830,53 @@ function handleApi(req, deps) {
 function handleMessage({store, channel, ev, appUrl = "", now = Date.now(), publishers = null, log = () => {}, lookupName = () => ""}) {
   const chat = ev.chatId;
   const text = String(ev.text || "").trim();
-  let phone = ev.phone ? normPhone(ev.phone) : null;
-  if (!phone && looksLikePhone(text)) phone = normPhone(text); // номер, введённый вручную
+  store.ensureLogins();
   const users = store.users();
   const btn = appButton(appUrl);
   const menuFor = (u) => ({editor: canEdit(u.role) && Boolean(publishers && publishers.targets().length), appUrl});
 
-  // логин, выданный администратором (или пришедший из ссылки «Подключить» в приложении: /start ЛОГИН): сразу узнаём человека
+  // Разовый шестизначный код выдаёт директор. Он только начинает активацию; постоянным кодом войти в новый чат нельзя.
   const startPayload = ev.start || (/^\/start(?:@\w+)?\s+(\S+)/i.exec(text) || [])[1] || "";
   const loginText = startPayload || (text && !text.startsWith("/") ? text : "");
-  const byLogin = !phone && loginText ? users.find((x) => x.login && normLogin(x.login) === normLogin(loginText)) : null;
-  if (byLogin) phone = byLogin.phone;
-
-  const label = ev.label || channel.name;
-  const myRequest = () => store.requests().find((r) => r.channel === channel.name && r.chatId === String(chat));
-  // человека нет в таблице: доступа нет, но заявка и его слова видны администратору прямо в листе «Сотрудники»
-  const askAccess = (typed) => {
-    const mine = myRequest();
-    if (mine) log("Заявка: комментарий дописан в строку " + store.addAccessRequest(mine.phone, `${label}: пишет другой номер ${typed}`));
-    else {
-      let name = ev.name || "";
-      if (!name) { try { name = lookupName(); } catch (e) { name = ""; } } // имя из профиля ВК: отдельный запрос, делаем только для заявки
-      log("Заявка: записана в строку " + store.addAccessRequest(typed, `${label}: запросил доступ`, name));
-      store.addRequest(channel.name, chat, typed);
-    }
-    return channel.send(chat, msgRequestSent);
-  };
-
-  if (phone) {
-    const u = users.find((x) => x.phone === phone);
-    // чат уже подключён к действующему сотруднику, а человек шлёт чужой номер: заявку не заводим (иначе она потом «переехала» бы на этот чат и сбила подключение)
-    const bound = store.chats().find((c) => c.channel === channel.name && c.chatId === String(chat));
-    const boundUser = bound ? users.find((x) => x.phone === bound.phone && x.role !== "blocked") : null;
-    if (!u && boundUser) return channel.send(chat, msgAlreadyConnected(boundUser.name));
-    if (!u) return askAccess(phone);
-    if (u.role === "blocked") {
-      if (!u.pending) return channel.send(chat, msgBlocked);
-      store.addRequest(channel.name, chat, phone); // заявка уже есть в таблице, связываем с этим чатом
-      return channel.send(chat, msgRequestSent);
-    }
-    store.bind(channel.name, chat, phone, u.name);
-    store.ensureLogins(); // логин для входа в приложение показываем сразу
-    const fresh = store.users().find((x) => x.phone === u.phone) || u;
-    return channel.send(chat, msgWelcome(u.name, fresh.login), {menu: menuFor(u)});
+  // Telegram гарантирует, что contact.user_id совпадает с отправителем. Такой контакт можно оставить как безопасный запасной способ.
+  if (ev.phone) {
+    const digits = String(ev.phone).replace(/\D/g, "").replace(/^8(?=\d{10}$)/, "7");
+    const key = digits.length === 11 && digits.startsWith("7") ? digits.slice(1) : digits;
+    const u = users.find((x) => x.phone === key);
+    if (u && u.role !== "blocked") { store.bind(channel.name, chat, u.phone, u.name); return channel.send(chat, msgWelcome(u.name, u.login), {menu: menuFor(u)}); }
+    if (u) return channel.send(chat, msgBlocked);
   }
-
   const mine = store.chats().find((c) => c.channel === channel.name && c.chatId === String(chat));
   const user = mine ? users.find((x) => x.phone === mine.phone) : null;
   if (!user) {
-    const req = myRequest();
-    if (req && text && !text.startsWith("/")) { // сообщение от человека с открытой заявкой: пишем в комментарий администратору
-      log("Заявка: комментарий записан в строку " + store.addAccessRequest(req.phone, `${label}: ${text}`));
-      return channel.send(chat, msgCommentSaved);
+    const pending = store.activations().find((a) => a.channel === channel.name && a.chatId === String(chat));
+    if (pending) {
+      if (!validPin(text)) return channel.send(chat, msgPinInvalid);
+      if (!store.setPermanentLogin(pending.person, text)) return channel.send(chat, msgPinUsed);
+      const fresh = store.users().find((x) => x.phone === pending.person);
+      store.cancelActivation(channel.name, chat);
+      store.authSucceeded(channel.name, chat);
+      store.bind(channel.name, chat, fresh.phone, fresh.name);
+      return channel.send(chat, msgPinSaved(fresh.name, fresh.login), {menu: menuFor(fresh)});
     }
-    return req ? channel.send(chat, msgRequestSent) : channel.send(chat, /^\/start/i.test(text) || !text ? msgIntro : msgAskPhone, "contact"); // первое знакомство — вступление, дальше короткая просьба
+    const auth = store.authState(channel.name, chat);
+    if (auth.blockedUntil > now) return channel.send(chat, msgAuthLocked);
+    const byLogin = loginText && validPin(loginText) ? users.find((x) => normLogin(x.login) === normLogin(loginText)) : null;
+    if (byLogin) {
+      if (byLogin.role === "blocked") return channel.send(chat, msgBlocked);
+      store.authSucceeded(channel.name, chat);
+      if (byLogin.temporary) {
+        store.beginActivation(channel.name, chat, byLogin.phone);
+        return channel.send(chat, msgChoosePin(byLogin.name));
+      }
+      store.bind(channel.name, chat, byLogin.phone, byLogin.name);
+      return channel.send(chat, msgWelcome(byLogin.name, byLogin.login), {menu: menuFor(byLogin)});
+    }
+    if (loginText && validPin(loginText)) {
+      const failed = store.authFailed(channel.name, chat);
+      return channel.send(chat, failed.blockedUntil ? msgAuthLocked : msgWrongCode(5 - failed.attempts));
+    }
+    return channel.send(chat, /^\/start/i.test(text) || !text ? msgIntro : msgAskPhone);
   }
   if (user.role === "blocked") return channel.send(chat, msgBlocked);
 
@@ -1831,7 +1892,6 @@ function handleMessage({store, channel, ev, appUrl = "", now = Date.now(), publi
     return channel.send(chat, afishaText(parseGrid(store.book.get(TABS.schedule), today).filter((r) => r.date >= today)), btn);
   }
   if (cmd === "/login") {
-    store.ensureLogins();
     const fresh = store.users().find((x) => x.phone === user.phone);
     return channel.send(chat, msgLogin(fresh.login), {...btn, copy: {text: "📋 Скопировать логин", value: fresh.login}});
   }
@@ -3066,7 +3126,7 @@ function tidyStaff_() {
   if (canonical && (accessIdx < 0 || p.getProperty("STAFF_HEAD") !== sig)) { styleStaff_(sheet); p.setProperty("STAFF_HEAD", sig); return tidyStaff_(); }
   if (!canonical && p.getProperty("STAFF_HEAD") !== sig) { // колонки переставили: новым колонкам-группам всё равно нужны галочки
     const fixed = plan.perm.slice(0, 4 + (accessIdx >= 0 ? 1 : 0));
-    const rest = head.map((x, i) => ({x, i})).filter((c) => c.x && fixed.indexOf(c.i) < 0 && !/^комментарий$/i.test(c.x) && !c.x.startsWith(RESTORE_MARK));
+    const rest = head.map((x, i) => ({x, i})).filter((c) => c.x && fixed.indexOf(c.i) < 0 && !/^(комментарий|статус входа|_id)$/i.test(c.x) && !c.x.startsWith(RESTORE_MARK));
     const rows = Math.max(sheet.getMaxRows() - 1, 1);
     rest.forEach((c) => sheet.getRange(2, c.i + 1, rows, 1).setDataValidation(SpreadsheetApp.newDataValidation().requireCheckbox().build()).setHorizontalAlignment("center"));
     p.setProperty("STAFF_HEAD", sig);
@@ -3182,7 +3242,7 @@ function hideHelperSheets_(ss) {
 function styleStaff_(sheet) {
   const cols = Math.max(4, sheet.getLastColumn());
   if (String(sheet.getRange(1, 3).getValue()).trim() === "") sheet.getRange(1, 3).setValue("Роль");
-  if (String(sheet.getRange(1, 4).getValue()).trim() === "") sheet.getRange(1, 4).setValue("Логин");
+  if (String(sheet.getRange(1, 4).getValue()).trim() === "" || /^логин$/i.test(String(sheet.getRange(1, 4).getValue()).trim())) sheet.getRange(1, 4).setValue("Код входа");
   styleHeader_(sheet, cols);
   const last = Math.max(sheet.getMaxRows(), 2);
   const rng = sheet.getRange(2, 3, last - 1, 1);
@@ -3216,8 +3276,16 @@ function styleStaff_(sheet) {
     sheet.getRange(1, at).setNumberFormat("@").setValue("Комментарий");
   }
   head = sheet.getRange(1, 1, 1, Math.max(sheet.getLastColumn(), 4)).getDisplayValues()[0].map((x) => String(x).trim());
+  if (head.findIndex((x, i) => i >= 4 && /^статус входа$/i.test(x)) < 0) {
+    sheet.getRange(1, sheet.getLastColumn() + 1).setNumberFormat("@").setValue("Статус входа");
+  }
+  head = sheet.getRange(1, 1, 1, Math.max(sheet.getLastColumn(), 4)).getDisplayValues()[0].map((x) => String(x).trim());
+  if (head.findIndex((x, i) => i >= 4 && /^_id$/i.test(x)) < 0) sheet.getRange(1, sheet.getLastColumn() + 1).setNumberFormat("@").setValue("_ID");
+  head = sheet.getRange(1, 1, 1, Math.max(sheet.getLastColumn(), 4)).getDisplayValues()[0].map((x) => String(x).trim());
   const accessCol = head.findIndex((x, i) => i >= 4 && /^доступ$/i.test(x)) + 1;
   const commentCol = head.findIndex((x, i) => i >= 4 && /^комментарий$/i.test(x)) + 1;
+  const statusCol = head.findIndex((x, i) => i >= 4 && /^статус входа$/i.test(x)) + 1;
+  const idCol = head.findIndex((x, i) => i >= 4 && /^_id$/i.test(x)) + 1;
   const lastRow = Math.max(sheet.getMaxRows(), 2);
   const rows = lastRow - 1;
   const checkbox = SpreadsheetApp.newDataValidation().requireCheckbox().build();
@@ -3235,7 +3303,7 @@ function styleStaff_(sheet) {
   sheet.setColumnWidth(commentCol, 320);
 
   // группы: остальные колонки с названием в шапке; в ячейках галочки «входит в группу»
-  const isGroup = (x, i) => i >= 4 && x && i + 1 !== accessCol && i + 1 !== commentCol;
+  const isGroup = (x, i) => i >= 4 && x && !x.startsWith("_") && i + 1 !== accessCol && i + 1 !== commentCol && i + 1 !== statusCol;
   if (!head.some(isGroup)) { sheet.getRange(1, head.length + 1, 1, 3).setNumberFormat("@").setValues([["Актёры", "Техника", "Зал"]]); head = head.concat(["Актёры", "Техника", "Зал"]); } // примеры, переименуйте как нужно
   for (let c = 5; c <= head.length; c++) {
     if (!isGroup(head[c - 1], c - 1)) continue;
@@ -3250,7 +3318,12 @@ function styleStaff_(sheet) {
   const rules = sheet.getConditionalFormatRules();
   const request = SpreadsheetApp.newConditionalFormatRule().whenFormulaSatisfied('=OR(REGEXMATCH($A' + (2 + (sheet.top || 0)) + ',"^(?i)заявка"),REGEXMATCH($C' + (2 + (sheet.top || 0)) + ',"^(?i)заявка"))').setBackground("#FFF2B3").setRanges([whole]).build();
   const off = SpreadsheetApp.newConditionalFormatRule().whenFormulaSatisfied("=AND($A" + (2 + (sheet.top || 0)) + "<>\"\",$" + A(accessCol) + (2 + (sheet.top || 0)) + "=FALSE)").setBackground("#FBE0DF").setFontColor("#8A8A8A").setRanges([whole]).build();
-  sheet.setConditionalFormatRules(rules.concat([request, off]));
+  const code = sheet.getRange(2, 4, rows, 1);
+  const temporary = SpreadsheetApp.newConditionalFormatRule().whenFormulaSatisfied("=$" + A(statusCol) + (2 + (sheet.top || 0)) + '=\"Разовый\"').setBackground("#FFF2B3").setFontColor(C.navy).setBold(true).setRanges([code]).build();
+  const active = SpreadsheetApp.newConditionalFormatRule().whenFormulaSatisfied("=$" + A(statusCol) + (2 + (sheet.top || 0)) + '=\"Активирован\"').setBackground("#D9F5DF").setFontColor(C.navy).setBold(true).setRanges([code]).build();
+  sheet.setConditionalFormatRules(rules.concat([request, off, temporary, active]));
+  sheet.setColumnWidth(statusCol, 130);
+  try { sheet.hideColumns(idCol); } catch (_) {}
   clearTail_(sheet, Math.max(sheet.getLastColumn(), 6));
 }
 

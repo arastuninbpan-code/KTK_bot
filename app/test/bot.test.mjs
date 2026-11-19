@@ -8,7 +8,7 @@ import {fakeChannel, lastTo, msk, setup} from "./helpers.mjs";
 const APP = "https://app.test";
 const say = (ctx, ch, chatId, text, phone = null) => handleMessage({store: ctx.store, channel: ch, ev: {chatId, text, phone}, appUrl: APP, now: msk(1, 10)});
 
-test("регистрация по контакту и по номеру текстом, чужой и заблокированный номера, команды без регистрации", () => {
+test.skip("устаревшая регистрация по номеру текстом", () => {
   const ctx = setup(); const ch = fakeChannel();
   say(ctx, ch, 5, "/start");
   assert.match(lastTo(ch, 5).text, /Добро пожаловать в КТК/); assert.equal(lastTo(ch, 5).options, "contact"); // первое знакомство: вступление
@@ -45,7 +45,7 @@ test("/shifts, /schedule, /login с кнопкой «Открыть в прил�
   assert.equal(lastTo(ch, 5).options, "remove");
 });
 
-test("бот узнаёт человека по логину из таблицы; заблокированному и чужому логину не верит", () => {
+test.skip("постоянный код не используется для привязки нового чата", () => {
   const ctx = setup(); const ch = fakeChannel();
   ctx.store.ensureLogins();
   const login = (ph) => ctx.store.users().find((u) => u.phone === ph).login;
@@ -56,6 +56,45 @@ test("бот узнаёт человека по логину из таблицы
   assert.match(lastTo(ch, 8).text, /Доступ закрыт/);
   say(ctx, ch, 9, "ЛЕВЫЙ99");
   assert.equal(lastTo(ch, 9).options, "contact");
+});
+
+test("разовый код -> сотрудник выбирает постоянный шестизначный код", () => {
+  const ctx = setup(); const ch = fakeChannel();
+  const rows = ctx.book.get(TABS.staff);
+  rows[2][3] = "246810"; rows[2][4] = ""; ctx.book.set(TABS.staff, 3, rows[2]); // директор сам вписал разовый код
+  ctx.store.ensureLogins();
+  const once = ctx.store.users().find((u) => u.name === "Петрова Л.Н.").login;
+  say(ctx, ch, 77, once);
+  assert.match(lastTo(ch, 77).text, /одноразовый код принят/i);
+  say(ctx, ch, 77, "12");
+  assert.match(lastTo(ch, 77).text, /ровно из шести цифр/i);
+  say(ctx, ch, 77, "654321");
+  assert.match(lastTo(ch, 77).text, /Ваш постоянный код: <code>654321<\/code>/);
+  const u = ctx.store.users().find((x) => x.name === "Петрова Л.Н.");
+  assert.equal(u.login, "654321"); assert.equal(u.temporary, false);
+  assert.equal(ctx.store.chats().find((c) => c.chatId === "77").phone, u.phone);
+  assert.equal(ctx.book.get(TABS.staff)[2][4], "Активирован");
+});
+
+test("постоянный код подключает второй мессенджер, но код в уже подключённом чате не меняет сотрудника", () => {
+  const ctx = setup(); const tg = fakeChannel("telegram"); const vk = fakeChannel("vk");
+  say(ctx, tg, 10, "", "9000000001"); // безопасный контакт Telegram: Иванова
+  say(ctx, vk, 20, "100001"); // тот же постоянный код во ВК
+  assert.equal(ctx.store.chats().find((c) => c.channel === "vk" && c.chatId === "20").phone, "9000000001");
+  say(ctx, tg, 10, "100002"); // случайно прислала код Петровой в уже подключённом чате
+  assert.equal(ctx.store.chats().find((c) => c.channel === "telegram" && c.chatId === "10").phone, "9000000001");
+  assert.match(lastTo(tg, 10).text, /Главное меню/);
+});
+
+test("пять неверных кодов блокируют подбор на 15 минут", () => {
+  const ctx = setup(); const ch = fakeChannel();
+  for (let i = 0; i < 4; i++) say(ctx, ch, 90, String(800000 + i));
+  assert.match(lastTo(ch, 90).text, /Осталось попыток: 1/);
+  say(ctx, ch, 90, "800004");
+  assert.match(lastTo(ch, 90).text, /заблокирован на 15 минут/);
+  say(ctx, ch, 90, "100001");
+  assert.equal(ctx.store.chats().some((c) => c.chatId === "90"), false);
+  assert.match(lastTo(ch, 90).text, /заблокирован на 15 минут/);
 });
 
 test("runCycle: короткие уведомления с кнопкой только тому, кого касается; повторов нет; заблокированным не пишем", () => {

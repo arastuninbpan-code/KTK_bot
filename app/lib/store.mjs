@@ -3,7 +3,7 @@ import {normPhone, phonesIn} from "./core.mjs";
 import {platform} from "./platform.mjs";
 import {ARCHIVE_HEADER, DELETED_HEADER} from "./report.mjs";
 
-export const TABS = {schedule: "Расписание", staff: "Сотрудники", venues: "Площадки", reports: "Отчёты", archive: "Архив", deleted: "_удалённое", chats: "Подписчики", requests: "_заявки", people: "_люди", off: "_недоступность", comments: "_комментарии", meta: "_события", avatars: "_аватары", photos: "_фото", state: "_служебное", lock: "_замок"};
+export const TABS = {schedule: "Расписание", staff: "Сотрудники", venues: "Площадки", reports: "Отчёты", archive: "Архив", deleted: "_удалённое", chats: "Подписчики", requests: "_заявки", activation: "_активация", auth: "_попытки_входа", people: "_люди", off: "_недоступность", comments: "_комментарии", meta: "_события", avatars: "_аватары", photos: "_фото", state: "_служебное", lock: "_замок"};
 export const REQUESTS_HEADER = ["Канал", "ID чата", "Телефон"];
 export const COMMENT_HEADER = ["ID события", "ID", "Время", "Телефон", "Имя", "Текст", "Фото"];
 export const META_HEADER = ["ID события", "Тип", "Описание", "—", "Автор", "Создано"];
@@ -30,6 +30,8 @@ export function colorName(value) {
 export const colorHex = (name) => (VENUE_COLORS.find((c) => c.name === name) || {}).hex || "";
 const CHECKED_RE = /^(true|да|yes|1|✓|✔|x|х)$/i; // галочка в таблице: TRUE / ✓ / «да»
 export const SUBS_HEADER = ["Канал", "ID чата", "Телефон", "ФИО"];
+export const ACTIVATION_HEADER = ["Канал", "ID чата", "ID сотрудника"];
+export const AUTH_HEADER = ["Канал", "ID чата", "Ошибок", "Заблокирован до"];
 export const ROLE_LABELS = {admin: "Админ", editor: "Редактор", reader: "Читатель", blocked: "Заблокирован"};
 const CHUNK = 40000; // лимит ячейки Google — 50 000 знаков
 
@@ -46,7 +48,7 @@ export function parseRole(text) {
 }
 /** Логин для сравнения: без регистра, пробелов и дефисов. */
 export const normLogin = (t) => String(t || "").toLowerCase().replace(/[\s\-_.]/g, "");
-const LOGIN_ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZ23456789";
+export const validPin = (t) => /^\d{6}$/.test(String(t || "").trim());
 export const canEdit = (role) => role === "admin" || role === "editor";
 
 export class Store {
@@ -67,15 +69,19 @@ export class Store {
     const find = (re) => head.findIndex((h, i) => i >= 4 && re.test(h));
     const access = find(/^доступ$/i);
     const comment = find(/^комментарий$/i);
-    const groups = head.map((name, col) => ({name, col})).filter((g) => g.col >= 4 && g.name && g.col !== access && g.col !== comment);
-    return {access, comment, groups};
+    const status = find(/^статус входа$/i);
+    const id = find(/^_id$/i);
+    const service = new Set([access, comment, status, id]);
+    const groups = head.map((name, col) => ({name, col})).filter((g) => g.col >= 4 && g.name && !g.name.startsWith("_") && !service.has(g.col));
+    return {access, comment, status, id, groups};
   }
 
   users() {
     const rows = this.book.get(TABS.staff);
-    const {access, groups: defs} = this.staffCols_(rows);
+    const {access, status, id, groups: defs} = this.staffCols_(rows);
     const out = [];
-    for (const row of rows.slice(1)) {
+    for (let ri = 1; ri < rows.length; ri++) {
+      const row = rows[ri];
       const [name = "", phones = "", role = "", login = ""] = row;
       const n = String(name).trim();
       if (!n) continue;
@@ -83,9 +89,10 @@ export class Store {
       const pending = isPendingRow(n, role) && !ticked; // заявка одобрена, когда поставили галочку «Доступ» или сменили роль
       const hasAccess = !pending && (access < 0 || ticked); // галочка «Доступ» снята — как «Заблокирован»
       const groups = defs.filter((g) => CHECKED_RE.test(String(row[g.col] || "").trim())).map((g) => g.name);
-      for (const phone of phonesIn(phones)) {
-        out.push({name: n, phone, role: hasAccess ? parseRole(role) : "blocked", login: String(login).trim(), groups, pending});
-      }
+      const ids = phonesIn(phones);
+      const internal = id >= 0 ? String(row[id] || "").trim() : "";
+      const identity = ids[0] || internal;
+      if (identity) out.push({name: n, phone: identity, role: hasAccess ? parseRole(role) : "blocked", login: String(login).trim(), temporary: status >= 0 && /^разов/i.test(String(row[status] || "").trim()), groups, pending, row: ri + 1});
     }
     const o = this.owner;
     if (o) {
@@ -169,6 +176,37 @@ export class Store {
 
   removeRequest(channel, chatId) {
     for (const r of this.requests().filter((x) => x.channel === channel && x.chatId === String(chatId)).reverse()) this.book.clearRow(TABS.requests, r.row);
+  }
+
+  activations() {
+    if (!this.book.has(TABS.activation)) return [];
+    return this.book.get(TABS.activation).slice(1).map((r, i) => ({row: i + 2, channel: String(r[0] || ""), chatId: String(r[1] || ""), person: String(r[2] || "")})).filter((r) => r.channel && r.chatId && r.person);
+  }
+  beginActivation(channel, chatId, person) {
+    this.book.ensure(TABS.activation, ACTIVATION_HEADER);
+    this.cancelActivation(channel, chatId);
+    this.book.append(TABS.activation, [channel, String(chatId), person]);
+  }
+  cancelActivation(channel, chatId) {
+    for (const r of this.activations().filter((x) => x.channel === channel && x.chatId === String(chatId)).reverse()) this.book.clearRow(TABS.activation, r.row);
+  }
+
+  authRows() {
+    if (!this.book.has(TABS.auth)) return [];
+    return this.book.get(TABS.auth).slice(1).map((r, i) => ({row: i + 2, channel: String(r[0] || ""), chatId: String(r[1] || ""), attempts: Number(r[2]) || 0, blockedUntil: Number(r[3]) || 0})).filter((r) => r.channel && r.chatId);
+  }
+  authState(channel, chatId) { return this.authRows().find((r) => r.channel === channel && r.chatId === String(chatId)) || {attempts: 0, blockedUntil: 0}; }
+  authFailed(channel, chatId) {
+    this.book.ensure(TABS.auth, AUTH_HEADER);
+    const old = this.authState(channel, chatId);
+    const attempts = old.attempts + 1;
+    const blockedUntil = attempts >= 5 ? this.now() + 15 * 60 * 1000 : 0;
+    const values = [channel, String(chatId), blockedUntil ? "0" : String(attempts), String(blockedUntil)];
+    if (old.row) this.book.set(TABS.auth, old.row, values); else this.book.append(TABS.auth, values);
+    return {attempts, blockedUntil};
+  }
+  authSucceeded(channel, chatId) {
+    for (const r of this.authRows().filter((x) => x.channel === channel && x.chatId === String(chatId)).reverse()) this.book.clearRow(TABS.auth, r.row);
   }
 
   // --- «Не могу работать»: даты, которые сотрудник отметил в приложении (скрытый лист «_недоступность»: телефон | ФИО | дата) ---
@@ -436,13 +474,26 @@ export class Store {
   /** Отметка логина внутри сессии: после смены логина в таблице старые входы перестают работать. */
   loginMark(login) { return this.hash("login:" + normLogin(login)); }
 
-  /** Сотрудник по логину (с учётом заблокированных — решает вызывающий). */
+  /** Сотрудник по шестизначному коду (с учётом заблокированных — решает вызывающий). */
   findByLogin(text) {
     const key = normLogin(text);
     return key ? this.users().find((u) => normLogin(u.login) === key) || null : null;
   }
 
-  /** Всем сотрудникам без логина выдаёт случайный (6 знаков, без похожих букв и цифр). Возвращает число выданных. */
+  setPermanentLogin(person, login) {
+    if (!validPin(login)) return false;
+    const users = this.users();
+    if (users.some((u) => u.phone !== person && normLogin(u.login) === normLogin(login))) return false;
+    const u = users.find((x) => x.phone === person);
+    if (!u) return false;
+    const rows = this.book.get(TABS.staff);
+    const {status} = this.staffCols_(rows);
+    this.book.setCell(TABS.staff, u.row, 4, String(login).trim());
+    if (status >= 0) this.book.setCell(TABS.staff, u.row, status + 1, "Активирован");
+    return true;
+  }
+
+  /** Всем сотрудникам без кода выдаёт случайный одноразовый шестизначный код и внутренний ID. */
   /** Удалённое событие не пропадает насовсем: его копия остаётся в скрытом листе «_удалённое». */
   archiveDeleted(line, by) {
     this.book.ensure(TABS.deleted, DELETED_HEADER);
@@ -459,21 +510,32 @@ export class Store {
   ensureLogins() {
     const rows = this.book.get(TABS.staff);
     if (rows.length < 2) return 0;
+    let cols = this.staffCols_(rows);
+    const legacyWithoutStatus = cols.status < 0;
+    let width = Math.max(...rows.map((r) => r.length), 4);
+    if (cols.status < 0) { this.book.setCell(TABS.staff, 1, ++width, "Статус входа"); cols = this.staffCols_(this.book.get(TABS.staff)); }
+    if (cols.id < 0) { this.book.setCell(TABS.staff, 1, ++width, "_ID"); cols = this.staffCols_(this.book.get(TABS.staff)); }
+    const freshRows = this.book.get(TABS.staff);
     const used = new Set(rows.slice(1).map((r) => normLogin(r[3])).filter(Boolean));
     let n = 0;
-    for (let i = 1; i < rows.length; i++) {
-      const r = rows[i];
-      if (!String(r[0] || "").trim() || normLogin(r[3])) continue;
+    for (let i = 1; i < freshRows.length; i++) {
+      const r = freshRows[i];
+      if (!String(r[0] || "").trim()) continue;
+      if (!String(r[cols.id] || "").trim()) this.book.setCell(TABS.staff, i + 1, cols.id + 1, "u" + this.hash(`staff:${i}:${r[0]}:${this.now()}`).slice(0, 12));
+      if (normLogin(r[3])) {
+        if (!String(r[cols.status] || "").trim()) this.book.setCell(TABS.staff, i + 1, cols.status + 1, legacyWithoutStatus ? "Активирован" : "Разовый");
+        continue;
+      }
       let login;
       do {
-        login = LOGIN_ALPHABET[platform.randomInt(23)]; // первый знак — буква, чтобы логин не путали с номером
-        for (let k = 0; k < 5; k++) login += LOGIN_ALPHABET[platform.randomInt(LOGIN_ALPHABET.length)];
+        login = String(platform.randomInt(1000000)).padStart(6, "0");
       } while (used.has(normLogin(login)));
       used.add(normLogin(login));
-      this.book.setCell(TABS.staff, i + 1, 4, login); // только колонка «Логин»: галочки групп правее не трогаем
+      this.book.setCell(TABS.staff, i + 1, 4, login);
+      this.book.setCell(TABS.staff, i + 1, cols.status + 1, "Разовый");
       n++;
     }
-    if (n && !String(rows[0][3] || "").trim()) this.book.setCell(TABS.staff, 1, 4, "Логин");
+    if (!String(rows[0][3] || "").trim()) this.book.setCell(TABS.staff, 1, 4, "Код входа");
     return n;
   }
 

@@ -27,7 +27,7 @@ test("вход по коду: верный, повторный, неверный
   assert.equal(ctx.call("POST", "/api/login", "", {login: "нет-такого"}).status, 401);
   // директор поменял логин в таблице: старый логин и старые входы перестали работать
   const staff = ctx.store.book.get("Сотрудники"); const i = staff.findIndex((r) => r[3] === login);
-  ctx.store.book.set("Сотрудники", i + 1, [staff[i][0], staff[i][1], staff[i][2], "НОВЫЙ-77"]);
+  ctx.store.book.set("Сотрудники", i + 1, [staff[i][0], staff[i][1], staff[i][2], "НОВЫЙ-77", "Активирован"]);
   assert.equal(ctx.call("POST", "/api/login", "", {login}).status, 401);
   assert.equal(ctx.call("GET", "/api/schedule", ok.body.token).status, 401);
   assert.equal(ctx.call("POST", "/api/login", "", {login: "новый 77"}).status, 200);

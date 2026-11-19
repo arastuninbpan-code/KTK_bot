@@ -355,12 +355,12 @@ function confirmDialog(title, text, okLabel, onOk) {
 }
 
 // ---------- вход ----------
-const LOGIN_LEN = 6; // логины, которые выдаёт таблица, — 6 знаков
+const LOGIN_LEN = 6;
 function loginView() {
   let busy = false;
   const err = h("div", {class: "error", role: "alert"});
-  const input = h("input", {class: "code-input", autocomplete: "username", autocapitalize: "characters", spellcheck: "false", maxlength: "32", placeholder: "ЛОГИН", "aria-label": "Ваш логин",
-    oninput: () => { err.className = "error"; err.textContent = ""; input.classList.remove("bad"); if (input.value.trim().length > LOGIN_LEN) reject("Логин — " + LOGIN_LEN + " знаков. Проверьте, что не вставили лишнее."); },
+  const input = h("input", {class: "code-input", autocomplete: "one-time-code", inputmode: "numeric", pattern: "[0-9]*", maxlength: "6", placeholder: "КОД", "aria-label": "Ваш шестизначный код",
+    oninput: () => { input.value = input.value.replace(/\D/g, "").slice(0, LOGIN_LEN); err.className = "error"; err.textContent = ""; input.classList.remove("bad"); },
     onkeydown: (e) => { if (e.key === "Enter") go(); }});
   const btn = h("button", {class: "btn", onclick: () => go()}, "Войти");
   // красная подсветка и дрожание поля при неверном логине
@@ -370,8 +370,7 @@ function loginView() {
   }
   async function go() {
     if (busy) return;
-    if (!input.value.trim()) return reject("Введите ваш логин");
-    if (input.value.trim().length > LOGIN_LEN) return reject("Логин — " + LOGIN_LEN + " знаков. Проверьте, что не вставили лишнее.");
+    if (!/^\d{6}$/.test(input.value.trim())) return reject("Введите шестизначный код");
     busy = true; btn.disabled = true; btn.textContent = "Входим…"; err.className = "hint"; err.textContent = "Идёт загрузка, подождите несколько секунд…"; input.disabled = true;
     try {
       const r = await api("POST", "/api/login", {login: input.value.trim()});
@@ -386,9 +385,9 @@ function loginView() {
     h("p", {class: "sub"}, "Ваши смены и события в одном месте"),
     h("div", {class: "card"},
       h("ol", {class: "steps"},
-        h("li", {}, h("span", {}, "Откройте бота и поделитесь номером (или пришлите логин)")),
-        h("li", {}, h("span", {}, ["Напишите боту ", h("b", {}, "/login"), ": он пришлёт ваш логин"])),
-        h("li", {}, h("span", {}, "Введите логин здесь"))),
+        h("li", {}, h("span", {}, "Получите у директора одноразовый код")),
+        h("li", {}, h("span", {}, "Отправьте его боту и придумайте постоянный код")),
+        h("li", {}, h("span", {}, "Введите постоянный код здесь"))),
       input, err,
       h("div", {class: "stack"}, btn, h("a", {class: "btn light", href: CFG.BOT_URL || "#", target: "_blank", rel: "noopener"}, icon("plane"), "Открыть бота"))));
 }
@@ -1003,7 +1002,7 @@ function profileSheet() {
   const {close} = overlay(sheet(
     h("div", {class: "profhead"}, (state.avatars[me.uid] ? avatarEl(me.uid, me.name, "avatar big") : h("img", {class: "avatar big", src: "avatar.webp", alt: ""})), h("div", {}, h("h2", {}, me.name), h("span", {class: "badge " + me.role}, me.roleLabel))),
     h("div", {class: "dmeta"},
-      me.login ? h("div", {class: "drow"}, h("span", {}, "Ваш логин"), h("b", {class: "mono"}, me.login)) : null,
+      me.login ? h("div", {class: "drow"}, h("span", {}, "Ваш код входа"), h("b", {class: "mono"}, me.login)) : null,
       social("telegram", "Telegram", cfg.BOT_URL ? cfg.BOT_URL + "?start=" : ""),
       social("vk", "ВКонтакте", cfg.VK_URL ? cfg.VK_URL + "?ref=" : "")),
     me.canEdit ? h("button", {class: "btn light report-btn", onclick: () => { close(); reportSheet(); }}, icon("chart"), "Сформировать отчёт") : null,
@@ -1086,7 +1085,7 @@ function appView() {
           (state.avatars[state.me.uid] ? avatarEl(state.me.uid, state.me.name, "avatar") : h("img", {class: "avatar", src: "avatar.webp", alt: ""})),
           h("div", {class: "who"}, h("b", {}, state.me.name), h("span", {class: "badge " + state.me.role}, state.me.roleLabel))),
         h("button", {class: "icon-btn", "aria-label": "Обновить", onclick: () => load(true)}, icon("refresh")),
-        h("button", {class: "icon-btn", "aria-label": "Выйти", onclick: () => confirmDialog("Выйти?", "Чтобы войти снова, понадобится ваш логин.", "Выйти", logout)}, icon("exit"))),
+        h("button", {class: "icon-btn", "aria-label": "Выйти", onclick: () => confirmDialog("Выйти?", "Чтобы войти снова, понадобится ваш шестизначный код.", "Выйти", logout)}, icon("exit"))),
       h("div", {class: "tabs", role: "tablist"},
         [["all", "Расписание"], ["mine", "Мои смены"], ["venues", "Площадки"]].map(([t, label]) => h("button", {class: "tab", role: "tab", "aria-selected": String(state.tab === t), onclick: () => { state.tab = t; render(); window.scrollTo(0, 0); }}, label)))),
     offlineBar(), old, body,

@@ -1132,7 +1132,7 @@ function tidyStaff_() {
   if (canonical && (accessIdx < 0 || p.getProperty("STAFF_HEAD") !== sig)) { styleStaff_(sheet); p.setProperty("STAFF_HEAD", sig); return tidyStaff_(); }
   if (!canonical && p.getProperty("STAFF_HEAD") !== sig) { // колонки переставили: новым колонкам-группам всё равно нужны галочки
     const fixed = plan.perm.slice(0, 4 + (accessIdx >= 0 ? 1 : 0));
-    const rest = head.map((x, i) => ({x, i})).filter((c) => c.x && fixed.indexOf(c.i) < 0 && !/^комментарий$/i.test(c.x) && !c.x.startsWith(RESTORE_MARK));
+    const rest = head.map((x, i) => ({x, i})).filter((c) => c.x && fixed.indexOf(c.i) < 0 && !/^(комментарий|статус входа|_id)$/i.test(c.x) && !c.x.startsWith(RESTORE_MARK));
     const rows = Math.max(sheet.getMaxRows() - 1, 1);
     rest.forEach((c) => sheet.getRange(2, c.i + 1, rows, 1).setDataValidation(SpreadsheetApp.newDataValidation().requireCheckbox().build()).setHorizontalAlignment("center"));
     p.setProperty("STAFF_HEAD", sig);
@@ -1248,7 +1248,7 @@ function hideHelperSheets_(ss) {
 function styleStaff_(sheet) {
   const cols = Math.max(4, sheet.getLastColumn());
   if (String(sheet.getRange(1, 3).getValue()).trim() === "") sheet.getRange(1, 3).setValue("Роль");
-  if (String(sheet.getRange(1, 4).getValue()).trim() === "") sheet.getRange(1, 4).setValue("Логин");
+  if (String(sheet.getRange(1, 4).getValue()).trim() === "" || /^логин$/i.test(String(sheet.getRange(1, 4).getValue()).trim())) sheet.getRange(1, 4).setValue("Код входа");
   styleHeader_(sheet, cols);
   const last = Math.max(sheet.getMaxRows(), 2);
   const rng = sheet.getRange(2, 3, last - 1, 1);
@@ -1282,8 +1282,16 @@ function styleStaff_(sheet) {
     sheet.getRange(1, at).setNumberFormat("@").setValue("Комментарий");
   }
   head = sheet.getRange(1, 1, 1, Math.max(sheet.getLastColumn(), 4)).getDisplayValues()[0].map((x) => String(x).trim());
+  if (head.findIndex((x, i) => i >= 4 && /^статус входа$/i.test(x)) < 0) {
+    sheet.getRange(1, sheet.getLastColumn() + 1).setNumberFormat("@").setValue("Статус входа");
+  }
+  head = sheet.getRange(1, 1, 1, Math.max(sheet.getLastColumn(), 4)).getDisplayValues()[0].map((x) => String(x).trim());
+  if (head.findIndex((x, i) => i >= 4 && /^_id$/i.test(x)) < 0) sheet.getRange(1, sheet.getLastColumn() + 1).setNumberFormat("@").setValue("_ID");
+  head = sheet.getRange(1, 1, 1, Math.max(sheet.getLastColumn(), 4)).getDisplayValues()[0].map((x) => String(x).trim());
   const accessCol = head.findIndex((x, i) => i >= 4 && /^доступ$/i.test(x)) + 1;
   const commentCol = head.findIndex((x, i) => i >= 4 && /^комментарий$/i.test(x)) + 1;
+  const statusCol = head.findIndex((x, i) => i >= 4 && /^статус входа$/i.test(x)) + 1;
+  const idCol = head.findIndex((x, i) => i >= 4 && /^_id$/i.test(x)) + 1;
   const lastRow = Math.max(sheet.getMaxRows(), 2);
   const rows = lastRow - 1;
   const checkbox = SpreadsheetApp.newDataValidation().requireCheckbox().build();
@@ -1301,7 +1309,7 @@ function styleStaff_(sheet) {
   sheet.setColumnWidth(commentCol, 320);
 
   // группы: остальные колонки с названием в шапке; в ячейках галочки «входит в группу»
-  const isGroup = (x, i) => i >= 4 && x && i + 1 !== accessCol && i + 1 !== commentCol;
+  const isGroup = (x, i) => i >= 4 && x && !x.startsWith("_") && i + 1 !== accessCol && i + 1 !== commentCol && i + 1 !== statusCol;
   if (!head.some(isGroup)) { sheet.getRange(1, head.length + 1, 1, 3).setNumberFormat("@").setValues([["Актёры", "Техника", "Зал"]]); head = head.concat(["Актёры", "Техника", "Зал"]); } // примеры, переименуйте как нужно
   for (let c = 5; c <= head.length; c++) {
     if (!isGroup(head[c - 1], c - 1)) continue;
@@ -1316,7 +1324,12 @@ function styleStaff_(sheet) {
   const rules = sheet.getConditionalFormatRules();
   const request = SpreadsheetApp.newConditionalFormatRule().whenFormulaSatisfied('=OR(REGEXMATCH($A' + (2 + (sheet.top || 0)) + ',"^(?i)заявка"),REGEXMATCH($C' + (2 + (sheet.top || 0)) + ',"^(?i)заявка"))').setBackground("#FFF2B3").setRanges([whole]).build();
   const off = SpreadsheetApp.newConditionalFormatRule().whenFormulaSatisfied("=AND($A" + (2 + (sheet.top || 0)) + "<>\"\",$" + A(accessCol) + (2 + (sheet.top || 0)) + "=FALSE)").setBackground("#FBE0DF").setFontColor("#8A8A8A").setRanges([whole]).build();
-  sheet.setConditionalFormatRules(rules.concat([request, off]));
+  const code = sheet.getRange(2, 4, rows, 1);
+  const temporary = SpreadsheetApp.newConditionalFormatRule().whenFormulaSatisfied("=$" + A(statusCol) + (2 + (sheet.top || 0)) + '=\"Разовый\"').setBackground("#FFF2B3").setFontColor(C.navy).setBold(true).setRanges([code]).build();
+  const active = SpreadsheetApp.newConditionalFormatRule().whenFormulaSatisfied("=$" + A(statusCol) + (2 + (sheet.top || 0)) + '=\"Активирован\"').setBackground("#D9F5DF").setFontColor(C.navy).setBold(true).setRanges([code]).build();
+  sheet.setConditionalFormatRules(rules.concat([request, off, temporary, active]));
+  sheet.setColumnWidth(statusCol, 130);
+  try { sheet.hideColumns(idCol); } catch (_) {}
   clearTail_(sheet, Math.max(sheet.getLastColumn(), 6));
 }
 
