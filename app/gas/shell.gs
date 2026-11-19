@@ -1282,8 +1282,14 @@ function styleStaff_(sheet) {
     sheet.getRange(1, at).setNumberFormat("@").setValue("Комментарий");
   }
   head = sheet.getRange(1, 1, 1, Math.max(sheet.getLastColumn(), 4)).getDisplayValues()[0].map((x) => String(x).trim());
-  if (head.findIndex((x, i) => i >= 4 && /^статус входа$/i.test(x)) < 0) {
-    sheet.getRange(1, sheet.getLastColumn() + 1).setNumberFormat("@").setValue("Статус входа");
+  if (head.findIndex((x, i) => i >= 4 && /^pin$/i.test(x)) < 0) {
+    const pinAt = sheet.getLastColumn() + 1;
+    sheet.getRange(1, pinAt).setNumberFormat("@").setValue("PIN");
+    const statusAt = head.findIndex((x, i) => i >= 4 && /^статус входа$/i.test(x)) + 1;
+    if (statusAt > 0 && sheet.getLastRow() > 1) {
+      const old = sheet.getRange(2, 1, sheet.getLastRow() - 1, Math.max(statusAt, 4)).getDisplayValues();
+      sheet.getRange(2, pinAt, old.length, 1).setNumberFormat("@").setValues(old.map((r) => [/^актив/i.test(String(r[statusAt - 1] || "")) ? String(r[3] || "") : ""]));
+    }
   }
   head = sheet.getRange(1, 1, 1, Math.max(sheet.getLastColumn(), 4)).getDisplayValues()[0].map((x) => String(x).trim());
   if (head.findIndex((x, i) => i >= 4 && /^_id$/i.test(x)) < 0) sheet.getRange(1, sheet.getLastColumn() + 1).setNumberFormat("@").setValue("_ID");
@@ -1291,6 +1297,7 @@ function styleStaff_(sheet) {
   const accessCol = head.findIndex((x, i) => i >= 4 && /^доступ$/i.test(x)) + 1;
   const commentCol = head.findIndex((x, i) => i >= 4 && /^комментарий$/i.test(x)) + 1;
   const statusCol = head.findIndex((x, i) => i >= 4 && /^статус входа$/i.test(x)) + 1;
+  const pinCol = head.findIndex((x, i) => i >= 4 && /^pin$/i.test(x)) + 1;
   const idCol = head.findIndex((x, i) => i >= 4 && /^_id$/i.test(x)) + 1;
   const lastRow = Math.max(sheet.getMaxRows(), 2);
   const rows = lastRow - 1;
@@ -1309,7 +1316,7 @@ function styleStaff_(sheet) {
   sheet.setColumnWidth(commentCol, 320);
 
   // группы: остальные колонки с названием в шапке; в ячейках галочки «входит в группу»
-  const isGroup = (x, i) => i >= 4 && x && !x.startsWith("_") && i + 1 !== accessCol && i + 1 !== commentCol && i + 1 !== statusCol;
+  const isGroup = (x, i) => i >= 4 && x && !x.startsWith("_") && i + 1 !== accessCol && i + 1 !== commentCol && i + 1 !== statusCol && i + 1 !== pinCol;
   if (!head.some(isGroup)) { sheet.getRange(1, head.length + 1, 1, 3).setNumberFormat("@").setValues([["Актёры", "Техника", "Зал"]]); head = head.concat(["Актёры", "Техника", "Зал"]); } // примеры, переименуйте как нужно
   for (let c = 5; c <= head.length; c++) {
     if (!isGroup(head[c - 1], c - 1)) continue;
@@ -1325,10 +1332,10 @@ function styleStaff_(sheet) {
   const request = SpreadsheetApp.newConditionalFormatRule().whenFormulaSatisfied('=OR(REGEXMATCH($A' + (2 + (sheet.top || 0)) + ',"^(?i)заявка"),REGEXMATCH($C' + (2 + (sheet.top || 0)) + ',"^(?i)заявка"))').setBackground("#FFF2B3").setRanges([whole]).build();
   const off = SpreadsheetApp.newConditionalFormatRule().whenFormulaSatisfied("=AND($A" + (2 + (sheet.top || 0)) + "<>\"\",$" + A(accessCol) + (2 + (sheet.top || 0)) + "=FALSE)").setBackground("#FBE0DF").setFontColor("#8A8A8A").setRanges([whole]).build();
   const code = sheet.getRange(2, 4, rows, 1);
-  const temporary = SpreadsheetApp.newConditionalFormatRule().whenFormulaSatisfied("=$" + A(statusCol) + (2 + (sheet.top || 0)) + '=\"Разовый\"').setBackground("#FFF2B3").setFontColor(C.navy).setBold(true).setRanges([code]).build();
-  const active = SpreadsheetApp.newConditionalFormatRule().whenFormulaSatisfied("=$" + A(statusCol) + (2 + (sheet.top || 0)) + '=\"Активирован\"').setBackground("#D9F5DF").setFontColor(C.navy).setBold(true).setRanges([code]).build();
+  const temporary = SpreadsheetApp.newConditionalFormatRule().whenFormulaSatisfied("=$" + A(pinCol) + (2 + (sheet.top || 0)) + '=\"\"').setBackground("#FFF2B3").setFontColor(C.navy).setBold(true).setRanges([code]).build();
+  const active = SpreadsheetApp.newConditionalFormatRule().whenFormulaSatisfied("=$" + A(pinCol) + (2 + (sheet.top || 0)) + '<>\"\"').setBackground("#D9F5DF").setFontColor(C.navy).setBold(true).setRanges([code]).build();
   sheet.setConditionalFormatRules(rules.concat([request, off, temporary, active]));
-  sheet.setColumnWidth(statusCol, 130);
+  sheet.setColumnWidth(pinCol, 110);
   try { sheet.hideColumns(idCol); } catch (_) {}
   clearTail_(sheet, Math.max(sheet.getLastColumn(), 6));
 }

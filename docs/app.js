@@ -404,7 +404,11 @@ function loginView() {
         h("li", {}, h("span", {}, "Получите у директора ID сотрудника")),
         h("li", {}, h("span", {}, "При первом входе придумайте шестизначный PIN")),
         h("li", {}, h("span", {}, "Используйте пару ID + PIN во всех каналах"))),
-      title, idInput, pinInput, err,
+      title,
+      h("div", {class: "login-fields"},
+        h("label", {class: "login-field"}, h("span", {}, "ID сотрудника"), idInput),
+        h("label", {class: "login-field"}, h("span", {}, "PIN из 6 цифр"), pinInput)),
+      err,
       h("div", {class: "stack"}, btn, h("a", {class: "btn light", href: CFG.BOT_URL || "#", target: "_blank", rel: "noopener"}, icon("plane"), "Открыть бота"))));
 }
 
@@ -981,6 +985,16 @@ function profileSheet() {
   const calBox = h("div", {class: "offcal"});
   const info = h("div", {class: "hint-line"});
   const save = h("button", {class: "btn"}, "Сохранить");
+  const avatarButton = h("button", {class: "btn light avatar-action", onclick: async () => {
+    avatarButton.disabled = true;
+    try {
+      const restore = Boolean(me.avatarHidden);
+      const r = await api(restore ? "POST" : "DELETE", "/api/avatar", {});
+      state.avatars = r.items || {}; state.avatarKey = r.key || ""; state.me.avatarHidden = r.hidden;
+      try { localStorage.setItem("ktk_avatars", JSON.stringify({key: state.avatarKey, items: state.avatars})); } catch (_) {}
+      close(); render(); toast(restore ? "Аватарка снова показывается" : "Аватарка убрана");
+    } catch (e) { avatarButton.disabled = false; toast(e.message, {bad: true}); }
+  }}, me.avatarHidden ? "Вернуть аватарку" : "Убрать аватарку");
   const dirty = () => off.size !== orig.size || [...off].some((d) => !orig.has(d));
   const paint = () => {
     const first = ym + "-01";
@@ -1017,6 +1031,7 @@ function profileSheet() {
   });
   const {close} = overlay(sheet(
     h("div", {class: "profhead"}, (state.avatars[me.uid] ? avatarEl(me.uid, me.name, "avatar big") : h("img", {class: "avatar big", src: "avatar.webp", alt: ""})), h("div", {}, h("h2", {}, me.name), h("span", {class: "badge " + me.role}, me.roleLabel))),
+    avatarButton,
     h("div", {class: "dmeta"},
       me.login ? h("div", {class: "drow"}, h("span", {}, "Ваш код входа"), h("b", {class: "mono"}, me.login)) : null,
       social("telegram", "Telegram", cfg.BOT_URL ? cfg.BOT_URL + "?start=" : ""),

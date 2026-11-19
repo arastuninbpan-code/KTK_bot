@@ -144,7 +144,7 @@ test("styleSheets: перенос в новый формат (копия сох�
   const staff = g.ss.getSheetByName("Сотрудники");
   assert.equal(staff.rules.length, 9); // роли, заявка, доступ и два состояния кода
   assert.ok(staff.styleLog.some((l) => l[0] === "validation" && l[1].calls.some((c) => c[0] === "requireCheckbox"))); // галочки групп
-  assert.deepEqual(staff.getDataRange().getDisplayValues()[0].slice(4), ["Доступ", "Комментарий", "Статус входа", "_ID", "Актёры", "Техника", "Зал"]);
+  assert.deepEqual(staff.getDataRange().getDisplayValues()[0].slice(4), ["Доступ", "Комментарий", "Статус входа", "PIN", "_ID", "Актёры", "Техника", "Зал"]);
   assert.ok(staff.getDataRange().getDisplayValues().slice(1).every((r) => r[0] === "" || r[4] === "true"), "у внесённых людей доступ включён");
   assert.equal(staff.getDataRange().getDisplayValues()[3][2], "Читатель"); // пустая роль -> «Читатель»
   g.run("styleSheets()"); // повторный запуск ничего не дублирует
@@ -156,7 +156,7 @@ test("группы: галочки в таблице -> состав групп;
   const g = G();
   g.run("styleSheets()");
   const staff = g.ss.getSheetByName("Сотрудники");
-  staff.put(2, 9, "TRUE"); staff.put(3, 9, "TRUE"); staff.put(3, 10, "TRUE"); // Иванова и Петрова — «Актёры», Петрова — ещё «Техника»
+  staff.put(2, 10, "TRUE"); staff.put(3, 10, "TRUE"); staff.put(3, 11, "TRUE"); // Иванова и Петрова — «Актёры», Петрова — ещё «Техника»
   g.run("store_().ensureLogins()");
   const admin = api(g, {method: "POST", path: "/api/login", body: {login: g.run("store_().users()[0].login")}});
   assert.equal(admin._status, 200);
@@ -166,7 +166,7 @@ test("группы: галочки в таблице -> состав групп;
   g.run("store_().ensureLogins()");
   const row = g.ss.getSheetByName("Сотрудники").getDataRange().getDisplayValues();
   assert.match(row[4][3], /^\d{6}$/);
-  assert.deepEqual([row[1][8], row[2][8], row[2][9]], ["TRUE", "TRUE", "TRUE"]);
+  assert.deepEqual([row[1][9], row[2][9], row[2][10]], ["TRUE", "TRUE", "TRUE"]);
 });
 
 // ---------- ВКонтакте ----------

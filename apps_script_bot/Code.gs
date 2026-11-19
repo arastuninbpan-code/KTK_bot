@@ -1036,7 +1036,8 @@ class Store {
       const ids = phonesIn(phones);
       const internal = id >= 0 ? String(row[id] || "").trim() : "";
       const identity = ids[0] || internal;
-      const temporary = status >= 0 && /^разов/i.test(String(row[status] || "").trim());
+      const pinCell = pin >= 0 ? String(row[pin] || "").trim() : "";
+      const temporary = !pinCell || (status >= 0 && /^разов/i.test(String(row[status] || "").trim()));
       const pinValue = pin >= 0 ? String(row[pin] || "").trim() : (!temporary ? String(login).trim() : ""); // совместимость со старой схемой ID=PIN
       if (identity) out.push({name: n, phone: identity, role: hasAccess ? parseRole(role) : "blocked", login: String(login).trim(), pin: pinValue, temporary, groups, pending, row: ri + 1});
     }
@@ -1281,6 +1282,19 @@ class Store {
     if (at >= 0) this.book.set(TABS.avatars, at + 1, row); else this.book.append(TABS.avatars, row);
   }
 
+  avatarHidden(phone) {
+    if (!this.book.has(TABS.avatars)) return false;
+    return this.book.get(TABS.avatars).slice(1).some((r) => normPhone(r[0] || "") === phone && String(r[1] || "") === "hidden");
+  }
+
+  setAvatarHidden(phone, hidden) {
+    this.book.ensure(TABS.avatars, AVATAR_HEADER);
+    const rows = this.book.get(TABS.avatars);
+    const matches = rows.map((r, i) => ({r, row: i + 1})).filter((x) => x.row > 1 && normPhone(x.r[0] || "") === phone && String(x.r[1] || "") === "hidden");
+    if (hidden && !matches.length) this.book.append(TABS.avatars, [phone, "hidden", "", String(this.now())]);
+    if (!hidden) for (const x of matches.reverse()) this.book.clearRow(TABS.avatars, x.row);
+  }
+
   /** Когда в последний раз обновляли аватарку этого человека в этом канале (мс), 0 — никогда. */
   avatarAge(phone, channel) {
     if (!this.book.has(TABS.avatars)) return 0;
@@ -1298,6 +1312,7 @@ class Store {
       const ts = Number(r[3]) || 0;
       if (phone && photo && (!best[phone] || ts > best[phone].ts)) best[phone] = {photo, ts};
     }
+    for (const r of this.book.get(TABS.avatars).slice(1)) if (String(r[1] || "") === "hidden") delete best[normPhone(r[0] || "")];
     return Object.fromEntries(Object.entries(best).map(([phone, v]) => [this.uid(phone), v.photo]));
   }
 
@@ -1457,10 +1472,8 @@ class Store {
     const rows = this.book.get(TABS.staff);
     if (rows.length < 2) return 0;
     let cols = this.staffCols_(rows);
-    const legacyWithoutStatus = cols.status < 0;
     const legacyWithoutPin = cols.pin < 0;
     let width = Math.max(...rows.map((r) => r.length), 4);
-    if (cols.status < 0) { this.book.setCell(TABS.staff, 1, ++width, "Статус входа"); cols = this.staffCols_(this.book.get(TABS.staff)); }
     if (cols.pin < 0) { this.book.setCell(TABS.staff, 1, ++width, "PIN"); cols = this.staffCols_(this.book.get(TABS.staff)); }
     if (cols.id < 0) { this.book.setCell(TABS.staff, 1, ++width, "_ID"); cols = this.staffCols_(this.book.get(TABS.staff)); }
     const freshRows = this.book.get(TABS.staff);
@@ -1471,8 +1484,7 @@ class Store {
       if (!String(r[0] || "").trim()) continue;
       if (!String(r[cols.id] || "").trim()) this.book.setCell(TABS.staff, i + 1, cols.id + 1, "u" + this.hash(`staff:${i}:${r[0]}:${this.now()}`).slice(0, 12));
       if (normLogin(r[3])) {
-        if (!String(r[cols.status] || "").trim()) this.book.setCell(TABS.staff, i + 1, cols.status + 1, legacyWithoutStatus ? "Активирован" : "Разовый");
-        if (legacyWithoutPin && !/^разов/i.test(String(r[cols.status] || ""))) this.book.setCell(TABS.staff, i + 1, cols.pin + 1, String(r[3]));
+        if (legacyWithoutPin && /^актив/i.test(String(r[cols.status] || ""))) this.book.setCell(TABS.staff, i + 1, cols.pin + 1, String(r[3]));
         continue;
       }
       let login;
@@ -1481,7 +1493,7 @@ class Store {
       } while (used.has(normLogin(login)));
       used.add(normLogin(login));
       this.book.setCell(TABS.staff, i + 1, 4, login);
-      this.book.setCell(TABS.staff, i + 1, cols.status + 1, "Разовый");
+      if (cols.status >= 0) this.book.setCell(TABS.staff, i + 1, cols.status + 1, "Разовый");
       n++;
     }
     if (!String(rows[0][3] || "").trim()) this.book.setCell(TABS.staff, 1, 4, "Код входа");
@@ -1532,7 +1544,7 @@ function readToken(token, secret, now = Date.now()) {
 // ===== lib/api.mjs =====
 // API приложения. Чистая функция: запрос -> {status, body}. Синхронный код, никакой привязки к платформе.
 
-const SERVER_VERSION = "2026.11.19-31"; // меняется при каждом выпуске; приложение показывает её в профиле
+const SERVER_VERSION = "2026.11.19-32"; // меняется при каждом выпуске; приложение показывает её в профиле
 
 class HttpError extends Error {
   constructor(status, message, extra = {}) { super(message); this.status = status; this.extra = extra; }
@@ -1638,7 +1650,7 @@ function handleApi(req, deps) {
       const venues = [...store.venues()];
       for (const e of events) if (e.hall && !venues.some((v) => norm(v) === norm(e.hall))) venues.push(e.hall);
       const editor = canEdit(me.role);
-      return {status: 200, body: {version: SERVER_VERSION, today, me: {...publicUser(me), ...connections(store, me), uid: store.uid(me.phone), off: store.offDates(me.phone).filter((d) => d >= today)}, roles: editableRoles(store, table), allRoles: headerRoles(table), layout: layoutOf(table).v, rev: getRev(), events, venues, venueColors: venueColorMap(store), palette: VENUE_COLORS,
+      return {status: 200, body: {version: SERVER_VERSION, today, me: {...publicUser(me), ...connections(store, me), uid: store.uid(me.phone), avatarHidden: store.avatarHidden(me.phone), off: store.offDates(me.phone).filter((d) => d >= today)}, roles: editableRoles(store, table), allRoles: headerRoles(table), layout: layoutOf(table).v, rev: getRev(), events, venues, venueColors: venueColorMap(store), palette: VENUE_COLORS,
         staff: editor ? store.staffNames() : undefined, groups: editor ? store.groups() : undefined,
         unavailable: editor ? unavailableMap(store, today) : undefined, avatarKey: avatarKey(store)}};
     }
@@ -1662,6 +1674,10 @@ function handleApi(req, deps) {
 
     // --- аватарки (из профилей ВК и Telegram): {uid: ссылка или маленькая картинка} ---
     if (path === "/api/avatars" && method === "GET") return {status: 200, body: {items: store.avatarsByUid(), key: avatarKey(store)}};
+    if (path === "/api/avatar" && (method === "DELETE" || method === "POST")) {
+      store.setAvatarHidden(me.phone, method === "DELETE");
+      return {status: 200, body: {ok: true, hidden: method === "DELETE", items: store.avatarsByUid(), key: avatarKey(store)}};
+    }
 
     // --- переписка по событию ---
     const eventById = (id) => parseEvents(store.book.get(TABS.schedule), today).find((e) => id && e.id === id);
@@ -3310,8 +3326,14 @@ function styleStaff_(sheet) {
     sheet.getRange(1, at).setNumberFormat("@").setValue("Комментарий");
   }
   head = sheet.getRange(1, 1, 1, Math.max(sheet.getLastColumn(), 4)).getDisplayValues()[0].map((x) => String(x).trim());
-  if (head.findIndex((x, i) => i >= 4 && /^статус входа$/i.test(x)) < 0) {
-    sheet.getRange(1, sheet.getLastColumn() + 1).setNumberFormat("@").setValue("Статус входа");
+  if (head.findIndex((x, i) => i >= 4 && /^pin$/i.test(x)) < 0) {
+    const pinAt = sheet.getLastColumn() + 1;
+    sheet.getRange(1, pinAt).setNumberFormat("@").setValue("PIN");
+    const statusAt = head.findIndex((x, i) => i >= 4 && /^статус входа$/i.test(x)) + 1;
+    if (statusAt > 0 && sheet.getLastRow() > 1) {
+      const old = sheet.getRange(2, 1, sheet.getLastRow() - 1, Math.max(statusAt, 4)).getDisplayValues();
+      sheet.getRange(2, pinAt, old.length, 1).setNumberFormat("@").setValues(old.map((r) => [/^актив/i.test(String(r[statusAt - 1] || "")) ? String(r[3] || "") : ""]));
+    }
   }
   head = sheet.getRange(1, 1, 1, Math.max(sheet.getLastColumn(), 4)).getDisplayValues()[0].map((x) => String(x).trim());
   if (head.findIndex((x, i) => i >= 4 && /^_id$/i.test(x)) < 0) sheet.getRange(1, sheet.getLastColumn() + 1).setNumberFormat("@").setValue("_ID");
@@ -3319,6 +3341,7 @@ function styleStaff_(sheet) {
   const accessCol = head.findIndex((x, i) => i >= 4 && /^доступ$/i.test(x)) + 1;
   const commentCol = head.findIndex((x, i) => i >= 4 && /^комментарий$/i.test(x)) + 1;
   const statusCol = head.findIndex((x, i) => i >= 4 && /^статус входа$/i.test(x)) + 1;
+  const pinCol = head.findIndex((x, i) => i >= 4 && /^pin$/i.test(x)) + 1;
   const idCol = head.findIndex((x, i) => i >= 4 && /^_id$/i.test(x)) + 1;
   const lastRow = Math.max(sheet.getMaxRows(), 2);
   const rows = lastRow - 1;
@@ -3337,7 +3360,7 @@ function styleStaff_(sheet) {
   sheet.setColumnWidth(commentCol, 320);
 
   // группы: остальные колонки с названием в шапке; в ячейках галочки «входит в группу»
-  const isGroup = (x, i) => i >= 4 && x && !x.startsWith("_") && i + 1 !== accessCol && i + 1 !== commentCol && i + 1 !== statusCol;
+  const isGroup = (x, i) => i >= 4 && x && !x.startsWith("_") && i + 1 !== accessCol && i + 1 !== commentCol && i + 1 !== statusCol && i + 1 !== pinCol;
   if (!head.some(isGroup)) { sheet.getRange(1, head.length + 1, 1, 3).setNumberFormat("@").setValues([["Актёры", "Техника", "Зал"]]); head = head.concat(["Актёры", "Техника", "Зал"]); } // примеры, переименуйте как нужно
   for (let c = 5; c <= head.length; c++) {
     if (!isGroup(head[c - 1], c - 1)) continue;
@@ -3353,10 +3376,10 @@ function styleStaff_(sheet) {
   const request = SpreadsheetApp.newConditionalFormatRule().whenFormulaSatisfied('=OR(REGEXMATCH($A' + (2 + (sheet.top || 0)) + ',"^(?i)заявка"),REGEXMATCH($C' + (2 + (sheet.top || 0)) + ',"^(?i)заявка"))').setBackground("#FFF2B3").setRanges([whole]).build();
   const off = SpreadsheetApp.newConditionalFormatRule().whenFormulaSatisfied("=AND($A" + (2 + (sheet.top || 0)) + "<>\"\",$" + A(accessCol) + (2 + (sheet.top || 0)) + "=FALSE)").setBackground("#FBE0DF").setFontColor("#8A8A8A").setRanges([whole]).build();
   const code = sheet.getRange(2, 4, rows, 1);
-  const temporary = SpreadsheetApp.newConditionalFormatRule().whenFormulaSatisfied("=$" + A(statusCol) + (2 + (sheet.top || 0)) + '=\"Разовый\"').setBackground("#FFF2B3").setFontColor(C.navy).setBold(true).setRanges([code]).build();
-  const active = SpreadsheetApp.newConditionalFormatRule().whenFormulaSatisfied("=$" + A(statusCol) + (2 + (sheet.top || 0)) + '=\"Активирован\"').setBackground("#D9F5DF").setFontColor(C.navy).setBold(true).setRanges([code]).build();
+  const temporary = SpreadsheetApp.newConditionalFormatRule().whenFormulaSatisfied("=$" + A(pinCol) + (2 + (sheet.top || 0)) + '=\"\"').setBackground("#FFF2B3").setFontColor(C.navy).setBold(true).setRanges([code]).build();
+  const active = SpreadsheetApp.newConditionalFormatRule().whenFormulaSatisfied("=$" + A(pinCol) + (2 + (sheet.top || 0)) + '<>\"\"').setBackground("#D9F5DF").setFontColor(C.navy).setBold(true).setRanges([code]).build();
   sheet.setConditionalFormatRules(rules.concat([request, off, temporary, active]));
-  sheet.setColumnWidth(statusCol, 130);
+  sheet.setColumnWidth(pinCol, 110);
   try { sheet.hideColumns(idCol); } catch (_) {}
   clearTail_(sheet, Math.max(sheet.getLastColumn(), 6));
 }

@@ -5,7 +5,7 @@ import {platform} from "./platform.mjs";
 import {archiveLine, buildReport, checkParams, parseArchive, reportCsv} from "./report.mjs";
 import {canEdit, cleanPhotoIds, colorName, normLogin, ROLE_LABELS, TABS, VENUE_COLORS} from "./store.mjs";
 
-export const SERVER_VERSION = "2026.11.19-31"; // меняется при каждом выпуске; приложение показывает её в профиле
+export const SERVER_VERSION = "2026.11.19-32"; // меняется при каждом выпуске; приложение показывает её в профиле
 
 class HttpError extends Error {
   constructor(status, message, extra = {}) { super(message); this.status = status; this.extra = extra; }
@@ -111,7 +111,7 @@ export function handleApi(req, deps) {
       const venues = [...store.venues()];
       for (const e of events) if (e.hall && !venues.some((v) => norm(v) === norm(e.hall))) venues.push(e.hall);
       const editor = canEdit(me.role);
-      return {status: 200, body: {version: SERVER_VERSION, today, me: {...publicUser(me), ...connections(store, me), uid: store.uid(me.phone), off: store.offDates(me.phone).filter((d) => d >= today)}, roles: editableRoles(store, table), allRoles: headerRoles(table), layout: layoutOf(table).v, rev: getRev(), events, venues, venueColors: venueColorMap(store), palette: VENUE_COLORS,
+      return {status: 200, body: {version: SERVER_VERSION, today, me: {...publicUser(me), ...connections(store, me), uid: store.uid(me.phone), avatarHidden: store.avatarHidden(me.phone), off: store.offDates(me.phone).filter((d) => d >= today)}, roles: editableRoles(store, table), allRoles: headerRoles(table), layout: layoutOf(table).v, rev: getRev(), events, venues, venueColors: venueColorMap(store), palette: VENUE_COLORS,
         staff: editor ? store.staffNames() : undefined, groups: editor ? store.groups() : undefined,
         unavailable: editor ? unavailableMap(store, today) : undefined, avatarKey: avatarKey(store)}};
     }
@@ -135,6 +135,10 @@ export function handleApi(req, deps) {
 
     // --- аватарки (из профилей ВК и Telegram): {uid: ссылка или маленькая картинка} ---
     if (path === "/api/avatars" && method === "GET") return {status: 200, body: {items: store.avatarsByUid(), key: avatarKey(store)}};
+    if (path === "/api/avatar" && (method === "DELETE" || method === "POST")) {
+      store.setAvatarHidden(me.phone, method === "DELETE");
+      return {status: 200, body: {ok: true, hidden: method === "DELETE", items: store.avatarsByUid(), key: avatarKey(store)}};
+    }
 
     // --- переписка по событию ---
     const eventById = (id) => parseEvents(store.book.get(TABS.schedule), today).find((e) => id && e.id === id);

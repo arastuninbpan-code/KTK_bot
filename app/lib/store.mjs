@@ -93,7 +93,8 @@ export class Store {
       const ids = phonesIn(phones);
       const internal = id >= 0 ? String(row[id] || "").trim() : "";
       const identity = ids[0] || internal;
-      const temporary = status >= 0 && /^разов/i.test(String(row[status] || "").trim());
+      const pinCell = pin >= 0 ? String(row[pin] || "").trim() : "";
+      const temporary = !pinCell || (status >= 0 && /^разов/i.test(String(row[status] || "").trim()));
       const pinValue = pin >= 0 ? String(row[pin] || "").trim() : (!temporary ? String(login).trim() : ""); // совместимость со старой схемой ID=PIN
       if (identity) out.push({name: n, phone: identity, role: hasAccess ? parseRole(role) : "blocked", login: String(login).trim(), pin: pinValue, temporary, groups, pending, row: ri + 1});
     }
@@ -338,6 +339,19 @@ export class Store {
     if (at >= 0) this.book.set(TABS.avatars, at + 1, row); else this.book.append(TABS.avatars, row);
   }
 
+  avatarHidden(phone) {
+    if (!this.book.has(TABS.avatars)) return false;
+    return this.book.get(TABS.avatars).slice(1).some((r) => normPhone(r[0] || "") === phone && String(r[1] || "") === "hidden");
+  }
+
+  setAvatarHidden(phone, hidden) {
+    this.book.ensure(TABS.avatars, AVATAR_HEADER);
+    const rows = this.book.get(TABS.avatars);
+    const matches = rows.map((r, i) => ({r, row: i + 1})).filter((x) => x.row > 1 && normPhone(x.r[0] || "") === phone && String(x.r[1] || "") === "hidden");
+    if (hidden && !matches.length) this.book.append(TABS.avatars, [phone, "hidden", "", String(this.now())]);
+    if (!hidden) for (const x of matches.reverse()) this.book.clearRow(TABS.avatars, x.row);
+  }
+
   /** Когда в последний раз обновляли аватарку этого человека в этом канале (мс), 0 — никогда. */
   avatarAge(phone, channel) {
     if (!this.book.has(TABS.avatars)) return 0;
@@ -355,6 +369,7 @@ export class Store {
       const ts = Number(r[3]) || 0;
       if (phone && photo && (!best[phone] || ts > best[phone].ts)) best[phone] = {photo, ts};
     }
+    for (const r of this.book.get(TABS.avatars).slice(1)) if (String(r[1] || "") === "hidden") delete best[normPhone(r[0] || "")];
     return Object.fromEntries(Object.entries(best).map(([phone, v]) => [this.uid(phone), v.photo]));
   }
 
@@ -514,10 +529,8 @@ export class Store {
     const rows = this.book.get(TABS.staff);
     if (rows.length < 2) return 0;
     let cols = this.staffCols_(rows);
-    const legacyWithoutStatus = cols.status < 0;
     const legacyWithoutPin = cols.pin < 0;
     let width = Math.max(...rows.map((r) => r.length), 4);
-    if (cols.status < 0) { this.book.setCell(TABS.staff, 1, ++width, "Статус входа"); cols = this.staffCols_(this.book.get(TABS.staff)); }
     if (cols.pin < 0) { this.book.setCell(TABS.staff, 1, ++width, "PIN"); cols = this.staffCols_(this.book.get(TABS.staff)); }
     if (cols.id < 0) { this.book.setCell(TABS.staff, 1, ++width, "_ID"); cols = this.staffCols_(this.book.get(TABS.staff)); }
     const freshRows = this.book.get(TABS.staff);
@@ -528,8 +541,7 @@ export class Store {
       if (!String(r[0] || "").trim()) continue;
       if (!String(r[cols.id] || "").trim()) this.book.setCell(TABS.staff, i + 1, cols.id + 1, "u" + this.hash(`staff:${i}:${r[0]}:${this.now()}`).slice(0, 12));
       if (normLogin(r[3])) {
-        if (!String(r[cols.status] || "").trim()) this.book.setCell(TABS.staff, i + 1, cols.status + 1, legacyWithoutStatus ? "Активирован" : "Разовый");
-        if (legacyWithoutPin && !/^разов/i.test(String(r[cols.status] || ""))) this.book.setCell(TABS.staff, i + 1, cols.pin + 1, String(r[3]));
+        if (legacyWithoutPin && /^актив/i.test(String(r[cols.status] || ""))) this.book.setCell(TABS.staff, i + 1, cols.pin + 1, String(r[3]));
         continue;
       }
       let login;
@@ -538,7 +550,7 @@ export class Store {
       } while (used.has(normLogin(login)));
       used.add(normLogin(login));
       this.book.setCell(TABS.staff, i + 1, 4, login);
-      this.book.setCell(TABS.staff, i + 1, cols.status + 1, "Разовый");
+      if (cols.status >= 0) this.book.setCell(TABS.staff, i + 1, cols.status + 1, "Разовый");
       n++;
     }
     if (!String(rows[0][3] || "").trim()) this.book.setCell(TABS.staff, 1, 4, "Код входа");

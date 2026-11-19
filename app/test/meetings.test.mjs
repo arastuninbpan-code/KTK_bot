@@ -107,6 +107,11 @@ test("аватарки: ключ — короткий код человека, �
   assert.notEqual(t.call("GET", "/api/schedule", reader).body.avatarKey, key0);
   assert.ok(!JSON.stringify(items).includes("9000000002"), "телефон в ответе не светится");
   assert.ok(t.store.avatarAge("9000000002", "vk") > 0);
+  const hidden = t.call("DELETE", "/api/avatar", reader);
+  assert.equal(hidden.body.hidden, true); assert.equal(hidden.body.items[uid], undefined);
+  assert.equal(t.call("GET", "/api/schedule", reader).body.me.avatarHidden, true);
+  const restored = t.call("POST", "/api/avatar", reader);
+  assert.equal(restored.body.hidden, false); assert.equal(restored.body.items[uid], "https://sun1.userapi.com/a.jpg");
 });
 
 test("«не могу работать» нельзя отметить на дату, когда человек уже назначен на смену", () => {
