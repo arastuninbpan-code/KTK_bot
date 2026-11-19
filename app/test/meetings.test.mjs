@@ -112,6 +112,10 @@ test("аватарки: ключ — короткий код человека, �
   assert.equal(t.call("GET", "/api/schedule", reader).body.me.avatarHidden, true);
   const restored = t.call("POST", "/api/avatar", reader);
   assert.equal(restored.body.hidden, false); assert.equal(restored.body.items[uid], "https://sun1.userapi.com/a.jpg");
+  const data = "data:image/jpeg;base64," + "A".repeat(400);
+  const uploaded = t.call("PUT", "/api/avatar", reader, {data});
+  assert.equal(uploaded.status, 200); assert.equal(uploaded.body.items[uid], data);
+  assert.equal(t.call("PUT", "/api/avatar", reader, {data: "не фото"}).status, 400);
 });
 
 test("«не могу работать» нельзя отметить на дату, когда человек уже назначен на смену", () => {

@@ -303,6 +303,8 @@ body { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
 .profhead h2 { margin: 0 0 6px; font-size: 21px; }
 .avatar.big { width: 64px; height: 64px; }
 .avatar-action { margin: 12px 0 4px; padding: 9px 14px; font-size: 14px; box-shadow: 2px 2px 0 var(--navy); }
+.avatar-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+@media (max-width: 380px) { .avatar-actions { grid-template-columns: 1fr; } }
 .okchip { display: inline-flex; align-items: center; gap: 6px; padding: 2px 10px; border-radius: 999px; background: #d9f5df; border: 2px solid var(--navy); font-size: 13px; }
 .okchip .ico { width: 15px; height: 15px; }
 .drow .muted { color: var(--muted); font-weight: 800; }

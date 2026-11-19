@@ -367,7 +367,7 @@ export class Store {
       const phone = normPhone(r[0] || "");
       const photo = String(r[2] || "");
       const ts = Number(r[3]) || 0;
-      if (phone && photo && (!best[phone] || ts > best[phone].ts)) best[phone] = {photo, ts};
+      if (phone && photo && (!best[phone] || ts >= best[phone].ts)) best[phone] = {photo, ts};
     }
     for (const r of this.book.get(TABS.avatars).slice(1)) if (String(r[1] || "") === "hidden") delete best[normPhone(r[0] || "")];
     return Object.fromEntries(Object.entries(best).map(([phone, v]) => [this.uid(phone), v.photo]));

@@ -535,6 +535,22 @@ async function compressPhoto(file) {
   }
   throw new Error("Фото не удалось уменьшить. Попробуйте другое.");
 }
+/** Аватарка: квадрат по центру, максимум 320×320 и достаточно маленькая для одной ячейки таблицы. */
+async function compressAvatar(file) {
+  if (!/^image\//.test(file.type || "")) throw new Error("Выберите фотографию из галереи.");
+  let bmp;
+  try { bmp = await createImageBitmap(file); } catch (_) { throw new Error("Не удалось открыть фото. Попробуйте другое."); }
+  const size = Math.min(bmp.width, bmp.height), sx = Math.max(0, (bmp.width - size) / 2), sy = Math.max(0, (bmp.height - size) / 2);
+  for (const side of [320, 256, 192, 160]) {
+    const c = document.createElement("canvas"); c.width = side; c.height = side;
+    c.getContext("2d").drawImage(bmp, sx, sy, size, size, 0, 0, side, side);
+    for (const q of [0.8, 0.68, 0.56, 0.44]) {
+      const blob = await new Promise((res) => c.toBlob(res, "image/jpeg", q));
+      if (blob && Math.ceil(blob.size * 4 / 3) <= 47000) return "data:image/jpeg;base64," + await toBase64(blob);
+    }
+  }
+  throw new Error("Фото не удалось уменьшить. Попробуйте другое.");
+}
 async function uploadPhoto(p) {
   const r = await api("POST", "/api/photos", {data: await toBase64(p.blob)});
   return r.id;
@@ -995,6 +1011,16 @@ function profileSheet() {
       close(); render(); toast(restore ? "Аватарка снова показывается" : "Аватарка убрана");
     } catch (e) { avatarButton.disabled = false; toast(e.message, {bad: true}); }
   }}, me.avatarHidden ? "Вернуть аватарку" : "Убрать аватарку");
+  const uploadAvatar = h("button", {class: "btn avatar-action", onclick: () => chooseFiles(false, async ([file]) => {
+    uploadAvatar.disabled = true;
+    try {
+      const data = await compressAvatar(file);
+      const r = await api("PUT", "/api/avatar", {data});
+      state.avatars = r.items || {}; state.avatarKey = r.key || ""; state.me.avatarHidden = false;
+      try { localStorage.setItem("ktk_avatars", JSON.stringify({key: state.avatarKey, items: state.avatars})); } catch (_) {}
+      close(); render(); toast("Аватарка обновлена");
+    } catch (e) { uploadAvatar.disabled = false; toast(e.message, {bad: true}); }
+  }, "image/*")}, "Загрузить из галереи");
   const dirty = () => off.size !== orig.size || [...off].some((d) => !orig.has(d));
   const paint = () => {
     const first = ym + "-01";
@@ -1031,7 +1057,7 @@ function profileSheet() {
   });
   const {close} = overlay(sheet(
     h("div", {class: "profhead"}, (state.avatars[me.uid] ? avatarEl(me.uid, me.name, "avatar big") : h("img", {class: "avatar big", src: "avatar.webp", alt: ""})), h("div", {}, h("h2", {}, me.name), h("span", {class: "badge " + me.role}, me.roleLabel))),
-    avatarButton,
+    h("div", {class: "avatar-actions"}, uploadAvatar, avatarButton),
     h("div", {class: "dmeta"},
       me.login ? h("div", {class: "drow"}, h("span", {}, "Ваш код входа"), h("b", {class: "mono"}, me.login)) : null,
       social("telegram", "Telegram", cfg.BOT_URL ? cfg.BOT_URL + "?start=" : ""),

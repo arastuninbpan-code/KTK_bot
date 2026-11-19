@@ -1310,7 +1310,7 @@ class Store {
       const phone = normPhone(r[0] || "");
       const photo = String(r[2] || "");
       const ts = Number(r[3]) || 0;
-      if (phone && photo && (!best[phone] || ts > best[phone].ts)) best[phone] = {photo, ts};
+      if (phone && photo && (!best[phone] || ts >= best[phone].ts)) best[phone] = {photo, ts};
     }
     for (const r of this.book.get(TABS.avatars).slice(1)) if (String(r[1] || "") === "hidden") delete best[normPhone(r[0] || "")];
     return Object.fromEntries(Object.entries(best).map(([phone, v]) => [this.uid(phone), v.photo]));
@@ -1544,7 +1544,7 @@ function readToken(token, secret, now = Date.now()) {
 // ===== lib/api.mjs =====
 // API приложения. Чистая функция: запрос -> {status, body}. Синхронный код, никакой привязки к платформе.
 
-const SERVER_VERSION = "2026.11.19-32"; // меняется при каждом выпуске; приложение показывает её в профиле
+const SERVER_VERSION = "2026.11.19-33"; // меняется при каждом выпуске; приложение показывает её в профиле
 
 class HttpError extends Error {
   constructor(status, message, extra = {}) { super(message); this.status = status; this.extra = extra; }
@@ -1677,6 +1677,15 @@ function handleApi(req, deps) {
     if (path === "/api/avatar" && (method === "DELETE" || method === "POST")) {
       store.setAvatarHidden(me.phone, method === "DELETE");
       return {status: 200, body: {ok: true, hidden: method === "DELETE", items: store.avatarsByUid(), key: avatarKey(store)}};
+    }
+    if (path === "/api/avatar" && method === "PUT") {
+      const data = String(body.data || "");
+      const raw = data.replace(/^data:image\/jpeg;base64,/, "");
+      if (!/^data:image\/jpeg;base64,[A-Za-z0-9+/=]+$/.test(data) || raw.length < 100) throw new HttpError(400, "Это не похоже на фотографию.");
+      if (raw.length > 48000) throw new HttpError(413, "Аватарка слишком большая. Выберите другое фото.");
+      store.setAvatar(me.phone, "upload", data);
+      store.setAvatarHidden(me.phone, false);
+      return {status: 200, body: {ok: true, hidden: false, items: store.avatarsByUid(), key: avatarKey(store)}};
     }
 
     // --- переписка по событию ---

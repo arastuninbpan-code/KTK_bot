@@ -5,7 +5,7 @@ import {platform} from "./platform.mjs";
 import {archiveLine, buildReport, checkParams, parseArchive, reportCsv} from "./report.mjs";
 import {canEdit, cleanPhotoIds, colorName, normLogin, ROLE_LABELS, TABS, VENUE_COLORS} from "./store.mjs";
 
-export const SERVER_VERSION = "2026.11.19-32"; // меняется при каждом выпуске; приложение показывает её в профиле
+export const SERVER_VERSION = "2026.11.19-33"; // меняется при каждом выпуске; приложение показывает её в профиле
 
 class HttpError extends Error {
   constructor(status, message, extra = {}) { super(message); this.status = status; this.extra = extra; }
@@ -138,6 +138,15 @@ export function handleApi(req, deps) {
     if (path === "/api/avatar" && (method === "DELETE" || method === "POST")) {
       store.setAvatarHidden(me.phone, method === "DELETE");
       return {status: 200, body: {ok: true, hidden: method === "DELETE", items: store.avatarsByUid(), key: avatarKey(store)}};
+    }
+    if (path === "/api/avatar" && method === "PUT") {
+      const data = String(body.data || "");
+      const raw = data.replace(/^data:image\/jpeg;base64,/, "");
+      if (!/^data:image\/jpeg;base64,[A-Za-z0-9+/=]+$/.test(data) || raw.length < 100) throw new HttpError(400, "Это не похоже на фотографию.");
+      if (raw.length > 48000) throw new HttpError(413, "Аватарка слишком большая. Выберите другое фото.");
+      store.setAvatar(me.phone, "upload", data);
+      store.setAvatarHidden(me.phone, false);
+      return {status: 200, body: {ok: true, hidden: false, items: store.avatarsByUid(), key: avatarKey(store)}};
     }
 
     // --- переписка по событию ---
