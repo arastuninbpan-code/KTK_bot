@@ -35,6 +35,20 @@ test("вход по коду: верный, повторный, неверный
   assert.equal(ctx.login("9000000005").status, 403); // Орлова заблокирована
 });
 
+test("разовый код в приложении требует новый и сразу активирует вход", () => {
+  const ctx = make();
+  const rows = ctx.book.get(TABS.staff);
+  rows[2][3] = "246810"; rows[2][4] = "Разовый"; ctx.book.set(TABS.staff, 3, rows[2]);
+  const first = ctx.call("POST", "/api/login", "", {login: "246810"});
+  assert.equal(first.status, 409); assert.equal(first.body.activation, true);
+  assert.equal(ctx.call("POST", "/api/activate", "", {temporary: "246810", login: "246810"}).status, 400);
+  const done = ctx.call("POST", "/api/activate", "", {temporary: "246810", login: "654321"});
+  assert.equal(done.status, 200);
+  assert.equal(readToken(done.body.token, "s3", NOW).sub, "9000000002");
+  assert.equal(ctx.store.findByLogin("654321").temporary, false);
+  assert.equal(ctx.call("POST", "/api/activate", "", {temporary: "246810", login: "777777"}).status, 401);
+});
+
 test("расписание: события, «мои» смены, список сотрудников только тем, кто может править", () => {
   const ctx = make();
   const reader = ctx.login("9000000002").body.token;

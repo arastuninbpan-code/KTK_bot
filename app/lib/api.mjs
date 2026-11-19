@@ -5,7 +5,7 @@ import {platform} from "./platform.mjs";
 import {archiveLine, buildReport, checkParams, parseArchive, reportCsv} from "./report.mjs";
 import {canEdit, cleanPhotoIds, colorName, ROLE_LABELS, TABS, VENUE_COLORS} from "./store.mjs";
 
-export const SERVER_VERSION = "2026.10.23-28"; // меняется при каждом выпуске; приложение показывает её в профиле
+export const SERVER_VERSION = "2026.11.19-30"; // меняется при каждом выпуске; приложение показывает её в профиле
 
 class HttpError extends Error {
   constructor(status, message, extra = {}) { super(message); this.status = status; this.extra = extra; }
@@ -63,9 +63,20 @@ export function handleApi(req, deps) {
     if (method === "POST" && path === "/api/login") {
       store.ensureLogins();
       const user = store.findByLogin(body.login);
-      if (!user || user.temporary) { platform.sleep(400); throw new HttpError(401, "Неверный код. Если вы ещё не активировались, сначала отправьте разовый код боту."); }
+      if (!user) { platform.sleep(400); throw new HttpError(401, "Неверный код."); }
       if (user.role === "blocked") throw new HttpError(403, "Доступ закрыт. Обратитесь к администратору.");
+      if (user.temporary) throw new HttpError(409, "Придумайте новый шестизначный код", {activation: true, name: user.name});
       return {status: 200, body: {token: makeToken({sub: user.phone, l: store.loginMark(user.login)}, secret, undefined, now()), user: publicUser(user)}};
+    }
+    if (method === "POST" && path === "/api/activate") {
+      store.ensureLogins();
+      const user = store.findByLogin(body.temporary);
+      if (!user || !user.temporary) { platform.sleep(400); throw new HttpError(401, "Разовый код неверный или уже использован."); }
+      if (user.role === "blocked") throw new HttpError(403, "Доступ закрыт. Обратитесь к администратору.");
+      if (String(body.temporary || "").trim() === String(body.login || "").trim()) throw new HttpError(400, "Новый код должен отличаться от разового.");
+      if (!store.setPermanentLogin(user.phone, body.login)) throw new HttpError(409, "Введите другой шестизначный код: этот код уже занят или имеет неверный формат.");
+      const fresh = store.users().find((u) => u.phone === user.phone);
+      return {status: 200, body: {token: makeToken({sub: fresh.phone, l: store.loginMark(fresh.login)}, secret, undefined, now()), user: publicUser(fresh)}};
     }
 
     // --- нужен вход ---

@@ -538,6 +538,7 @@ const msgIntro = "👋 <b>Добро пожаловать в КТК!</b>\nВве
 const msgAskPhone = "💬 <b>Введите шестизначный одноразовый код</b>, который выдал директор.";
 const msgChoosePin = (name) => `✅ <b>${esc(name)}, одноразовый код принят.</b>\n\nТеперь придумайте и отправьте свой новый шестизначный код. Он станет постоянным кодом для входа в приложение.`;
 const msgPinInvalid = "Код должен состоять ровно из шести цифр. Попробуйте ещё раз.";
+const msgPinSame = "Новый код должен отличаться от одноразового. Придумайте другие шесть цифр.";
 const msgPinUsed = "Такой код уже использует другой сотрудник. Придумайте другой шестизначный код.";
 const msgPinSaved = (name, login) => `✈️ <b>Готово, ${esc(name)}!</b>\nВаш постоянный код: <code>${esc(login)}</code>\n\nТеперь вы подключены и будете получать уведомления о сменах.`;
 const msgWrongCode = (left) => `Неверный код.${left > 0 ? ` Осталось попыток: ${left}.` : ""}`;
@@ -1528,7 +1529,7 @@ function readToken(token, secret, now = Date.now()) {
 // ===== lib/api.mjs =====
 // API приложения. Чистая функция: запрос -> {status, body}. Синхронный код, никакой привязки к платформе.
 
-const SERVER_VERSION = "2026.10.23-28"; // меняется при каждом выпуске; приложение показывает её в профиле
+const SERVER_VERSION = "2026.11.19-30"; // меняется при каждом выпуске; приложение показывает её в профиле
 
 class HttpError extends Error {
   constructor(status, message, extra = {}) { super(message); this.status = status; this.extra = extra; }
@@ -1586,9 +1587,20 @@ function handleApi(req, deps) {
     if (method === "POST" && path === "/api/login") {
       store.ensureLogins();
       const user = store.findByLogin(body.login);
-      if (!user || user.temporary) { platform.sleep(400); throw new HttpError(401, "Неверный код. Если вы ещё не активировались, сначала отправьте разовый код боту."); }
+      if (!user) { platform.sleep(400); throw new HttpError(401, "Неверный код."); }
       if (user.role === "blocked") throw new HttpError(403, "Доступ закрыт. Обратитесь к администратору.");
+      if (user.temporary) throw new HttpError(409, "Придумайте новый шестизначный код", {activation: true, name: user.name});
       return {status: 200, body: {token: makeToken({sub: user.phone, l: store.loginMark(user.login)}, secret, undefined, now()), user: publicUser(user)}};
+    }
+    if (method === "POST" && path === "/api/activate") {
+      store.ensureLogins();
+      const user = store.findByLogin(body.temporary);
+      if (!user || !user.temporary) { platform.sleep(400); throw new HttpError(401, "Разовый код неверный или уже использован."); }
+      if (user.role === "blocked") throw new HttpError(403, "Доступ закрыт. Обратитесь к администратору.");
+      if (String(body.temporary || "").trim() === String(body.login || "").trim()) throw new HttpError(400, "Новый код должен отличаться от разового.");
+      if (!store.setPermanentLogin(user.phone, body.login)) throw new HttpError(409, "Введите другой шестизначный код: этот код уже занят или имеет неверный формат.");
+      const fresh = store.users().find((u) => u.phone === user.phone);
+      return {status: 200, body: {token: makeToken({sub: fresh.phone, l: store.loginMark(fresh.login)}, secret, undefined, now()), user: publicUser(fresh)}};
     }
 
     // --- нужен вход ---
@@ -1853,6 +1865,8 @@ function handleMessage({store, channel, ev, appUrl = "", now = Date.now(), publi
     const pending = store.activations().find((a) => a.channel === channel.name && a.chatId === String(chat));
     if (pending) {
       if (!validPin(text)) return channel.send(chat, msgPinInvalid);
+      const current = store.users().find((x) => x.phone === pending.person);
+      if (current && normLogin(current.login) === normLogin(text)) return channel.send(chat, msgPinSame);
       if (!store.setPermanentLogin(pending.person, text)) return channel.send(chat, msgPinUsed);
       const fresh = store.users().find((x) => x.phone === pending.person);
       store.cancelActivation(channel.name, chat);

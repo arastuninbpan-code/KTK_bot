@@ -1,6 +1,6 @@
 // Диалог с сотрудником (одинаков для любого мессенджера) и рассылка уведомлений. Синхронный код.
 import {matchPhones, parseEvents, parseGrid, planCycle, todayIso} from "./core.mjs";
-import {afishaText, appButton, MENU_COMMANDS, msgAlreadyLinked, msgApp, msgMenu, msgNoApp, msgChangesDigest, msgAskPhone, msgIntro, msgAuthLocked, msgBlocked, msgChange, msgAccessGranted, msgChoosePin, msgLogin, msgPinInvalid, msgPinSaved, msgPinUsed, msgPostEmpty, msgPostNoRights, msgPostNotConfigured, msgPostPreview, msgPostResult, msgReminder, msgStopped, msgWelcome, msgWrongCode, publicAfishaText, shiftsText} from "./format.mjs";
+import {afishaText, appButton, MENU_COMMANDS, msgAlreadyLinked, msgApp, msgMenu, msgNoApp, msgChangesDigest, msgAskPhone, msgIntro, msgAuthLocked, msgBlocked, msgChange, msgAccessGranted, msgChoosePin, msgLogin, msgPinInvalid, msgPinSame, msgPinSaved, msgPinUsed, msgPostEmpty, msgPostNoRights, msgPostNotConfigured, msgPostPreview, msgPostResult, msgReminder, msgStopped, msgWelcome, msgWrongCode, publicAfishaText, shiftsText} from "./format.mjs";
 import {Gone} from "./telegram.mjs";
 import {canEdit, normLogin, TABS, validPin} from "./store.mjs";
 
@@ -34,6 +34,8 @@ export function handleMessage({store, channel, ev, appUrl = "", now = Date.now()
     const pending = store.activations().find((a) => a.channel === channel.name && a.chatId === String(chat));
     if (pending) {
       if (!validPin(text)) return channel.send(chat, msgPinInvalid);
+      const current = store.users().find((x) => x.phone === pending.person);
+      if (current && normLogin(current.login) === normLogin(text)) return channel.send(chat, msgPinSame);
       if (!store.setPermanentLogin(pending.person, text)) return channel.send(chat, msgPinUsed);
       const fresh = store.users().find((x) => x.phone === pending.person);
       store.cancelActivation(channel.name, chat);

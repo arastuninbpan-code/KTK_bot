@@ -68,6 +68,8 @@ test("разовый код -> сотрудник выбирает постоя�
   assert.match(lastTo(ch, 77).text, /одноразовый код принят/i);
   say(ctx, ch, 77, "12");
   assert.match(lastTo(ch, 77).text, /ровно из шести цифр/i);
+  say(ctx, ch, 77, once);
+  assert.match(lastTo(ch, 77).text, /отличаться от одноразового/i);
   say(ctx, ch, 77, "654321");
   assert.match(lastTo(ch, 77).text, /Ваш постоянный код: <code>654321<\/code>/);
   const u = ctx.store.users().find((x) => x.name === "Петрова Л.Н.");

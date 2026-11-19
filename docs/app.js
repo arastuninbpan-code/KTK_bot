@@ -358,11 +358,13 @@ function confirmDialog(title, text, okLabel, onOk) {
 const LOGIN_LEN = 6;
 function loginView() {
   let busy = false;
+  let temporary = "";
   const err = h("div", {class: "error", role: "alert"});
   const input = h("input", {class: "code-input", autocomplete: "one-time-code", inputmode: "numeric", pattern: "[0-9]*", maxlength: "6", placeholder: "КОД", "aria-label": "Ваш шестизначный код",
     oninput: () => { input.value = input.value.replace(/\D/g, "").slice(0, LOGIN_LEN); err.className = "error"; err.textContent = ""; input.classList.remove("bad"); },
     onkeydown: (e) => { if (e.key === "Enter") go(); }});
   const btn = h("button", {class: "btn", onclick: () => go()}, "Войти");
+  const title = h("h3", {}, "Введите код входа");
   // красная подсветка и дрожание поля при неверном логине
   function reject(text) {
     err.className = "error"; err.textContent = text;
@@ -373,11 +375,24 @@ function loginView() {
     if (!/^\d{6}$/.test(input.value.trim())) return reject("Введите шестизначный код");
     busy = true; btn.disabled = true; btn.textContent = "Входим…"; err.className = "hint"; err.textContent = "Идёт загрузка, подождите несколько секунд…"; input.disabled = true;
     try {
-      const r = await api("POST", "/api/login", {login: input.value.trim()});
+      const entered = input.value.trim();
+      const r = temporary
+        ? await api("POST", "/api/activate", {temporary, login: entered})
+        : await api("POST", "/api/login", {login: entered});
       state.token = r.token; localStorage.setItem("ktk_token", r.token);
       if (queue.length) pumpQueue(); // правки, оставшиеся с прошлого входа
       await load();
-    } catch (e) { input.disabled = false; reject(e.message); input.focus(); } finally { busy = false; btn.disabled = false; btn.textContent = "Войти"; }
+    } catch (e) {
+      input.disabled = false;
+      if (!temporary && e.status === 409 && e.data && e.data.activation) {
+        temporary = input.value.trim(); input.value = "";
+        title.textContent = "Придумайте постоянный код";
+        btn.textContent = "Сохранить и войти";
+        err.className = "hint"; err.textContent = "Разовый код принят. Введите новый код из шести цифр — он будет работать в приложении, Telegram и ВКонтакте.";
+        input.focus(); return;
+      }
+      reject(e.message); input.focus();
+    } finally { busy = false; btn.disabled = false; btn.textContent = temporary ? "Сохранить и войти" : "Войти"; }
   }
   return h("main", {class: "login"},
     h("div", {class: "hero-wrap"}, h("img", {class: "hero", src: "avatar.webp", alt: "Пилот с бумажным самолётиком"}), splash()),
@@ -388,7 +403,7 @@ function loginView() {
         h("li", {}, h("span", {}, "Получите у директора одноразовый код")),
         h("li", {}, h("span", {}, "Отправьте его боту и придумайте постоянный код")),
         h("li", {}, h("span", {}, "Введите постоянный код здесь"))),
-      input, err,
+      title, input, err,
       h("div", {class: "stack"}, btn, h("a", {class: "btn light", href: CFG.BOT_URL || "#", target: "_blank", rel: "noopener"}, icon("plane"), "Открыть бота"))));
 }
 
