@@ -369,30 +369,9 @@ const LOGIN_LEN = 6;
 function loginView() {
   let busy = false;
   const err = h("div", {class: "error", role: "alert"});
-  const pinInput = h("input", {
-    class: "code-input", type: "password", readonly: true, inputmode: "none", placeholder: "PIN",
-    onkeydown: (event) => {
-      if (event.key === "Enter") go();
-      else if (event.key === "Backspace" || /^[0-9]$/.test(event.key)) {
-        event.preventDefault();
-        editPin(event.key);
-      }
-    }
-  });
-  function editPin(key) {
-    if (busy) return;
-    const pin = pinInput.value;
-    pinInput.value = key === "Backspace" ? pin.slice(0, -1) : (pin + key).slice(0, LOGIN_LEN);
-    err.className = "error";
-    err.textContent = "";
-    pinInput.classList.remove("bad");
-  }
-  const key = (digit) => h("button", {type: "button", class: "pin-key", onclick: () => editPin(digit)}, digit);
-  const keypad = h("fieldset", {class: "pin-pad", "aria-label": "Цифровая панель PIN"},
-    Array.from("123456789", key),
-    h("span", {"aria-hidden": "true"}),
-    key("0"),
-    h("button", {type: "button", class: "pin-key", "aria-label": "Удалить последнюю цифру", onclick: () => editPin("Backspace")}, "⌫"));
+  const clean = (input) => { input.value = input.value.replace(/\D/g, "").slice(0, LOGIN_LEN); err.className = "error"; err.textContent = ""; input.classList.remove("bad"); };
+  const pinInput = h("input", {class: "code-input", type: "text", autocomplete: "off", autocorrect: "off", spellcheck: "false", inputmode: "numeric", pattern: "[0-9]*", maxlength: "6", placeholder: "PIN", "aria-label": "Шестизначный PIN",
+    oninput: () => clean(pinInput), onkeydown: (e) => { if (e.key === "Enter") go(); }});
   const btn = h("button", {class: "btn", onclick: () => go()}, "Войти");
   const title = h("h3", {}, "Введите PIN");
   // красная подсветка и дрожание поля при неверном логине
@@ -404,7 +383,7 @@ function loginView() {
     if (busy) return;
     const pin = pinInput.value.trim();
     if (!/^\d{6}$/.test(pin)) return reject("Введите шестизначный PIN");
-    busy = true; btn.disabled = true; btn.textContent = "Входим…"; err.className = "hint"; err.textContent = "Идёт загрузка, подождите несколько секунд…"; keypad.disabled = true;
+    busy = true; btn.disabled = true; btn.textContent = "Входим…"; err.className = "hint"; err.textContent = "Идёт загрузка, подождите несколько секунд…"; pinInput.disabled = true;
     try {
       const client = authClientId();
       const r = await api("POST", "/api/login", {pin, client});
@@ -413,8 +392,8 @@ function loginView() {
       await load();
     } catch (e) {
       if ([401, 403, 423, 429].includes(e.status)) pinInput.value = "";
-      reject(e.message);
-    } finally { busy = false; keypad.disabled = false; btn.disabled = false; btn.textContent = "Войти"; }
+      pinInput.disabled = false; reject(e.message); pinInput.focus();
+    } finally { busy = false; btn.disabled = false; btn.textContent = "Войти"; }
   }
   return h("main", {class: "login"},
     h("div", {class: "hero-wrap"}, h("img", {class: "hero", src: "avatar.webp", alt: "Пилот с бумажным самолётиком"}), splash()),
@@ -426,7 +405,6 @@ function loginView() {
       h("div", {class: "login-fields"},
         h("label", {class: "login-field"}, h("span", {}, "PIN из 6 цифр"), pinInput)),
       err,
-      keypad,
       h("div", {class: "stack"}, btn, h("a", {class: "btn light", href: CFG.BOT_URL || "#", target: "_blank", rel: "noopener"}, icon("plane"), "Открыть бота"))));
 }
 
