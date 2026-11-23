@@ -100,6 +100,19 @@ test("пять неверных кодов блокируют подбор на 
   assert.match(lastTo(ch, 90).text, /заблокирован на 15 минут/);
 });
 
+test("блокировку нельзя обойти правильным PIN после принятого ID — Telegram и VK", () => {
+  for (const channelName of ["telegram", "vk"]) {
+    const ctx = setup(); const ch = fakeChannel(channelName); const chat = channelName === "telegram" ? 191 : 192;
+    say(ctx, ch, chat, "100001");
+    assert.match(lastTo(ch, chat).text, /введите ваш шестизначный PIN/i);
+    for (let i = 0; i < 5; i++) say(ctx, ch, chat, "999999");
+    assert.match(lastTo(ch, chat).text, /заблокирован на 15 минут/);
+    say(ctx, ch, chat, "100001");
+    assert.match(lastTo(ch, chat).text, /заблокирован на 15 минут/);
+    assert.equal(ctx.store.chats().some((c) => c.channel === channelName && c.chatId === String(chat)), false);
+  }
+});
+
 test("runCycle: короткие уведомления с кнопкой только тому, кого касается; повторов нет; заблокированным не пишем", () => {
   const ctx = setup(); const tg = fakeChannel();
   const senders = {telegram: tg};

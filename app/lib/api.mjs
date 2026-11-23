@@ -5,7 +5,7 @@ import {platform} from "./platform.mjs";
 import {archiveLine, buildReport, checkParams, parseArchive, reportCsv} from "./report.mjs";
 import {canEdit, cleanPhotoIds, colorName, normLogin, ROLE_LABELS, TABS, VENUE_COLORS} from "./store.mjs";
 
-export const SERVER_VERSION = "2026.11.19-33"; // меняется при каждом выпуске; приложение показывает её в профиле
+export const SERVER_VERSION = "2026.11.23-34"; // меняется при каждом выпуске; приложение показывает её в профиле
 
 class HttpError extends Error {
   constructor(status, message, extra = {}) { super(message); this.status = status; this.extra = extra; }
@@ -59,30 +59,52 @@ export function handleApi(req, deps) {
   const {store, secret, now = () => Date.now(), afterChange = () => {}, getRev = () => "", bumpRev = () => {}, announce = () => {}, flush = () => ({pending: false}), afterVenues = () => {}, saveReport = () => ({number: 0})} = deps;
   const {method, path, body = {}, token} = req;
   try {
+    const authClient = () => {
+      // Старые закэшированные версии приложения ещё не присылали client. Они идут
+      // в общий защищённый бакет до автоматического обновления service worker.
+      const client = String(body.client || "legacy_client_shared").trim();
+      if (!/^[A-Za-z0-9_-]{16,80}$/.test(client)) throw new HttpError(400, "Обновите страницу приложения и повторите вход.");
+      return client;
+    };
+    const checkAuthBlock = (client) => {
+      const state = store.authState("app", client);
+      if (state.blockedUntil > now()) throw new HttpError(429, "Слишком много попыток. Вход заблокирован на 15 минут.", {blockedUntil: state.blockedUntil});
+    };
+    const authFailure = (client, message) => {
+      platform.sleep(400);
+      const failed = store.authFailed("app", client);
+      if (failed.blockedUntil) throw new HttpError(429, "Слишком много попыток. Вход заблокирован на 15 минут.", {blockedUntil: failed.blockedUntil});
+      throw new HttpError(401, `${message} Осталось попыток: ${5 - failed.attempts}.`);
+    };
     // --- без входа ---
     if (method === "POST" && path === "/api/identify") {
+      const client = authClient(); checkAuthBlock(client);
       store.ensureLogins();
       const user = store.findByLogin(body.login);
-      if (!user) { platform.sleep(400); throw new HttpError(401, "Не удалось продолжить. Проверьте ID."); }
+      if (!user) return authFailure(client, "Не удалось продолжить. Проверьте ID.");
       if (user.role === "blocked") throw new HttpError(403, "Доступ закрыт. Обратитесь к администратору.");
       return {status: 200, body: {ok: true, activation: user.temporary || !user.pin, name: user.name}};
     }
     if (method === "POST" && path === "/api/login") {
+      const client = authClient(); checkAuthBlock(client);
       store.ensureLogins();
       const user = store.findByLogin(body.login);
       const suppliedPin = String(body.pin == null ? body.login : body.pin).trim(); // старые клиенты передавали одно поле; после миграции это сработает только у старых записей ID=PIN
-      if (!user || user.temporary || !user.pin || normLogin(user.pin) !== normLogin(suppliedPin)) { platform.sleep(400); throw new HttpError(401, "ID или PIN указан неверно."); }
+      if (!user || user.temporary || !user.pin || normLogin(user.pin) !== normLogin(suppliedPin)) return authFailure(client, "ID или PIN указан неверно.");
       if (user.role === "blocked") throw new HttpError(403, "Доступ закрыт. Обратитесь к администратору.");
+      store.authSucceeded("app", client);
       return {status: 200, body: {token: makeToken({sub: user.phone, l: store.loginMark(user.login, user.pin)}, secret, undefined, now()), user: publicUser(user)}};
     }
     if (method === "POST" && path === "/api/activate") {
+      const client = authClient(); checkAuthBlock(client);
       store.ensureLogins();
       const user = store.findByLogin(body.login);
-      if (!user || !user.temporary) { platform.sleep(400); throw new HttpError(401, "Разовый код неверный или уже использован."); }
+      if (!user || !user.temporary) return authFailure(client, "Разовый код неверный или уже использован.");
       if (user.role === "blocked") throw new HttpError(403, "Доступ закрыт. Обратитесь к администратору.");
       if (normLogin(user.login) === normLogin(body.pin)) throw new HttpError(400, "PIN должен отличаться от ID сотрудника.");
       if (!store.setPermanentLogin(user.phone, body.pin)) throw new HttpError(400, "PIN должен состоять ровно из шести цифр.");
       const fresh = store.users().find((u) => u.phone === user.phone);
+      store.authSucceeded("app", client);
       return {status: 200, body: {token: makeToken({sub: fresh.phone, l: store.loginMark(fresh.login, fresh.pin)}, secret, undefined, now()), user: publicUser(fresh)}};
     }
 

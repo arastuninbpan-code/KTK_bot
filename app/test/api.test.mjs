@@ -6,12 +6,17 @@ import {TABS} from "../lib/store.mjs";
 import {msk, setup} from "./helpers.mjs";
 
 const NOW = msk(1, 10);
+const CLIENT = "test_browser_000000000001";
 function make() {
   const ctx = setup(NOW);
+  ctx.now = NOW;
   ctx.changes = 0;
-  ctx.deps = {store: ctx.store, secret: "s3", now: () => NOW, afterChange: () => { ctx.changes++; }};
-  ctx.call = (method, path, token, body = {}) => handleApi({method, path, token, body}, ctx.deps);
-  ctx.login = (phone) => { ctx.store.ensureLogins(); return handleApi({method: "POST", path: "/api/login", body: {login: ctx.store.users().find((u) => u.phone === phone).login}}, ctx.deps); };
+  ctx.deps = {store: ctx.store, secret: "s3", now: () => ctx.now, afterChange: () => { ctx.changes++; }};
+  ctx.call = (method, path, token, body = {}) => {
+    if (["/api/identify", "/api/login", "/api/activate"].includes(path) && !body.client) body = {...body, client: CLIENT};
+    return handleApi({method, path, token, body}, ctx.deps);
+  };
+  ctx.login = (phone) => { ctx.store.ensureLogins(); return ctx.call("POST", "/api/login", "", {login: ctx.store.users().find((u) => u.phone === phone).login}); };
   return ctx;
 }
 const NEW = {date: "2026-10-06", time: "15:00", title: "Экскурсия", hall: "большая сцена", roles: {"Администратор/ Капельдинер": ["Петрова Л.Н."]}};
@@ -33,6 +38,22 @@ test("вход по коду: верный, повторный, неверный
   assert.equal(ctx.call("POST", "/api/login", "", {login: "новый 77", pin: login}).status, 200);
   assert.equal(ctx.call("GET", "/api/schedule", "мусор").status, 401);
   assert.equal(ctx.login("9000000005").status, 403); // Орлова заблокирована
+});
+
+test("приложение: пять ошибок блокируют устройство, верный PIN не обходит 15 минут", () => {
+  const ctx = make(); ctx.store.ensureLogins();
+  const user = ctx.store.users().find((u) => u.phone === "9000000001");
+  const client = "blocked_browser_000000001";
+  for (let i = 1; i <= 4; i++) {
+    const r = ctx.call("POST", "/api/login", "", {login: user.login, pin: "999999", client});
+    assert.equal(r.status, 401); assert.match(r.body.error, new RegExp(`Осталось попыток: ${5 - i}`));
+  }
+  assert.equal(ctx.call("POST", "/api/login", "", {login: user.login, pin: "999999", client}).status, 429);
+  assert.equal(ctx.call("POST", "/api/login", "", {login: user.login, pin: user.pin, client}).status, 429, "правильный PIN во время блокировки тоже запрещён");
+  assert.equal(ctx.call("POST", "/api/identify", "", {login: user.login, client}).status, 429, "нельзя обойти блокировку через первый шаг");
+  ctx.now += 15 * 60 * 1000 + 1;
+  assert.equal(ctx.call("POST", "/api/login", "", {login: user.login, pin: user.pin, client}).status, 200);
+  assert.equal(ctx.store.authState("app", client).attempts, 0);
 });
 
 test("ID в приложении определяет сотрудника, затем новый PIN активирует вход", () => {

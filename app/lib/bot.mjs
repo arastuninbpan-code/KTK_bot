@@ -32,6 +32,10 @@ export function handleMessage({store, channel, ev, appUrl = "", now = Date.now()
   const mine = store.chats().find((c) => c.channel === channel.name && c.chatId === String(chat));
   const user = mine ? users.find((x) => x.phone === mine.phone) : null;
   if (!user) {
+    // Проверяем таймер до любой ветки входа. Иначе после принятого ID правильный PIN
+    // обрабатывался раньше блокировки и позволял войти следующим сообщением.
+    const auth = store.authState(channel.name, chat);
+    if (auth.blockedUntil > now) return channel.send(chat, msgAuthLocked);
     const pending = store.activations().find((a) => a.channel === channel.name && a.chatId === String(chat));
     if (pending) {
       if (!validPin(text)) return channel.send(chat, msgPinInvalid);
@@ -50,8 +54,6 @@ export function handleMessage({store, channel, ev, appUrl = "", now = Date.now()
       const credentials = `ID: ${fresh.login}\nPIN: ${fresh.pin}`;
       return channel.send(chat, msgPinSaved(fresh.name, fresh.login, fresh.pin), {menu: menuFor(fresh), copy: {text: "📋 Скопировать ID и PIN", value: credentials}});
     }
-    const auth = store.authState(channel.name, chat);
-    if (auth.blockedUntil > now) return channel.send(chat, msgAuthLocked);
     const byLogin = loginText && validPin(loginText) ? users.find((x) => normLogin(x.login) === normLogin(loginText)) : null;
     if (byLogin) {
       if (byLogin.role === "blocked") return channel.send(chat, msgBlocked);

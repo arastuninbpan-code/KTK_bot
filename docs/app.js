@@ -107,6 +107,16 @@ function toast(text, {bad = false, plane = false} = {}) {
 
 // ---------- запросы к серверу ----------
 const UPDATING_MSG = "Сервер Google сейчас обновляется. Повторим через несколько секунд.";
+const AUTH_CLIENT_KEY = "ktk_auth_client";
+function authClientId() {
+  let value = localStorage.getItem(AUTH_CLIENT_KEY) || "";
+  if (!/^[A-Za-z0-9_-]{16,80}$/.test(value)) {
+    const bytes = new Uint8Array(16); crypto.getRandomValues(bytes);
+    value = Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
+    localStorage.setItem(AUTH_CLIENT_KEY, value);
+  }
+  return value;
+}
 async function api(method, path, body) {
   let status, data;
   if (window.KTK_DEMO) {
@@ -386,8 +396,9 @@ function loginView() {
     if (!/^\d{6}$/.test(pin)) return reject("Введите шестизначный PIN");
     busy = true; btn.disabled = true; btn.textContent = "Входим…"; err.className = "hint"; err.textContent = "Идёт загрузка, подождите несколько секунд…"; idInput.disabled = true; pinInput.disabled = true;
     try {
-      const who = await api("POST", "/api/identify", {login});
-      const r = await api("POST", who.activation ? "/api/activate" : "/api/login", {login, pin});
+      const client = authClientId();
+      const who = await api("POST", "/api/identify", {login, client});
+      const r = await api("POST", who.activation ? "/api/activate" : "/api/login", {login, pin, client});
       state.token = r.token; localStorage.setItem("ktk_token", r.token);
       if (queue.length) pumpQueue(); // правки, оставшиеся с прошлого входа
       await load();
