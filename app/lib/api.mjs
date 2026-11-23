@@ -5,7 +5,7 @@ import {platform} from "./platform.mjs";
 import {archiveLine, buildReport, checkParams, parseArchive, reportCsv} from "./report.mjs";
 import {canEdit, cleanPhotoIds, colorName, normLogin, ROLE_LABELS, TABS, VENUE_COLORS} from "./store.mjs";
 
-export const SERVER_VERSION = "2026.11.23-34"; // меняется при каждом выпуске; приложение показывает её в профиле
+export const SERVER_VERSION = "2026.11.23-35"; // меняется при каждом выпуске; приложение показывает её в профиле
 
 class HttpError extends Error {
   constructor(status, message, extra = {}) { super(message); this.status = status; this.extra = extra; }
@@ -66,14 +66,24 @@ export function handleApi(req, deps) {
       if (!/^[A-Za-z0-9_-]{16,80}$/.test(client)) throw new HttpError(400, "Обновите страницу приложения и повторите вход.");
       return client;
     };
-    const checkAuthBlock = (client) => {
-      const state = store.authState("app", client);
-      if (state.blockedUntil > now()) throw new HttpError(429, "Слишком много попыток. Вход заблокирован на 15 минут.", {blockedUntil: state.blockedUntil});
+    const checkAuthBlock = (client, person = "") => {
+      const states = [store.authState("app", client)];
+      if (person) states.push(store.authState("person", person));
+      const state = states.find((x) => x.blockedUntil === -1) || states.find((x) => x.blockedUntil > now());
+      if (!state) return;
+      if (state.blockedUntil === -1) throw new HttpError(423, "Вход полностью заблокирован. Обратитесь к директору для разблокировки.", {permanent: true});
+      if (state.blockedUntil > now()) {
+        const minutes = state.level === 2 ? 30 : state.level >= 3 ? 60 : 15;
+        throw new HttpError(429, `Слишком много попыток. Вход заблокирован на ${minutes} минут.`, {blockedUntil: state.blockedUntil});
+      }
     };
-    const authFailure = (client, message) => {
+    const authFailure = (client, message, person = "") => {
       platform.sleep(400);
-      const failed = store.authFailed("app", client);
-      if (failed.blockedUntil) throw new HttpError(429, "Слишком много попыток. Вход заблокирован на 15 минут.", {blockedUntil: failed.blockedUntil});
+      const device = store.authFailed("app", client, person);
+      const account = person ? store.authFailed("person", person, person) : null;
+      const failed = account && (account.permanent || account.blockedUntil) ? account : device;
+      if (failed.permanent) throw new HttpError(423, "Вход полностью заблокирован. Обратитесь к директору для разблокировки.", {permanent: true});
+      if (failed.blockedUntil) throw new HttpError(429, `Слишком много попыток. Вход заблокирован на ${failed.minutes} минут.`, {blockedUntil: failed.blockedUntil});
       throw new HttpError(401, `${message} Осталось попыток: ${5 - failed.attempts}.`);
     };
     // --- без входа ---
@@ -82,29 +92,36 @@ export function handleApi(req, deps) {
       store.ensureLogins();
       const user = store.findByLogin(body.login);
       if (!user) return authFailure(client, "Не удалось продолжить. Проверьте ID.");
+      checkAuthBlock(client, user.phone);
       if (user.role === "blocked") throw new HttpError(403, "Доступ закрыт. Обратитесь к администратору.");
-      return {status: 200, body: {ok: true, activation: user.temporary || !user.pin, name: user.name}};
+      if (user.loginLocked) throw new HttpError(423, "Вход полностью заблокирован. Обратитесь к директору для разблокировки.");
+      // Имя до ввода PIN не отдаём: иначе открытая точка входа позволяла проверять ID и узнавать ФИО.
+      return {status: 200, body: {ok: true, activation: user.temporary || !user.pin}};
     }
     if (method === "POST" && path === "/api/login") {
       const client = authClient(); checkAuthBlock(client);
       store.ensureLogins();
       const user = store.findByLogin(body.login);
       const suppliedPin = String(body.pin == null ? body.login : body.pin).trim(); // старые клиенты передавали одно поле; после миграции это сработает только у старых записей ID=PIN
-      if (!user || user.temporary || !user.pin || normLogin(user.pin) !== normLogin(suppliedPin)) return authFailure(client, "ID или PIN указан неверно.");
-      if (user.role === "blocked") throw new HttpError(403, "Доступ закрыт. Обратитесь к администратору.");
-      store.authSucceeded("app", client);
+      if (user) checkAuthBlock(client, user.phone);
+      if (user && user.role === "blocked") throw new HttpError(403, "Доступ закрыт. Обратитесь к администратору.");
+      if (user && user.loginLocked) throw new HttpError(423, "Вход полностью заблокирован. Обратитесь к директору для разблокировки.");
+      if (!user || user.temporary || !user.pin || normLogin(user.pin) !== normLogin(suppliedPin)) return authFailure(client, "ID или PIN указан неверно.", user && user.phone);
+      store.unlockAuthPerson(user.phone);
       return {status: 200, body: {token: makeToken({sub: user.phone, l: store.loginMark(user.login, user.pin)}, secret, undefined, now()), user: publicUser(user)}};
     }
     if (method === "POST" && path === "/api/activate") {
       const client = authClient(); checkAuthBlock(client);
       store.ensureLogins();
       const user = store.findByLogin(body.login);
-      if (!user || !user.temporary) return authFailure(client, "Разовый код неверный или уже использован.");
+      if (user) checkAuthBlock(client, user.phone);
+      if (!user || !user.temporary) return authFailure(client, "Разовый код неверный или уже использован.", user && user.phone);
       if (user.role === "blocked") throw new HttpError(403, "Доступ закрыт. Обратитесь к администратору.");
+      if (user.loginLocked) throw new HttpError(423, "Вход полностью заблокирован. Обратитесь к директору для разблокировки.");
       if (normLogin(user.login) === normLogin(body.pin)) throw new HttpError(400, "PIN должен отличаться от ID сотрудника.");
       if (!store.setPermanentLogin(user.phone, body.pin)) throw new HttpError(400, "PIN должен состоять ровно из шести цифр.");
       const fresh = store.users().find((u) => u.phone === user.phone);
-      store.authSucceeded("app", client);
+      store.unlockAuthPerson(fresh.phone);
       return {status: 200, body: {token: makeToken({sub: fresh.phone, l: store.loginMark(fresh.login, fresh.pin)}, secret, undefined, now()), user: publicUser(fresh)}};
     }
 

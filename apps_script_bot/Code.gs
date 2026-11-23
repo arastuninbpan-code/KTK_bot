@@ -543,7 +543,9 @@ const msgPinSame = "Новый код должен отличаться от о�
 const msgPinUsed = "Не удалось сохранить PIN. Проверьте, что введены ровно шесть цифр.";
 const msgPinSaved = (name, login, pin) => `✈️ <b>Готово, ${esc(name)}!</b>\nPIN сохранён. Теперь вы подключены и будете получать уведомления о сменах.\n\n<pre>ID: ${esc(login)}\nPIN: ${esc(pin)}</pre>\nСкопируйте блок целиком и вставьте в приложение.`;
 const msgWrongCode = (left) => `Неверный код.${left > 0 ? ` Осталось попыток: ${left}.` : ""}`;
-const msgAuthLocked = "Слишком много неверных попыток. Вход заблокирован на 15 минут.";
+const msgAuthLocked = (state = {}) => state.blockedUntil === -1 || state.permanent
+  ? "🔒 Вход полностью заблокирован. Обратитесь к директору для разблокировки."
+  : `Слишком много неверных попыток. Вход заблокирован на ${state.minutes || (state.level === 2 ? 30 : state.level >= 3 ? 60 : 15)} минут.`;
 const msgUnknownPhone = "💬 <b>Этого номера нет в списке сотрудников.</b>\nОбратитесь к администратору, чтобы вас добавили. Если у вас есть логин, просто пришлите его сюда.";
 const msgStopped = "💬 <b>Уведомления отключены.</b>\nЧтобы включить снова, напишите /start.";
 const msgConnected = (name) => `💬 <b>${esc(name)}</b>, вы подключены.\n\n${msgMenu}`;
@@ -974,7 +976,8 @@ const colorHex = (name) => (VENUE_COLORS.find((c) => c.name === name) || {}).hex
 const CHECKED_RE = /^(true|да|yes|1|✓|✔|x|х)$/i; // галочка в таблице: TRUE / ✓ / «да»
 const SUBS_HEADER = ["Канал", "ID чата", "Телефон", "ФИО"];
 const ACTIVATION_HEADER = ["Канал", "ID чата", "ID сотрудника", "Режим"];
-const AUTH_HEADER = ["Канал", "ID чата", "Ошибок", "Заблокирован до"];
+const AUTH_HEADER = ["Канал", "ID чата", "Ошибок", "Заблокирован до", "Ступень", "Сотрудник"];
+const AUTH_DELAYS = [15, 30, 60];
 const ROLE_LABELS = {admin: "Админ", editor: "Редактор", reader: "Читатель", blocked: "Заблокирован"};
 const CHUNK = 40000; // лимит ячейки Google — 50 000 знаков
 
@@ -1039,7 +1042,8 @@ class Store {
       const pinCell = pin >= 0 ? String(row[pin] || "").trim() : "";
       const temporary = !pinCell || (status >= 0 && /^разов/i.test(String(row[status] || "").trim()));
       const pinValue = pin >= 0 ? String(row[pin] || "").trim() : (!temporary ? String(login).trim() : ""); // совместимость со старой схемой ID=PIN
-      if (identity) out.push({name: n, phone: identity, role: hasAccess ? parseRole(role) : "blocked", login: String(login).trim(), pin: pinValue, temporary, groups, pending, row: ri + 1});
+      const loginLocked = status >= 0 && /^вход заблокирован$/i.test(String(row[status] || "").trim());
+      if (identity) out.push({name: n, phone: identity, role: hasAccess ? parseRole(role) : "blocked", login: String(login).trim(), pin: pinValue, temporary, loginLocked, groups, pending, row: ri + 1});
     }
     const o = this.owner;
     if (o) {
@@ -1140,20 +1144,41 @@ class Store {
 
   authRows() {
     if (!this.book.has(TABS.auth)) return [];
-    return this.book.get(TABS.auth).slice(1).map((r, i) => ({row: i + 2, channel: String(r[0] || ""), chatId: String(r[1] || ""), attempts: Number(r[2]) || 0, blockedUntil: Number(r[3]) || 0})).filter((r) => r.channel && r.chatId);
+    return this.book.get(TABS.auth).slice(1).map((r, i) => ({row: i + 2, channel: String(r[0] || ""), chatId: String(r[1] || ""), attempts: Number(r[2]) || 0, blockedUntil: Number(r[3]) || 0, level: Number(r[4]) || (Number(r[3]) ? 1 : 0), person: String(r[5] || "")})).filter((r) => r.channel && r.chatId);
   }
-  authState(channel, chatId) { return this.authRows().find((r) => r.channel === channel && r.chatId === String(chatId)) || {attempts: 0, blockedUntil: 0}; }
-  authFailed(channel, chatId) {
+  authState(channel, chatId) { return this.authRows().find((r) => r.channel === channel && r.chatId === String(chatId)) || {attempts: 0, blockedUntil: 0, level: 0, person: ""}; }
+  authFailed(channel, chatId, person = "") {
     this.book.ensure(TABS.auth, AUTH_HEADER);
+    const head = this.book.get(TABS.auth)[0] || [];
+    if (head[4] !== AUTH_HEADER[4]) this.book.setCell(TABS.auth, 1, 5, AUTH_HEADER[4]);
+    if (head[5] !== AUTH_HEADER[5]) this.book.setCell(TABS.auth, 1, 6, AUTH_HEADER[5]);
     const old = this.authState(channel, chatId);
     const attempts = old.attempts + 1;
-    const blockedUntil = attempts >= 5 ? this.now() + 15 * 60 * 1000 : 0;
-    const values = [channel, String(chatId), blockedUntil ? "0" : String(attempts), String(blockedUntil)];
+    const level = attempts >= 5 ? old.level + 1 : old.level;
+    const minutes = attempts >= 5 && level <= AUTH_DELAYS.length ? AUTH_DELAYS[level - 1] : 0;
+    const permanent = attempts >= 5 && level > AUTH_DELAYS.length;
+    const blockedUntil = permanent ? -1 : minutes ? this.now() + minutes * 60 * 1000 : 0;
+    const who = person || old.person || "";
+    const values = [channel, String(chatId), blockedUntil ? "0" : String(attempts), String(blockedUntil), String(level), who];
     if (old.row) this.book.set(TABS.auth, old.row, values); else this.book.append(TABS.auth, values);
-    return {attempts, blockedUntil};
+    if (permanent && who) this.setLoginStatus_(who, "Вход заблокирован");
+    return {attempts, blockedUntil, level, person: who, permanent, minutes};
   }
   authSucceeded(channel, chatId) {
     for (const r of this.authRows().filter((x) => x.channel === channel && x.chatId === String(chatId)).reverse()) this.book.clearRow(TABS.auth, r.row);
+  }
+  setLoginStatus_(person, value) {
+    const u = this.users().find((x) => x.phone === person);
+    if (!u) return;
+    const {status} = this.staffCols_(this.book.get(TABS.staff));
+    if (status >= 0) this.book.setCell(TABS.staff, u.row, status + 1, value);
+  }
+  unlockAuthPerson(person) {
+    const rows = this.authRows().filter((x) => x.person === person).sort((a, b) => b.row - a.row);
+    for (const r of rows) this.book.clearRow(TABS.auth, r.row);
+    const u = this.users().find((x) => x.phone === person);
+    if (u && u.row && u.loginLocked) this.setLoginStatus_(person, "Активирован");
+    return rows.length;
   }
 
   // --- «Не могу работать»: даты, которые сотрудник отметил в приложении (скрытый лист «_недоступность»: телефон | ФИО | дата) ---
@@ -1544,7 +1569,7 @@ function readToken(token, secret, now = Date.now()) {
 // ===== lib/api.mjs =====
 // API приложения. Чистая функция: запрос -> {status, body}. Синхронный код, никакой привязки к платформе.
 
-const SERVER_VERSION = "2026.11.23-34"; // меняется при каждом выпуске; приложение показывает её в профиле
+const SERVER_VERSION = "2026.11.23-35"; // меняется при каждом выпуске; приложение показывает её в профиле
 
 class HttpError extends Error {
   constructor(status, message, extra = {}) { super(message); this.status = status; this.extra = extra; }
@@ -1605,14 +1630,24 @@ function handleApi(req, deps) {
       if (!/^[A-Za-z0-9_-]{16,80}$/.test(client)) throw new HttpError(400, "Обновите страницу приложения и повторите вход.");
       return client;
     };
-    const checkAuthBlock = (client) => {
-      const state = store.authState("app", client);
-      if (state.blockedUntil > now()) throw new HttpError(429, "Слишком много попыток. Вход заблокирован на 15 минут.", {blockedUntil: state.blockedUntil});
+    const checkAuthBlock = (client, person = "") => {
+      const states = [store.authState("app", client)];
+      if (person) states.push(store.authState("person", person));
+      const state = states.find((x) => x.blockedUntil === -1) || states.find((x) => x.blockedUntil > now());
+      if (!state) return;
+      if (state.blockedUntil === -1) throw new HttpError(423, "Вход полностью заблокирован. Обратитесь к директору для разблокировки.", {permanent: true});
+      if (state.blockedUntil > now()) {
+        const minutes = state.level === 2 ? 30 : state.level >= 3 ? 60 : 15;
+        throw new HttpError(429, `Слишком много попыток. Вход заблокирован на ${minutes} минут.`, {blockedUntil: state.blockedUntil});
+      }
     };
-    const authFailure = (client, message) => {
+    const authFailure = (client, message, person = "") => {
       platform.sleep(400);
-      const failed = store.authFailed("app", client);
-      if (failed.blockedUntil) throw new HttpError(429, "Слишком много попыток. Вход заблокирован на 15 минут.", {blockedUntil: failed.blockedUntil});
+      const device = store.authFailed("app", client, person);
+      const account = person ? store.authFailed("person", person, person) : null;
+      const failed = account && (account.permanent || account.blockedUntil) ? account : device;
+      if (failed.permanent) throw new HttpError(423, "Вход полностью заблокирован. Обратитесь к директору для разблокировки.", {permanent: true});
+      if (failed.blockedUntil) throw new HttpError(429, `Слишком много попыток. Вход заблокирован на ${failed.minutes} минут.`, {blockedUntil: failed.blockedUntil});
       throw new HttpError(401, `${message} Осталось попыток: ${5 - failed.attempts}.`);
     };
     // --- без входа ---
@@ -1621,29 +1656,36 @@ function handleApi(req, deps) {
       store.ensureLogins();
       const user = store.findByLogin(body.login);
       if (!user) return authFailure(client, "Не удалось продолжить. Проверьте ID.");
+      checkAuthBlock(client, user.phone);
       if (user.role === "blocked") throw new HttpError(403, "Доступ закрыт. Обратитесь к администратору.");
-      return {status: 200, body: {ok: true, activation: user.temporary || !user.pin, name: user.name}};
+      if (user.loginLocked) throw new HttpError(423, "Вход полностью заблокирован. Обратитесь к директору для разблокировки.");
+      // Имя до ввода PIN не отдаём: иначе открытая точка входа позволяла проверять ID и узнавать ФИО.
+      return {status: 200, body: {ok: true, activation: user.temporary || !user.pin}};
     }
     if (method === "POST" && path === "/api/login") {
       const client = authClient(); checkAuthBlock(client);
       store.ensureLogins();
       const user = store.findByLogin(body.login);
       const suppliedPin = String(body.pin == null ? body.login : body.pin).trim(); // старые клиенты передавали одно поле; после миграции это сработает только у старых записей ID=PIN
-      if (!user || user.temporary || !user.pin || normLogin(user.pin) !== normLogin(suppliedPin)) return authFailure(client, "ID или PIN указан неверно.");
-      if (user.role === "blocked") throw new HttpError(403, "Доступ закрыт. Обратитесь к администратору.");
-      store.authSucceeded("app", client);
+      if (user) checkAuthBlock(client, user.phone);
+      if (user && user.role === "blocked") throw new HttpError(403, "Доступ закрыт. Обратитесь к администратору.");
+      if (user && user.loginLocked) throw new HttpError(423, "Вход полностью заблокирован. Обратитесь к директору для разблокировки.");
+      if (!user || user.temporary || !user.pin || normLogin(user.pin) !== normLogin(suppliedPin)) return authFailure(client, "ID или PIN указан неверно.", user && user.phone);
+      store.unlockAuthPerson(user.phone);
       return {status: 200, body: {token: makeToken({sub: user.phone, l: store.loginMark(user.login, user.pin)}, secret, undefined, now()), user: publicUser(user)}};
     }
     if (method === "POST" && path === "/api/activate") {
       const client = authClient(); checkAuthBlock(client);
       store.ensureLogins();
       const user = store.findByLogin(body.login);
-      if (!user || !user.temporary) return authFailure(client, "Разовый код неверный или уже использован.");
+      if (user) checkAuthBlock(client, user.phone);
+      if (!user || !user.temporary) return authFailure(client, "Разовый код неверный или уже использован.", user && user.phone);
       if (user.role === "blocked") throw new HttpError(403, "Доступ закрыт. Обратитесь к администратору.");
+      if (user.loginLocked) throw new HttpError(423, "Вход полностью заблокирован. Обратитесь к директору для разблокировки.");
       if (normLogin(user.login) === normLogin(body.pin)) throw new HttpError(400, "PIN должен отличаться от ID сотрудника.");
       if (!store.setPermanentLogin(user.phone, body.pin)) throw new HttpError(400, "PIN должен состоять ровно из шести цифр.");
       const fresh = store.users().find((u) => u.phone === user.phone);
-      store.authSucceeded("app", client);
+      store.unlockAuthPerson(fresh.phone);
       return {status: 200, body: {token: makeToken({sub: fresh.phone, l: store.loginMark(fresh.login, fresh.pin)}, secret, undefined, now()), user: publicUser(fresh)}};
     }
 
@@ -1923,21 +1965,26 @@ function handleMessage({store, channel, ev, appUrl = "", now = Date.now(), publi
     // Проверяем таймер до любой ветки входа. Иначе после принятого ID правильный PIN
     // обрабатывался раньше блокировки и позволял войти следующим сообщением.
     const auth = store.authState(channel.name, chat);
-    if (auth.blockedUntil > now) return channel.send(chat, msgAuthLocked);
+    if (auth.blockedUntil === -1 || auth.blockedUntil > now) return channel.send(chat, msgAuthLocked(auth));
     const pending = store.activations().find((a) => a.channel === channel.name && a.chatId === String(chat));
     if (pending) {
+      const personAuth = store.authState("person", pending.person);
+      if (personAuth.blockedUntil === -1 || personAuth.blockedUntil > now) return channel.send(chat, msgAuthLocked(personAuth));
       if (!validPin(text)) return channel.send(chat, msgPinInvalid);
       const current = store.users().find((x) => x.phone === pending.person);
       if (!current || current.role === "blocked") return channel.send(chat, msgBlocked);
+      if (current.loginLocked) return channel.send(chat, msgAuthLocked({permanent: true}));
       if (pending.mode === "login") {
         if (String(current.pin) !== text) {
-          const failed = store.authFailed(channel.name, chat);
-          return channel.send(chat, failed.blockedUntil ? msgAuthLocked : msgWrongCode(5 - failed.attempts));
+          const local = store.authFailed(channel.name, chat, current.phone);
+          const account = store.authFailed("person", current.phone, current.phone);
+          const failed = account.permanent || account.blockedUntil ? account : local;
+          return channel.send(chat, failed.blockedUntil ? msgAuthLocked(failed) : msgWrongCode(5 - failed.attempts));
         }
       } else if (!store.setPermanentLogin(pending.person, text)) return channel.send(chat, msgPinUsed);
       const fresh = store.users().find((x) => x.phone === pending.person);
       store.cancelActivation(channel.name, chat);
-      store.authSucceeded(channel.name, chat);
+      store.unlockAuthPerson(fresh.phone);
       store.bind(channel.name, chat, fresh.phone, fresh.name);
       const credentials = `ID: ${fresh.login}\nPIN: ${fresh.pin}`;
       return channel.send(chat, msgPinSaved(fresh.name, fresh.login, fresh.pin), {menu: menuFor(fresh), copy: {text: "📋 Скопировать ID и PIN", value: credentials}});
@@ -1945,12 +1992,15 @@ function handleMessage({store, channel, ev, appUrl = "", now = Date.now(), publi
     const byLogin = loginText && validPin(loginText) ? users.find((x) => normLogin(x.login) === normLogin(loginText)) : null;
     if (byLogin) {
       if (byLogin.role === "blocked") return channel.send(chat, msgBlocked);
+      if (byLogin.loginLocked) return channel.send(chat, msgAuthLocked({permanent: true}));
+      const personAuth = store.authState("person", byLogin.phone);
+      if (personAuth.blockedUntil === -1 || personAuth.blockedUntil > now) return channel.send(chat, msgAuthLocked(personAuth));
       store.beginActivation(channel.name, chat, byLogin.phone, byLogin.temporary || !byLogin.pin ? "activate" : "login");
       return channel.send(chat, byLogin.temporary || !byLogin.pin ? msgChoosePin(byLogin.name) : msgEnterPin(byLogin.name));
     }
     if (loginText && validPin(loginText)) {
       const failed = store.authFailed(channel.name, chat);
-      return channel.send(chat, failed.blockedUntil ? msgAuthLocked : msgWrongCode(5 - failed.attempts));
+      return channel.send(chat, failed.blockedUntil ? msgAuthLocked(failed) : msgWrongCode(5 - failed.attempts));
     }
     return channel.send(chat, /^\/start/i.test(text) || !text ? msgIntro : msgAskPhone);
   }
@@ -1966,6 +2016,13 @@ function handleMessage({store, channel, ev, appUrl = "", now = Date.now(), publi
   const [first = "", ...rest] = asked.split(/\s+/);
   const cmd = first.toLowerCase().split("@")[0];
   const today = todayIso(now);
+  if (cmd === "/unlock") {
+    if (user.role !== "admin") return channel.send(chat, msgBlocked);
+    const target = store.findByLogin(rest[0] || "");
+    if (!target) return channel.send(chat, "Не найден сотрудник с таким ID. Пример: <code>/unlock 123456</code>");
+    store.unlockAuthPerson(target.phone);
+    return channel.send(chat, `✅ Вход для сотрудника <b>${target.name}</b> разблокирован. Счётчики ошибок сброшены.`);
+  }
   if (cmd === "/shifts") {
     const rows = parseGrid(store.book.get(TABS.schedule), today).filter((r) => r.date >= today && r.person && matchPhones(r.person, users).includes(user.phone));
     return channel.send(chat, shiftsText(rows), btn);
@@ -2114,7 +2171,7 @@ function secret_() {
 // Чтение листа из таблицы — самое медленное место (около 0,4 с на лист). Часто нужные листы держим в кэше Google и
 // сбрасываем при любой правке: скриптом (GasBook), на сайте (тоже через GasBook) и руками (onSheetChange).
 const PLAN_KIND_ = {[TABS.staff]: "staff", [TABS.schedule]: "schedule"};
-const CACHED_TABS_ = [TABS.schedule, TABS.staff, TABS.venues, TABS.chats, TABS.requests, TABS.off, TABS.meta, TABS.comments, TABS.avatars]; // каждый запрос расписания читает и их: без кеша это лишние ~0,5 с на лист
+const CACHED_TABS_ = [TABS.schedule, TABS.staff, TABS.venues, TABS.chats, TABS.requests, TABS.activation, TABS.auth, TABS.off, TABS.meta, TABS.comments, TABS.avatars]; // каждый запрос расписания/входа читает и их: без кеша это лишние ~0,5 с на лист
 const CACHE_TTL_ = 600; // запас: даже если сброс почему-то не сработал, через 10 минут данные обновятся
 const CACHE_PART_ = 30000; // значение в кэше Google ограничено 100 КБ, режем на куски
 
@@ -2593,6 +2650,7 @@ function doGet(e) {
 function doPost(e) {
   try {
     if (e && e.parameter && e.parameter.secret) return e.parameter.vk ? vkUpdate_(e) : telegramUpdate_(e);
+    if (!e || !e.postData || String(e.postData.contents || "").length > 220000) return json_({error: "Запрос слишком большой", _status: 413});
     const req = JSON.parse(e.postData.contents);
     if (!req || typeof req.path !== "string" || req.path.indexOf("/api/") !== 0) return json_({error: "Не найдено", _status: 404});
     return json_(apiCall_(req));

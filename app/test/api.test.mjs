@@ -10,6 +10,7 @@ const CLIENT = "test_browser_000000000001";
 function make() {
   const ctx = setup(NOW);
   ctx.now = NOW;
+  ctx.store.now = () => ctx.now;
   ctx.changes = 0;
   ctx.deps = {store: ctx.store, secret: "s3", now: () => ctx.now, afterChange: () => { ctx.changes++; }};
   ctx.call = (method, path, token, body = {}) => {
@@ -54,6 +55,36 @@ test("приложение: пять ошибок блокируют устро�
   ctx.now += 15 * 60 * 1000 + 1;
   assert.equal(ctx.call("POST", "/api/login", "", {login: user.login, pin: user.pin, client}).status, 200);
   assert.equal(ctx.store.authState("app", client).attempts, 0);
+});
+
+test("ступени входа: 15 минут, 30 минут, час, затем полная блокировка до решения директора", () => {
+  const ctx = make(); ctx.store.ensureLogins();
+  const user = ctx.store.users().find((u) => u.phone === "9000000002");
+  const client = "iphone_style_lock_000001";
+  const failFive = () => Array.from({length: 5}, () => ctx.call("POST", "/api/login", "", {login: user.login, pin: "999999", client})).at(-1);
+  let r = failFive(); assert.equal(r.status, 429); assert.match(r.body.error, /15 минут/);
+  ctx.now += 15 * 60 * 1000 + 1;
+  r = failFive(); assert.equal(r.status, 429); assert.match(r.body.error, /30 минут/);
+  ctx.now += 30 * 60 * 1000 + 1;
+  r = failFive(); assert.equal(r.status, 429); assert.match(r.body.error, /60 минут/);
+  ctx.now += 60 * 60 * 1000 + 1;
+  r = failFive(); assert.equal(r.status, 423); assert.match(r.body.error, /полностью заблокирован/);
+  ctx.now += 24 * 60 * 60 * 1000;
+  assert.equal(ctx.call("POST", "/api/login", "", {login: user.login, pin: user.pin, client}).status, 423, "время не снимает полную блокировку");
+  assert.equal(ctx.store.users().find((u) => u.phone === user.phone).temporary, false);
+  assert.equal(ctx.book.get(TABS.staff)[2][4], "Вход заблокирован");
+  assert.ok(ctx.store.unlockAuthPerson(user.phone) > 0);
+  assert.equal(ctx.book.get(TABS.staff)[2][4], "Активирован");
+  assert.equal(ctx.call("POST", "/api/login", "", {login: user.login, pin: user.pin, client}).status, 200);
+});
+
+test("смена идентификатора браузера не обходит блокировку учётной записи", () => {
+  const ctx = make(); ctx.store.ensureLogins();
+  const user = ctx.store.users().find((u) => u.phone === "9000000003");
+  for (let i = 0; i < 5; i++) ctx.call("POST", "/api/login", "", {login: user.login, pin: "999999", client: "first_browser_0000000001"});
+  const r = ctx.call("POST", "/api/login", "", {login: user.login, pin: user.pin, client: "brand_new_browser_000001"});
+  assert.equal(r.status, 429);
+  assert.match(r.body.error, /15 минут/);
 });
 
 test("ID в приложении определяет сотрудника, затем новый PIN активирует вход", () => {

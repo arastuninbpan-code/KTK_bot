@@ -113,6 +113,20 @@ test("блокировку нельзя обойти правильным PIN п
   }
 });
 
+test("директор разблокирует полностью закрытый вход командой /unlock ID", () => {
+  const ctx = setup(); const tg = fakeChannel("telegram");
+  ctx.store.ensureLogins();
+  const target = ctx.store.users().find((u) => u.phone === "9000000002");
+  for (let level = 0; level < 4; level++) {
+    for (let i = 0; i < 5; i++) ctx.store.authFailed("vk", "777", target.phone);
+  }
+  assert.equal(ctx.store.authState("vk", "777").blockedUntil, -1);
+  say(ctx, tg, 1, "", "9000000001");
+  say(ctx, tg, 1, `/unlock ${target.login}`);
+  assert.match(lastTo(tg, 1).text, /разблокирован/);
+  assert.equal(ctx.store.authState("vk", "777").blockedUntil, 0);
+});
+
 test("runCycle: короткие уведомления с кнопкой только тому, кого касается; повторов нет; заблокированным не пишем", () => {
   const ctx = setup(); const tg = fakeChannel();
   const senders = {telegram: tg};

@@ -31,9 +31,13 @@ export default {
       const base = env.GAS_URL.split("?")[0]; // без секрета Telegram: это запрос сайта, а не бота
       const json = (obj) => new Response(JSON.stringify(obj), {status: 200, headers: {...CORS, "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store"}});
       try {
+        const length = Number(request.headers.get("content-length") || 0);
+        if (length > 220000) return new Response(JSON.stringify({error: "Запрос слишком большой"}), {status: 413, headers: {...CORS, "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store"}});
+        const raw = await request.text();
+        if (raw.length > 220000) return new Response(JSON.stringify({error: "Запрос слишком большой"}), {status: 413, headers: {...CORS, "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store"}});
         const ctl = new AbortController();
         const timer = setTimeout(() => ctl.abort(), 25000);
-        const r = await fetch(base, {method: "POST", headers: {"Content-Type": "text/plain;charset=utf-8"}, body: await request.text(), redirect: "follow", signal: ctl.signal});
+        const r = await fetch(base, {method: "POST", headers: {"Content-Type": "text/plain;charset=utf-8"}, body: raw, redirect: "follow", signal: ctl.signal});
         clearTimeout(timer);
         const text = await r.text();
         try { JSON.parse(text); } catch (e) { return json({error: "Google ответил не так, как ждали (код " + r.status + "): " + text.replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").slice(0, 150)}); }

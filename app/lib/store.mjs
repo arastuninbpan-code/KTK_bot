@@ -31,7 +31,8 @@ export const colorHex = (name) => (VENUE_COLORS.find((c) => c.name === name) || 
 const CHECKED_RE = /^(true|да|yes|1|✓|✔|x|х)$/i; // галочка в таблице: TRUE / ✓ / «да»
 export const SUBS_HEADER = ["Канал", "ID чата", "Телефон", "ФИО"];
 export const ACTIVATION_HEADER = ["Канал", "ID чата", "ID сотрудника", "Режим"];
-export const AUTH_HEADER = ["Канал", "ID чата", "Ошибок", "Заблокирован до"];
+export const AUTH_HEADER = ["Канал", "ID чата", "Ошибок", "Заблокирован до", "Ступень", "Сотрудник"];
+const AUTH_DELAYS = [15, 30, 60];
 export const ROLE_LABELS = {admin: "Админ", editor: "Редактор", reader: "Читатель", blocked: "Заблокирован"};
 const CHUNK = 40000; // лимит ячейки Google — 50 000 знаков
 
@@ -96,7 +97,8 @@ export class Store {
       const pinCell = pin >= 0 ? String(row[pin] || "").trim() : "";
       const temporary = !pinCell || (status >= 0 && /^разов/i.test(String(row[status] || "").trim()));
       const pinValue = pin >= 0 ? String(row[pin] || "").trim() : (!temporary ? String(login).trim() : ""); // совместимость со старой схемой ID=PIN
-      if (identity) out.push({name: n, phone: identity, role: hasAccess ? parseRole(role) : "blocked", login: String(login).trim(), pin: pinValue, temporary, groups, pending, row: ri + 1});
+      const loginLocked = status >= 0 && /^вход заблокирован$/i.test(String(row[status] || "").trim());
+      if (identity) out.push({name: n, phone: identity, role: hasAccess ? parseRole(role) : "blocked", login: String(login).trim(), pin: pinValue, temporary, loginLocked, groups, pending, row: ri + 1});
     }
     const o = this.owner;
     if (o) {
@@ -197,20 +199,41 @@ export class Store {
 
   authRows() {
     if (!this.book.has(TABS.auth)) return [];
-    return this.book.get(TABS.auth).slice(1).map((r, i) => ({row: i + 2, channel: String(r[0] || ""), chatId: String(r[1] || ""), attempts: Number(r[2]) || 0, blockedUntil: Number(r[3]) || 0})).filter((r) => r.channel && r.chatId);
+    return this.book.get(TABS.auth).slice(1).map((r, i) => ({row: i + 2, channel: String(r[0] || ""), chatId: String(r[1] || ""), attempts: Number(r[2]) || 0, blockedUntil: Number(r[3]) || 0, level: Number(r[4]) || (Number(r[3]) ? 1 : 0), person: String(r[5] || "")})).filter((r) => r.channel && r.chatId);
   }
-  authState(channel, chatId) { return this.authRows().find((r) => r.channel === channel && r.chatId === String(chatId)) || {attempts: 0, blockedUntil: 0}; }
-  authFailed(channel, chatId) {
+  authState(channel, chatId) { return this.authRows().find((r) => r.channel === channel && r.chatId === String(chatId)) || {attempts: 0, blockedUntil: 0, level: 0, person: ""}; }
+  authFailed(channel, chatId, person = "") {
     this.book.ensure(TABS.auth, AUTH_HEADER);
+    const head = this.book.get(TABS.auth)[0] || [];
+    if (head[4] !== AUTH_HEADER[4]) this.book.setCell(TABS.auth, 1, 5, AUTH_HEADER[4]);
+    if (head[5] !== AUTH_HEADER[5]) this.book.setCell(TABS.auth, 1, 6, AUTH_HEADER[5]);
     const old = this.authState(channel, chatId);
     const attempts = old.attempts + 1;
-    const blockedUntil = attempts >= 5 ? this.now() + 15 * 60 * 1000 : 0;
-    const values = [channel, String(chatId), blockedUntil ? "0" : String(attempts), String(blockedUntil)];
+    const level = attempts >= 5 ? old.level + 1 : old.level;
+    const minutes = attempts >= 5 && level <= AUTH_DELAYS.length ? AUTH_DELAYS[level - 1] : 0;
+    const permanent = attempts >= 5 && level > AUTH_DELAYS.length;
+    const blockedUntil = permanent ? -1 : minutes ? this.now() + minutes * 60 * 1000 : 0;
+    const who = person || old.person || "";
+    const values = [channel, String(chatId), blockedUntil ? "0" : String(attempts), String(blockedUntil), String(level), who];
     if (old.row) this.book.set(TABS.auth, old.row, values); else this.book.append(TABS.auth, values);
-    return {attempts, blockedUntil};
+    if (permanent && who) this.setLoginStatus_(who, "Вход заблокирован");
+    return {attempts, blockedUntil, level, person: who, permanent, minutes};
   }
   authSucceeded(channel, chatId) {
     for (const r of this.authRows().filter((x) => x.channel === channel && x.chatId === String(chatId)).reverse()) this.book.clearRow(TABS.auth, r.row);
+  }
+  setLoginStatus_(person, value) {
+    const u = this.users().find((x) => x.phone === person);
+    if (!u) return;
+    const {status} = this.staffCols_(this.book.get(TABS.staff));
+    if (status >= 0) this.book.setCell(TABS.staff, u.row, status + 1, value);
+  }
+  unlockAuthPerson(person) {
+    const rows = this.authRows().filter((x) => x.person === person).sort((a, b) => b.row - a.row);
+    for (const r of rows) this.book.clearRow(TABS.auth, r.row);
+    const u = this.users().find((x) => x.phone === person);
+    if (u && u.row && u.loginLocked) this.setLoginStatus_(person, "Активирован");
+    return rows.length;
   }
 
   // --- «Не могу работать»: даты, которые сотрудник отметил в приложении (скрытый лист «_недоступность»: телефон | ФИО | дата) ---

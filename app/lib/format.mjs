@@ -151,7 +151,9 @@ export const msgPinSame = "Новый код должен отличаться �
 export const msgPinUsed = "Не удалось сохранить PIN. Проверьте, что введены ровно шесть цифр.";
 export const msgPinSaved = (name, login, pin) => `✈️ <b>Готово, ${esc(name)}!</b>\nPIN сохранён. Теперь вы подключены и будете получать уведомления о сменах.\n\n<pre>ID: ${esc(login)}\nPIN: ${esc(pin)}</pre>\nСкопируйте блок целиком и вставьте в приложение.`;
 export const msgWrongCode = (left) => `Неверный код.${left > 0 ? ` Осталось попыток: ${left}.` : ""}`;
-export const msgAuthLocked = "Слишком много неверных попыток. Вход заблокирован на 15 минут.";
+export const msgAuthLocked = (state = {}) => state.blockedUntil === -1 || state.permanent
+  ? "🔒 Вход полностью заблокирован. Обратитесь к директору для разблокировки."
+  : `Слишком много неверных попыток. Вход заблокирован на ${state.minutes || (state.level === 2 ? 30 : state.level >= 3 ? 60 : 15)} минут.`;
 export const msgUnknownPhone = "💬 <b>Этого номера нет в списке сотрудников.</b>\nОбратитесь к администратору, чтобы вас добавили. Если у вас есть логин, просто пришлите его сюда.";
 export const msgStopped = "💬 <b>Уведомления отключены.</b>\nЧтобы включить снова, напишите /start.";
 export const msgConnected = (name) => `💬 <b>${esc(name)}</b>, вы подключены.\n\n${msgMenu}`;

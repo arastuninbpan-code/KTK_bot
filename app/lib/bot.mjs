@@ -35,21 +35,26 @@ export function handleMessage({store, channel, ev, appUrl = "", now = Date.now()
     // Проверяем таймер до любой ветки входа. Иначе после принятого ID правильный PIN
     // обрабатывался раньше блокировки и позволял войти следующим сообщением.
     const auth = store.authState(channel.name, chat);
-    if (auth.blockedUntil > now) return channel.send(chat, msgAuthLocked);
+    if (auth.blockedUntil === -1 || auth.blockedUntil > now) return channel.send(chat, msgAuthLocked(auth));
     const pending = store.activations().find((a) => a.channel === channel.name && a.chatId === String(chat));
     if (pending) {
+      const personAuth = store.authState("person", pending.person);
+      if (personAuth.blockedUntil === -1 || personAuth.blockedUntil > now) return channel.send(chat, msgAuthLocked(personAuth));
       if (!validPin(text)) return channel.send(chat, msgPinInvalid);
       const current = store.users().find((x) => x.phone === pending.person);
       if (!current || current.role === "blocked") return channel.send(chat, msgBlocked);
+      if (current.loginLocked) return channel.send(chat, msgAuthLocked({permanent: true}));
       if (pending.mode === "login") {
         if (String(current.pin) !== text) {
-          const failed = store.authFailed(channel.name, chat);
-          return channel.send(chat, failed.blockedUntil ? msgAuthLocked : msgWrongCode(5 - failed.attempts));
+          const local = store.authFailed(channel.name, chat, current.phone);
+          const account = store.authFailed("person", current.phone, current.phone);
+          const failed = account.permanent || account.blockedUntil ? account : local;
+          return channel.send(chat, failed.blockedUntil ? msgAuthLocked(failed) : msgWrongCode(5 - failed.attempts));
         }
       } else if (!store.setPermanentLogin(pending.person, text)) return channel.send(chat, msgPinUsed);
       const fresh = store.users().find((x) => x.phone === pending.person);
       store.cancelActivation(channel.name, chat);
-      store.authSucceeded(channel.name, chat);
+      store.unlockAuthPerson(fresh.phone);
       store.bind(channel.name, chat, fresh.phone, fresh.name);
       const credentials = `ID: ${fresh.login}\nPIN: ${fresh.pin}`;
       return channel.send(chat, msgPinSaved(fresh.name, fresh.login, fresh.pin), {menu: menuFor(fresh), copy: {text: "📋 Скопировать ID и PIN", value: credentials}});
@@ -57,12 +62,15 @@ export function handleMessage({store, channel, ev, appUrl = "", now = Date.now()
     const byLogin = loginText && validPin(loginText) ? users.find((x) => normLogin(x.login) === normLogin(loginText)) : null;
     if (byLogin) {
       if (byLogin.role === "blocked") return channel.send(chat, msgBlocked);
+      if (byLogin.loginLocked) return channel.send(chat, msgAuthLocked({permanent: true}));
+      const personAuth = store.authState("person", byLogin.phone);
+      if (personAuth.blockedUntil === -1 || personAuth.blockedUntil > now) return channel.send(chat, msgAuthLocked(personAuth));
       store.beginActivation(channel.name, chat, byLogin.phone, byLogin.temporary || !byLogin.pin ? "activate" : "login");
       return channel.send(chat, byLogin.temporary || !byLogin.pin ? msgChoosePin(byLogin.name) : msgEnterPin(byLogin.name));
     }
     if (loginText && validPin(loginText)) {
       const failed = store.authFailed(channel.name, chat);
-      return channel.send(chat, failed.blockedUntil ? msgAuthLocked : msgWrongCode(5 - failed.attempts));
+      return channel.send(chat, failed.blockedUntil ? msgAuthLocked(failed) : msgWrongCode(5 - failed.attempts));
     }
     return channel.send(chat, /^\/start/i.test(text) || !text ? msgIntro : msgAskPhone);
   }
@@ -78,6 +86,13 @@ export function handleMessage({store, channel, ev, appUrl = "", now = Date.now()
   const [first = "", ...rest] = asked.split(/\s+/);
   const cmd = first.toLowerCase().split("@")[0];
   const today = todayIso(now);
+  if (cmd === "/unlock") {
+    if (user.role !== "admin") return channel.send(chat, msgBlocked);
+    const target = store.findByLogin(rest[0] || "");
+    if (!target) return channel.send(chat, "Не найден сотрудник с таким ID. Пример: <code>/unlock 123456</code>");
+    store.unlockAuthPerson(target.phone);
+    return channel.send(chat, `✅ Вход для сотрудника <b>${target.name}</b> разблокирован. Счётчики ошибок сброшены.`);
+  }
   if (cmd === "/shifts") {
     const rows = parseGrid(store.book.get(TABS.schedule), today).filter((r) => r.date >= today && r.person && matchPhones(r.person, users).includes(user.phone));
     return channel.send(chat, shiftsText(rows), btn);

@@ -37,7 +37,7 @@ function secret_() {
 // Чтение листа из таблицы — самое медленное место (около 0,4 с на лист). Часто нужные листы держим в кэше Google и
 // сбрасываем при любой правке: скриптом (GasBook), на сайте (тоже через GasBook) и руками (onSheetChange).
 const PLAN_KIND_ = {[TABS.staff]: "staff", [TABS.schedule]: "schedule"};
-const CACHED_TABS_ = [TABS.schedule, TABS.staff, TABS.venues, TABS.chats, TABS.requests, TABS.off, TABS.meta, TABS.comments, TABS.avatars]; // каждый запрос расписания читает и их: без кеша это лишние ~0,5 с на лист
+const CACHED_TABS_ = [TABS.schedule, TABS.staff, TABS.venues, TABS.chats, TABS.requests, TABS.activation, TABS.auth, TABS.off, TABS.meta, TABS.comments, TABS.avatars]; // каждый запрос расписания/входа читает и их: без кеша это лишние ~0,5 с на лист
 const CACHE_TTL_ = 600; // запас: даже если сброс почему-то не сработал, через 10 минут данные обновятся
 const CACHE_PART_ = 30000; // значение в кэше Google ограничено 100 КБ, режем на куски
 
@@ -516,6 +516,7 @@ function doGet(e) {
 function doPost(e) {
   try {
     if (e && e.parameter && e.parameter.secret) return e.parameter.vk ? vkUpdate_(e) : telegramUpdate_(e);
+    if (!e || !e.postData || String(e.postData.contents || "").length > 220000) return json_({error: "Запрос слишком большой", _status: 413});
     const req = JSON.parse(e.postData.contents);
     if (!req || typeof req.path !== "string" || req.path.indexOf("/api/") !== 0) return json_({error: "Не найдено", _status: 404});
     return json_(apiCall_(req));
