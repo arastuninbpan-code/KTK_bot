@@ -534,7 +534,7 @@ const msgNoApp = "💬 Адрес приложения пока не задан.
 const loginLine = (login) => (login ? `\n\n🪪 Ваш ID сотрудника: <code>${esc(login)}</code>` : "");
 const msgWelcome = (name, login = "") => `✈️ <b>Готово, ${esc(name)}!</b>\nТеперь я буду присылать уведомления о ваших сменах. Меню — внизу.${loginLine(login)}`;
 const msgAlreadyLinked = (name, login = "") => `✅ <b>Вы уже авторизованы: ${esc(name)}</b>\n\nЭтот чат защищён и не переключится на другого сотрудника, если сюда случайно отправить чужой код.${loginLine(login)}\n\nЭтот же код работает в приложении, Telegram и ВКонтакте. Чтобы полностью отключить этот чат от уведомлений, используйте /stop.`;
-const msgIntro = "👋 <b>Добро пожаловать в КТК!</b>\nВведите ID сотрудника, который выдал директор. Затем я попрошу ваш шестизначный PIN.";
+const msgIntro = "👋 <b>Добро пожаловать в КТК!</b>\nВведите шестизначный PIN, который выдал директор.";
 const msgAskPhone = "💬 <b>Введите ID сотрудника</b>, который выдал директор.";
 const msgChoosePin = (name) => `✅ <b>${esc(name)}, ID принят.</b>\n\nПридумайте и отправьте свой шестизначный PIN.`;
 const msgEnterPin = (name) => `🔐 <b>${esc(name)}, введите ваш шестизначный PIN.</b>`;
@@ -1048,8 +1048,8 @@ class Store {
     const o = this.owner;
     if (o) {
       const mine = out.filter((u) => u.phone === o.phone);
-      if (!mine.length) out.push({name: o.name || "Владелец", phone: o.phone, role: "admin", login: o.login || "", pin: o.login || "", temporary: false, groups: [], pending: false});
-      for (const u of mine) { u.role = "admin"; u.pending = false; if (!u.pin && o.login) u.pin = o.login; } // даже если строку испортили в таблице
+      if (!mine.length) out.push({name: o.name || "Владелец", phone: o.phone, role: "admin", login: o.login || "", pin: o.pin || "", temporary: false, groups: [], pending: false});
+      for (const u of mine) { u.role = "admin"; u.pending = false; } // даже если строку испортили в таблице
     }
     return out;
   }
@@ -1059,11 +1059,12 @@ class Store {
     const o = this.owner;
     if (!o) return;
     const rows = this.book.get(TABS.staff);
-    const {access} = this.staffCols_(rows);
+    const {access, pin} = this.staffCols_(rows);
     const at = rows.findIndex((r, i) => i > 0 && phonesIn(r[1] || "").includes(o.phone));
     if (at < 0) {
       const row = [o.name || "Владелец", o.phone, "Админ", o.login || ""];
       if (access >= 0) { while (row.length < access) row.push(""); row[access] = "TRUE"; }
+      if (pin >= 0 && validPin(o.pin) && !this.findByPin(o.pin)) row[pin] = o.pin;
       this.book.append(TABS.staff, row);
       return;
     }
@@ -1164,6 +1165,19 @@ class Store {
     if (permanent && who) this.setLoginStatus_(who, "Вход заблокирован");
     return {attempts, blockedUntil, level, person: who, permanent, minutes};
   }
+  pinThrottle() {
+    const state = this.authState("pin", "shared");
+    return state.attempts >= 30 && state.blockedUntil > this.now() ? state.blockedUntil : 0;
+  }
+
+  recordPinFailure() {
+    this.book.ensure(TABS.auth, AUTH_HEADER);
+    const state = this.authState("pin", "shared");
+    const active = state.blockedUntil > this.now();
+    const values = ["pin", "shared", active ? state.attempts + 1 : 1, active ? state.blockedUntil : this.now() + 3600000, 0, ""];
+    if (state.row) this.book.set(TABS.auth, state.row, values); else this.book.append(TABS.auth, values);
+  }
+
   authSucceeded(channel, chatId) {
     for (const r of this.authRows().filter((x) => x.channel === channel && x.chatId === String(chatId)).reverse()) this.book.clearRow(TABS.auth, r.row);
   }
@@ -1466,6 +1480,13 @@ class Store {
     return key ? this.users().find((u) => normLogin(u.login) === key) || null : null;
   }
 
+
+  findByPin(value) {
+    if (!validPin(value)) return null;
+    const matches = this.users().filter((user) => user.pin === String(value).trim());
+    return matches.length === 1 ? matches[0] : null;
+  }
+
   setPermanentLogin(person, pinValue) {
     if (!validPin(pinValue)) return false;
     const u = this.users().find((x) => x.phone === person);
@@ -1497,29 +1518,36 @@ class Store {
     const rows = this.book.get(TABS.staff);
     if (rows.length < 2) return 0;
     let cols = this.staffCols_(rows);
-    const legacyWithoutPin = cols.pin < 0;
     let width = Math.max(...rows.map((r) => r.length), 4);
     if (cols.pin < 0) { this.book.setCell(TABS.staff, 1, ++width, "PIN"); cols = this.staffCols_(this.book.get(TABS.staff)); }
     if (cols.id < 0) { this.book.setCell(TABS.staff, 1, ++width, "_ID"); cols = this.staffCols_(this.book.get(TABS.staff)); }
     const freshRows = this.book.get(TABS.staff);
     const used = new Set(rows.slice(1).map((r) => normLogin(r[3])).filter(Boolean));
+    const pins = new Set(this.users().map((user) => user.pin).filter(validPin));
     let n = 0;
     for (let i = 1; i < freshRows.length; i++) {
       const r = freshRows[i];
       if (!String(r[0] || "").trim()) continue;
       if (!String(r[cols.id] || "").trim()) this.book.setCell(TABS.staff, i + 1, cols.id + 1, "u" + this.hash(`staff:${i}:${r[0]}:${this.now()}`).slice(0, 12));
-      if (normLogin(r[3])) {
-        if (legacyWithoutPin && /^актив/i.test(String(r[cols.status] || ""))) this.book.setCell(TABS.staff, i + 1, cols.pin + 1, String(r[3]));
-        continue;
+      if (!String(r[cols.pin] ?? "").trim()) {
+        let pin;
+        do {
+          pin = String(platform.randomInt(1000000)).padStart(6, "0");
+        } while (pins.has(pin));
+        pins.add(pin);
+        this.book.setCell(TABS.staff, i + 1, cols.pin + 1, pin);
+        if (cols.status >= 0 && !/^вход заблокирован$/i.test(String(r[cols.status] || ""))) {
+          this.book.setCell(TABS.staff, i + 1, cols.status + 1, "Активирован");
+        }
+        n++;
       }
+      if (normLogin(r[3])) continue;
       let login;
       do {
         login = String(platform.randomInt(1000000)).padStart(6, "0");
       } while (used.has(normLogin(login)));
       used.add(normLogin(login));
       this.book.setCell(TABS.staff, i + 1, 4, login);
-      if (cols.status >= 0) this.book.setCell(TABS.staff, i + 1, cols.status + 1, "Разовый");
-      n++;
     }
     if (!String(rows[0][3] || "").trim()) this.book.setCell(TABS.staff, 1, 4, "Код входа");
     return n;
@@ -1569,7 +1597,7 @@ function readToken(token, secret, now = Date.now()) {
 // ===== lib/api.mjs =====
 // API приложения. Чистая функция: запрос -> {status, body}. Синхронный код, никакой привязки к платформе.
 
-const SERVER_VERSION = "2026.11.23-35"; // меняется при каждом выпуске; приложение показывает её в профиле
+const SERVER_VERSION = "2026.11.23-36"; // меняется при каждом выпуске; приложение показывает её в профиле
 
 class HttpError extends Error {
   constructor(status, message, extra = {}) { super(message); this.status = status; this.extra = extra; }
@@ -1617,7 +1645,7 @@ const newId = () => platform.sha256hex(`${platform.randomInt(1e9)}:${platform.ra
 const ISO_RE = /^\d{4}-\d{2}-\d{2}$/;
 const publicUser = (u) => ({name: u.name, role: u.role, roleLabel: ROLE_LABELS[u.role], canEdit: canEdit(u.role)});
 /** Для кнопок «Подключить Telegram / ВК»: к каким каналам уже привязан человек и какой у него логин (он идёт в ссылку-подключение). */
-const connections = (store, me) => ({login: me.login, channels: [...new Set(store.chats().filter((c) => c.phone === me.phone).map((c) => c.channel))]});
+const connections = (store, me) => ({channels: [...new Set(store.chats().filter((c) => c.phone === me.phone).map((c) => c.channel))]});
 
 function handleApi(req, deps) {
   const {store, secret, now = () => Date.now(), afterChange = () => {}, getRev = () => "", bumpRev = () => {}, announce = () => {}, flush = () => ({pending: false}), afterVenues = () => {}, saveReport = () => ({number: 0})} = deps;
@@ -1641,52 +1669,29 @@ function handleApi(req, deps) {
         throw new HttpError(429, `Слишком много попыток. Вход заблокирован на ${minutes} минут.`, {blockedUntil: state.blockedUntil});
       }
     };
-    const authFailure = (client, message, person = "") => {
+    const authFailure = (client) => {
       platform.sleep(400);
-      const device = store.authFailed("app", client, person);
-      const account = person ? store.authFailed("person", person, person) : null;
-      const failed = account && (account.permanent || account.blockedUntil) ? account : device;
+      store.recordPinFailure();
+      const failed = store.authFailed("app", client);
       if (failed.permanent) throw new HttpError(423, "Вход полностью заблокирован. Обратитесь к директору для разблокировки.", {permanent: true});
       if (failed.blockedUntil) throw new HttpError(429, `Слишком много попыток. Вход заблокирован на ${failed.minutes} минут.`, {blockedUntil: failed.blockedUntil});
-      throw new HttpError(401, `${message} Осталось попыток: ${5 - failed.attempts}.`);
+      throw new HttpError(401, `Неверный PIN. Осталось попыток: ${5 - failed.attempts}.`);
     };
     // --- без входа ---
-    if (method === "POST" && path === "/api/identify") {
-      const client = authClient(); checkAuthBlock(client);
+    if (method === "POST" && path === "/api/login") {
+      const client = authClient();
+      checkAuthBlock(client);
       store.ensureLogins();
-      const user = store.findByLogin(body.login);
-      if (!user) return authFailure(client, "Не удалось продолжить. Проверьте ID.");
+      const blockedUntil = store.pinThrottle();
+      if (blockedUntil) throw new HttpError(429, "Слишком много попыток входа. Повторите позже.", {blockedUntil});
+      const user = store.findByPin(body.pin);
+      if (!user) return authFailure(client);
       checkAuthBlock(client, user.phone);
       if (user.role === "blocked") throw new HttpError(403, "Доступ закрыт. Обратитесь к администратору.");
       if (user.loginLocked) throw new HttpError(423, "Вход полностью заблокирован. Обратитесь к директору для разблокировки.");
-      // Имя до ввода PIN не отдаём: иначе открытая точка входа позволяла проверять ID и узнавать ФИО.
-      return {status: 200, body: {ok: true, activation: user.temporary || !user.pin}};
-    }
-    if (method === "POST" && path === "/api/login") {
-      const client = authClient(); checkAuthBlock(client);
-      store.ensureLogins();
-      const user = store.findByLogin(body.login);
-      const suppliedPin = String(body.pin == null ? body.login : body.pin).trim(); // старые клиенты передавали одно поле; после миграции это сработает только у старых записей ID=PIN
-      if (user) checkAuthBlock(client, user.phone);
-      if (user && user.role === "blocked") throw new HttpError(403, "Доступ закрыт. Обратитесь к администратору.");
-      if (user && user.loginLocked) throw new HttpError(423, "Вход полностью заблокирован. Обратитесь к директору для разблокировки.");
-      if (!user || user.temporary || !user.pin || normLogin(user.pin) !== normLogin(suppliedPin)) return authFailure(client, "ID или PIN указан неверно.", user && user.phone);
+      store.authSucceeded("app", client);
       store.unlockAuthPerson(user.phone);
       return {status: 200, body: {token: makeToken({sub: user.phone, l: store.loginMark(user.login, user.pin)}, secret, undefined, now()), user: publicUser(user)}};
-    }
-    if (method === "POST" && path === "/api/activate") {
-      const client = authClient(); checkAuthBlock(client);
-      store.ensureLogins();
-      const user = store.findByLogin(body.login);
-      if (user) checkAuthBlock(client, user.phone);
-      if (!user || !user.temporary) return authFailure(client, "Разовый код неверный или уже использован.", user && user.phone);
-      if (user.role === "blocked") throw new HttpError(403, "Доступ закрыт. Обратитесь к администратору.");
-      if (user.loginLocked) throw new HttpError(423, "Вход полностью заблокирован. Обратитесь к директору для разблокировки.");
-      if (normLogin(user.login) === normLogin(body.pin)) throw new HttpError(400, "PIN должен отличаться от ID сотрудника.");
-      if (!store.setPermanentLogin(user.phone, body.pin)) throw new HttpError(400, "PIN должен состоять ровно из шести цифр.");
-      const fresh = store.users().find((u) => u.phone === user.phone);
-      store.unlockAuthPerson(fresh.phone);
-      return {status: 200, body: {token: makeToken({sub: fresh.phone, l: store.loginMark(fresh.login, fresh.pin)}, secret, undefined, now()), user: publicUser(fresh)}};
     }
 
     // --- нужен вход ---
@@ -1942,74 +1947,41 @@ function handleApi(req, deps) {
 function handleMessage({store, channel, ev, appUrl = "", now = Date.now(), publishers = null, log = () => {}, lookupName = () => ""}) {
   const chat = ev.chatId;
   const text = String(ev.text || "").trim();
-  store.ensureLogins();
   const users = store.users();
   const btn = appButton(appUrl);
   const menuFor = (u) => ({editor: canEdit(u.role) && Boolean(publishers && publishers.targets().length), appUrl});
 
-  // Разовый шестизначный код выдаёт директор. Он только начинает активацию; постоянным кодом войти в новый чат нельзя.
-  const startPayload = ev.start || (/^\/start(?:@\w+)?\s+(\S+)/i.exec(text) || [])[1] || "";
-  const loginText = startPayload || (text && !text.startsWith("/") ? text : "");
-  // Совместимость для уже заведённых сотрудников: собственный контакт Telegram безопасен,
-  // но новая регистрация и обычный вход номера телефона не требуют.
-  if (ev.phone) {
-    const digits = String(ev.phone).replace(/\D/g, "").replace(/^8(?=\d{10}$)/, "7");
-    const key = digits.length === 11 && digits.startsWith("7") ? digits.slice(1) : digits;
-    const u = users.find((x) => x.phone === key);
-    if (u && u.role !== "blocked") { store.bind(channel.name, chat, u.phone, u.name); return channel.send(chat, msgWelcome(u.name, u.login), {menu: menuFor(u)}); }
-    if (u) return channel.send(chat, msgBlocked);
-  }
+  const loginText = text.startsWith('/') ? '' : text;
   const mine = store.chats().find((c) => c.channel === channel.name && c.chatId === String(chat));
   const user = mine ? users.find((x) => x.phone === mine.phone) : null;
   if (!user) {
-    // Проверяем таймер до любой ветки входа. Иначе после принятого ID правильный PIN
-    // обрабатывался раньше блокировки и позволял войти следующим сообщением.
     const auth = store.authState(channel.name, chat);
     if (auth.blockedUntil === -1 || auth.blockedUntil > now) return channel.send(chat, msgAuthLocked(auth));
-    const pending = store.activations().find((a) => a.channel === channel.name && a.chatId === String(chat));
-    if (pending) {
-      const personAuth = store.authState("person", pending.person);
-      if (personAuth.blockedUntil === -1 || personAuth.blockedUntil > now) return channel.send(chat, msgAuthLocked(personAuth));
-      if (!validPin(text)) return channel.send(chat, msgPinInvalid);
-      const current = store.users().find((x) => x.phone === pending.person);
-      if (!current || current.role === "blocked") return channel.send(chat, msgBlocked);
-      if (current.loginLocked) return channel.send(chat, msgAuthLocked({permanent: true}));
-      if (pending.mode === "login") {
-        if (String(current.pin) !== text) {
-          const local = store.authFailed(channel.name, chat, current.phone);
-          const account = store.authFailed("person", current.phone, current.phone);
-          const failed = account.permanent || account.blockedUntil ? account : local;
-          return channel.send(chat, failed.blockedUntil ? msgAuthLocked(failed) : msgWrongCode(5 - failed.attempts));
-        }
-      } else if (!store.setPermanentLogin(pending.person, text)) return channel.send(chat, msgPinUsed);
-      const fresh = store.users().find((x) => x.phone === pending.person);
-      store.cancelActivation(channel.name, chat);
-      store.unlockAuthPerson(fresh.phone);
-      store.bind(channel.name, chat, fresh.phone, fresh.name);
-      const credentials = `ID: ${fresh.login}\nPIN: ${fresh.pin}`;
-      return channel.send(chat, msgPinSaved(fresh.name, fresh.login, fresh.pin), {menu: menuFor(fresh), copy: {text: "📋 Скопировать ID и PIN", value: credentials}});
-    }
-    const byLogin = loginText && validPin(loginText) ? users.find((x) => normLogin(x.login) === normLogin(loginText)) : null;
-    if (byLogin) {
-      if (byLogin.role === "blocked") return channel.send(chat, msgBlocked);
-      if (byLogin.loginLocked) return channel.send(chat, msgAuthLocked({permanent: true}));
-      const personAuth = store.authState("person", byLogin.phone);
-      if (personAuth.blockedUntil === -1 || personAuth.blockedUntil > now) return channel.send(chat, msgAuthLocked(personAuth));
-      store.beginActivation(channel.name, chat, byLogin.phone, byLogin.temporary || !byLogin.pin ? "activate" : "login");
-      return channel.send(chat, byLogin.temporary || !byLogin.pin ? msgChoosePin(byLogin.name) : msgEnterPin(byLogin.name));
-    }
-    if (loginText && validPin(loginText)) {
+    if (!validPin(loginText)) return channel.send(chat, msgIntro);
+    store.ensureLogins();
+    if (store.pinThrottle()) return channel.send(chat, "Слишком много попыток входа. Повторите позже.");
+    const employee = store.findByPin(loginText);
+    if (!employee) {
+      store.recordPinFailure();
       const failed = store.authFailed(channel.name, chat);
       return channel.send(chat, failed.blockedUntil ? msgAuthLocked(failed) : msgWrongCode(5 - failed.attempts));
     }
-    return channel.send(chat, /^\/start/i.test(text) || !text ? msgIntro : msgAskPhone);
+    if (employee.role === "blocked") return channel.send(chat, msgBlocked);
+    const personAuth = store.authState("person", employee.phone);
+    if (employee.loginLocked || personAuth.blockedUntil === -1 || personAuth.blockedUntil > now) {
+      return channel.send(chat, msgAuthLocked(employee.loginLocked ? {permanent: true} : personAuth));
+    }
+    store.authSucceeded(channel.name, chat);
+    store.unlockAuthPerson(employee.phone);
+    store.bind(channel.name, chat, employee.phone, employee.name);
+    return channel.send(chat, msgWelcome(employee.name), {menu: menuFor(employee)});
   }
   if (user.role === "blocked") return channel.send(chat, msgBlocked);
 
   // /start в уже привязанном чате не должен запускать повторную авторизацию: иначе случайный код
   // мог бы переключить чат на другого сотрудника. Показываем это явно, а не маскируем главным меню.
   if (/^\/start(?:@\w+)?(?:\s|$)/i.test(text)) {
-    return channel.send(chat, msgAlreadyLinked(user.name, user.login), {menu: menuFor(user)});
+    return channel.send(chat, msgAlreadyLinked(user.name), {menu: menuFor(user)});
   }
 
   const asked = MENU_COMMANDS[text] || MENU_COMMANDS[text.toLowerCase()] || text; // нажатие кнопки меню = команда
@@ -2018,8 +1990,8 @@ function handleMessage({store, channel, ev, appUrl = "", now = Date.now(), publi
   const today = todayIso(now);
   if (cmd === "/unlock") {
     if (user.role !== "admin") return channel.send(chat, msgBlocked);
-    const target = store.findByLogin(rest[0] || "");
-    if (!target) return channel.send(chat, "Не найден сотрудник с таким ID. Пример: <code>/unlock 123456</code>");
+    const target = store.findByPin(rest[0] || "");
+    if (!target) return channel.send(chat, "Не найден сотрудник с таким PIN. Пример: <code>/unlock 123456</code>");
     store.unlockAuthPerson(target.phone);
     return channel.send(chat, `✅ Вход для сотрудника <b>${target.name}</b> разблокирован. Счётчики ошибок сброшены.`);
   }
@@ -2030,11 +2002,7 @@ function handleMessage({store, channel, ev, appUrl = "", now = Date.now(), publi
   if (cmd === "/schedule") {
     return channel.send(chat, afishaText(parseGrid(store.book.get(TABS.schedule), today).filter((r) => r.date >= today)), btn);
   }
-  if (cmd === "/login") {
-    const fresh = store.users().find((x) => x.phone === user.phone);
-    const credentials = `ID: ${fresh.login}\nPIN: ${fresh.pin}`;
-    return channel.send(chat, msgLogin(fresh.login, fresh.pin), {...btn, copy: {text: "📋 Скопировать ID и PIN", value: credentials}});
-  }
+  if (cmd === "/login") return channel.send(chat, "Шестизначный PIN для входа выдаёт директор.", btn);
   if (cmd === "/post") {
     if (!canEdit(user.role)) return channel.send(chat, msgPostNoRights);
     const targets = publishers ? publishers.targets() : [];
@@ -2381,15 +2349,21 @@ function owner_() {
     propsMemo_ = null;
     phone = first.phone;
   }
-  return {phone: normPhone(phone), name: prop_("OWNER_NAME") || "", login: prop_("OWNER_LOGIN") || ""};
+  return {phone: normPhone(phone), name: prop_("OWNER_NAME") || "", login: prop_("OWNER_LOGIN") || "", pin: prop_("OWNER_PIN") || ""};
 }
 
 /** Запоминает логин владельца, как только он появился в таблице. */
 function rememberOwnerLogin_(store) {
   const o = store.owner;
-  if (!o || o.login) return;
-  const me = store.users().find((u) => u.phone === o.phone && u.login);
-  if (me) { PropertiesService.getScriptProperties().setProperty("OWNER_LOGIN", me.login); propsMemo_ = null; }
+  if (!o) return;
+  const me = store.users().find((u) => u.row && u.phone === o.phone);
+  if (!me) return;
+  const p = PropertiesService.getScriptProperties();
+  if (!o.login && me.login) { p.setProperty("OWNER_LOGIN", me.login); propsMemo_ = null; }
+  if (validPin(me.pin) && me.pin !== o.pin && store.findByPin(me.pin)) {
+    p.setProperty("OWNER_PIN", me.pin);
+    propsMemo_ = null;
+  }
 }
 
 const store_ = () => new Store(new GasBook(), {secret: secret_(), owner: owner_()});
@@ -3211,7 +3185,7 @@ function seedTestUsers_(p) {
   } catch (err) { diag_("Тестовые пользователи: ОШИБКА — " + String(err && err.message ? err.message : err)); }
 }
 
-const STYLE_VERSION_ = "23"; // поднимайте, когда меняется оформление: таблица перестроится сама при ближайшем срабатывании таймера
+const STYLE_VERSION_ = "24"; // поднимайте, когда меняется оформление: таблица перестроится сама при ближайшем срабатывании таймера
 
 /** После обновления кода один раз оформляет таблицу сама (то же, что ручной запуск styleSheets). */
 function autoStyle_(p) {
@@ -3466,10 +3440,17 @@ function styleStaff_(sheet) {
   const rules = sheet.getConditionalFormatRules();
   const request = SpreadsheetApp.newConditionalFormatRule().whenFormulaSatisfied('=OR(REGEXMATCH($A' + (2 + (sheet.top || 0)) + ',"^(?i)заявка"),REGEXMATCH($C' + (2 + (sheet.top || 0)) + ',"^(?i)заявка"))').setBackground("#FFF2B3").setRanges([whole]).build();
   const off = SpreadsheetApp.newConditionalFormatRule().whenFormulaSatisfied("=AND($A" + (2 + (sheet.top || 0)) + "<>\"\",$" + A(accessCol) + (2 + (sheet.top || 0)) + "=FALSE)").setBackground("#FBE0DF").setFontColor("#8A8A8A").setRanges([whole]).build();
-  const code = sheet.getRange(2, 4, rows, 1);
-  const temporary = SpreadsheetApp.newConditionalFormatRule().whenFormulaSatisfied("=$" + A(pinCol) + (2 + (sheet.top || 0)) + '=\"\"').setBackground("#FFF2B3").setFontColor(C.navy).setBold(true).setRanges([code]).build();
-  const active = SpreadsheetApp.newConditionalFormatRule().whenFormulaSatisfied("=$" + A(pinCol) + (2 + (sheet.top || 0)) + '<>\"\"').setBackground("#D9F5DF").setFontColor(C.navy).setBold(true).setRanges([code]).build();
-  sheet.setConditionalFormatRules(rules.concat([request, off, temporary, active]));
+  const pinRange = sheet.getRange(2, pinCol, rows, 1).setNumberFormat("@");
+  let pinColumn = "";
+  for (let col = pinCol; col > 0; col = Math.floor((col - 1) / 26)) pinColumn = A((col - 1) % 26 + 1) + pinColumn;
+  const firstPinRow = 2 + (sheet.top || 0);
+  const pinCell = pinColumn + firstPinRow;
+  const pinAddress = "$" + pinColumn + "$" + firstPinRow + ":$" + pinColumn + "$" + (firstPinRow + rows - 1);
+  const duplicate = SpreadsheetApp.newConditionalFormatRule()
+    .whenFormulaSatisfied('=AND(' + pinCell + '<>"",COUNTIF(' + pinAddress + ',' + pinCell + ')>1)')
+    .setBackground("#FBE0DF").setFontColor("#A40000").setBold(true).setRanges([pinRange]).build();
+  sheet.setConditionalFormatRules([duplicate, ...rules, request, off]);
+  sheet.hideColumns(4);
   sheet.setColumnWidth(pinCol, 110);
   try { sheet.hideColumns(idCol); } catch (_) {}
   clearTail_(sheet, Math.max(sheet.getLastColumn(), 6));

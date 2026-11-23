@@ -105,7 +105,10 @@ function make() {
   const ctx = {book, store, changes: 0};
   const deps = {store, secret: "s", now: () => NOW, afterChange: () => { ctx.changes++; }, getRev: () => rev, bumpRev: () => { rev = String(Number(rev) + 1); }};
   ctx.call = (method, path, token, body = {}) => handleApi({method, path, token, body}, deps);
-  ctx.login = (login) => ctx.call("POST", "/api/login", "", {login}).body.token;
+  ctx.login = (login) => {
+    ctx.store.ensureLogins();
+    return ctx.call("POST", "/api/login", "", {pin: ctx.store.findByLogin(login).pin}).body.token;
+  };
   return ctx;
 }
 const NEW = {date: "2026-10-04", time: "12:00", end: "13:00", title: "Репетиция", hall: "Малая сцена", roles: {}};

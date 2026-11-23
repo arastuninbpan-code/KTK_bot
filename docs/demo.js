@@ -1,5 +1,5 @@
 "use strict";
-// Демо-режим (?demo): приложение работает само по себе, на выдуманных данных, без сервера. Логин ADMIN — админ, READER — читатель.
+// Демо-режим (?demo): приложение работает само по себе, на выдуманных данных, без сервера. PIN 100001 — админ, 100002 — читатель.
 (function () {
   if (!/[?&]demo\b/.test(location.search)) return;
   const now = new Date(Date.now() + 3 * 3600e3);
@@ -23,7 +23,7 @@
     {row: 7, date: iso(6), dateEnd: "", time: "11:00", end: "13:00", title: "Спектакль «Мери Поппинс»", hall: "Большая сцена", roles: {[A]: ["Иванова М.В.", "Сидорова Л.Р."], [G]: ["Морозова Н.М."], [K]: ["Орлова А.В."], [M]: ["Кузнецова Е.Н."]}},
     {row: 8, date: iso(8), dateEnd: iso(12), time: "", end: "", title: "Фестиваль в Барнауле", hall: "", roles: {}},
   ].map((e) => ({...e, rev: "d" + e.row}));
-  const users = {"ADMIN": {name: "Иванова М.В.", role: "admin", roleLabel: "Админ", canEdit: true, login: "ADMIN", channels: ["telegram"]}, "READER": {name: "Петрова Л.Н.", role: "reader", roleLabel: "Читатель", canEdit: false, login: "READER", channels: []}};
+  const users = {"100001": {name: "Иванова М.В.", role: "admin", roleLabel: "Админ", canEdit: true, login: "100001", channels: ["telegram"]}, "100002": {name: "Петрова Л.Н.", role: "reader", roleLabel: "Читатель", canEdit: false, login: "100002", channels: []}};
   const key = (s) => String(s || "").toLowerCase().split(/\s+/).filter(Boolean).join(" ");
   const toMin = (t) => { const m = /^(\d{1,2}):(\d{2})$/.exec(t || ""); return m ? +m[1] * 60 + +m[2] : null; };
   const slots = (e) => { const s = String(e.time || "").split(/,\s*/).map(toMin).filter((x) => x !== null); if (e.dateEnd || !s.length) return [[0, 1440]]; const en = s.length === 1 ? toMin(e.end) : null; return s.map((a) => [a, en !== null && en > a ? en : a + 120]); };
@@ -32,7 +32,7 @@
   const view = (u) => events.slice().sort((a, b) => (a.date + a.time).localeCompare(b.date + b.time)).map((e) => ({...e, id: e.id || "d" + e.row, meta: metas[e.id || "d" + e.row] || {kind: "event", note: ""}, comments: (chat["d" + e.row] || []).length, mine: Object.entries(e.roles).filter(([, n]) => n.includes(u.name)).map(([r]) => r)}));
   window.KTK_DEMO = {
     call(method, path, body, token) {
-      if (method === "POST" && path === "/api/login") { const k = String(body.login).toUpperCase(); if (k === "NOACCESS") return {status: 403, data: {error: "Доступ закрыт. Обратитесь к администратору."}}; return users[k] ? {status: 200, data: {token: "demo:" + k, user: users[k]}} : {status: 401, data: {error: "В демо-режиме логины: ADMIN (админ), READER (читатель) и NOACCESS (без доступа)"}}; }
+      if (method === "POST" && path === "/api/login") { const k = String(body.pin); if (k === "100003") return {status: 403, data: {error: "Доступ закрыт. Обратитесь к администратору."}}; return users[k] ? {status: 200, data: {token: "demo:" + k, user: users[k]}} : {status: 401, data: {error: "В демо-режиме PIN: 100001 (админ), 100002 (читатель) и 100003 (без доступа)"}}; }
       const u = users[String(token).replace("demo:", "")];
       if (!u) return {status: 401, data: {error: "Нужно войти"}};
       if (path === "/api/ping") return {status: 200, data: {rev: String(rev), changed: (body || {}).rev !== String(rev)}};

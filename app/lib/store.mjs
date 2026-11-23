@@ -103,8 +103,8 @@ export class Store {
     const o = this.owner;
     if (o) {
       const mine = out.filter((u) => u.phone === o.phone);
-      if (!mine.length) out.push({name: o.name || "Владелец", phone: o.phone, role: "admin", login: o.login || "", pin: o.login || "", temporary: false, groups: [], pending: false});
-      for (const u of mine) { u.role = "admin"; u.pending = false; if (!u.pin && o.login) u.pin = o.login; } // даже если строку испортили в таблице
+      if (!mine.length) out.push({name: o.name || "Владелец", phone: o.phone, role: "admin", login: o.login || "", pin: o.pin || "", temporary: false, groups: [], pending: false});
+      for (const u of mine) { u.role = "admin"; u.pending = false; } // даже если строку испортили в таблице
     }
     return out;
   }
@@ -114,11 +114,12 @@ export class Store {
     const o = this.owner;
     if (!o) return;
     const rows = this.book.get(TABS.staff);
-    const {access} = this.staffCols_(rows);
+    const {access, pin} = this.staffCols_(rows);
     const at = rows.findIndex((r, i) => i > 0 && phonesIn(r[1] || "").includes(o.phone));
     if (at < 0) {
       const row = [o.name || "Владелец", o.phone, "Админ", o.login || ""];
       if (access >= 0) { while (row.length < access) row.push(""); row[access] = "TRUE"; }
+      if (pin >= 0 && validPin(o.pin) && !this.findByPin(o.pin)) row[pin] = o.pin;
       this.book.append(TABS.staff, row);
       return;
     }
@@ -219,6 +220,19 @@ export class Store {
     if (permanent && who) this.setLoginStatus_(who, "Вход заблокирован");
     return {attempts, blockedUntil, level, person: who, permanent, minutes};
   }
+  pinThrottle() {
+    const state = this.authState("pin", "shared");
+    return state.attempts >= 30 && state.blockedUntil > this.now() ? state.blockedUntil : 0;
+  }
+
+  recordPinFailure() {
+    this.book.ensure(TABS.auth, AUTH_HEADER);
+    const state = this.authState("pin", "shared");
+    const active = state.blockedUntil > this.now();
+    const values = ["pin", "shared", active ? state.attempts + 1 : 1, active ? state.blockedUntil : this.now() + 3600000, 0, ""];
+    if (state.row) this.book.set(TABS.auth, state.row, values); else this.book.append(TABS.auth, values);
+  }
+
   authSucceeded(channel, chatId) {
     for (const r of this.authRows().filter((x) => x.channel === channel && x.chatId === String(chatId)).reverse()) this.book.clearRow(TABS.auth, r.row);
   }
@@ -521,6 +535,13 @@ export class Store {
     return key ? this.users().find((u) => normLogin(u.login) === key) || null : null;
   }
 
+
+  findByPin(value) {
+    if (!validPin(value)) return null;
+    const matches = this.users().filter((user) => user.pin === String(value).trim());
+    return matches.length === 1 ? matches[0] : null;
+  }
+
   setPermanentLogin(person, pinValue) {
     if (!validPin(pinValue)) return false;
     const u = this.users().find((x) => x.phone === person);
@@ -552,29 +573,36 @@ export class Store {
     const rows = this.book.get(TABS.staff);
     if (rows.length < 2) return 0;
     let cols = this.staffCols_(rows);
-    const legacyWithoutPin = cols.pin < 0;
     let width = Math.max(...rows.map((r) => r.length), 4);
     if (cols.pin < 0) { this.book.setCell(TABS.staff, 1, ++width, "PIN"); cols = this.staffCols_(this.book.get(TABS.staff)); }
     if (cols.id < 0) { this.book.setCell(TABS.staff, 1, ++width, "_ID"); cols = this.staffCols_(this.book.get(TABS.staff)); }
     const freshRows = this.book.get(TABS.staff);
     const used = new Set(rows.slice(1).map((r) => normLogin(r[3])).filter(Boolean));
+    const pins = new Set(this.users().map((user) => user.pin).filter(validPin));
     let n = 0;
     for (let i = 1; i < freshRows.length; i++) {
       const r = freshRows[i];
       if (!String(r[0] || "").trim()) continue;
       if (!String(r[cols.id] || "").trim()) this.book.setCell(TABS.staff, i + 1, cols.id + 1, "u" + this.hash(`staff:${i}:${r[0]}:${this.now()}`).slice(0, 12));
-      if (normLogin(r[3])) {
-        if (legacyWithoutPin && /^актив/i.test(String(r[cols.status] || ""))) this.book.setCell(TABS.staff, i + 1, cols.pin + 1, String(r[3]));
-        continue;
+      if (!String(r[cols.pin] ?? "").trim()) {
+        let pin;
+        do {
+          pin = String(platform.randomInt(1000000)).padStart(6, "0");
+        } while (pins.has(pin));
+        pins.add(pin);
+        this.book.setCell(TABS.staff, i + 1, cols.pin + 1, pin);
+        if (cols.status >= 0 && !/^вход заблокирован$/i.test(String(r[cols.status] || ""))) {
+          this.book.setCell(TABS.staff, i + 1, cols.status + 1, "Активирован");
+        }
+        n++;
       }
+      if (normLogin(r[3])) continue;
       let login;
       do {
         login = String(platform.randomInt(1000000)).padStart(6, "0");
       } while (used.has(normLogin(login)));
       used.add(normLogin(login));
       this.book.setCell(TABS.staff, i + 1, 4, login);
-      if (cols.status >= 0) this.book.setCell(TABS.staff, i + 1, cols.status + 1, "Разовый");
-      n++;
     }
     if (!String(rows[0][3] || "").trim()) this.book.setCell(TABS.staff, 1, 4, "Код входа");
     return n;

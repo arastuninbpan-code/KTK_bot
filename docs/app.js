@@ -370,20 +370,10 @@ function loginView() {
   let busy = false;
   const err = h("div", {class: "error", role: "alert"});
   const clean = (input) => { input.value = input.value.replace(/\D/g, "").slice(0, LOGIN_LEN); err.className = "error"; err.textContent = ""; input.classList.remove("bad"); };
-  const idInput = h("input", {class: "code-input", autocomplete: "username", inputmode: "numeric", pattern: "[0-9]*", maxlength: "6", placeholder: "ID", "aria-label": "ID сотрудника",
-    oninput: () => clean(idInput), onkeydown: (e) => { if (e.key === "Enter") pinInput.focus(); }});
   const pinInput = h("input", {class: "code-input", type: "password", autocomplete: "current-password", inputmode: "numeric", pattern: "[0-9]*", maxlength: "6", placeholder: "PIN", "aria-label": "Шестизначный PIN",
     oninput: () => clean(pinInput), onkeydown: (e) => { if (e.key === "Enter") go(); }});
-  const pasteCredentials = (e) => {
-    const text = (e.clipboardData && e.clipboardData.getData("text")) || "";
-    const id = /(?:^|\n)\s*ID\s*:\s*(\d{6})/i.exec(text);
-    const pin = /(?:^|\n)\s*PIN\s*:\s*(\d{6})/i.exec(text);
-    if (!id || !pin) return;
-    e.preventDefault(); idInput.value = id[1]; pinInput.value = pin[1]; err.textContent = ""; pinInput.focus();
-  };
-  idInput.addEventListener("paste", pasteCredentials); pinInput.addEventListener("paste", pasteCredentials);
   const btn = h("button", {class: "btn", onclick: () => go()}, "Войти");
-  const title = h("h3", {}, "Введите ID и PIN");
+  const title = h("h3", {}, "Введите PIN");
   // красная подсветка и дрожание поля при неверном логине
   function reject(text) {
     err.className = "error"; err.textContent = text;
@@ -391,19 +381,17 @@ function loginView() {
   }
   async function go() {
     if (busy) return;
-    const login = idInput.value.trim(), pin = pinInput.value.trim();
-    if (!/^\d{6}$/.test(login)) return reject("Введите шестизначный ID сотрудника");
+    const pin = pinInput.value.trim();
     if (!/^\d{6}$/.test(pin)) return reject("Введите шестизначный PIN");
-    busy = true; btn.disabled = true; btn.textContent = "Входим…"; err.className = "hint"; err.textContent = "Идёт загрузка, подождите несколько секунд…"; idInput.disabled = true; pinInput.disabled = true;
+    busy = true; btn.disabled = true; btn.textContent = "Входим…"; err.className = "hint"; err.textContent = "Идёт загрузка, подождите несколько секунд…"; pinInput.disabled = true;
     try {
       const client = authClientId();
-      const who = await api("POST", "/api/identify", {login, client});
-      const r = await api("POST", who.activation ? "/api/activate" : "/api/login", {login, pin, client});
+      const r = await api("POST", "/api/login", {pin, client});
       state.token = r.token; localStorage.setItem("ktk_token", r.token);
       if (queue.length) pumpQueue(); // правки, оставшиеся с прошлого входа
       await load();
     } catch (e) {
-      idInput.disabled = false; pinInput.disabled = false; reject(e.message); pinInput.focus();
+      pinInput.disabled = false; reject(e.message); pinInput.focus();
     } finally { busy = false; btn.disabled = false; btn.textContent = "Войти"; }
   }
   return h("main", {class: "login"},
@@ -411,13 +399,9 @@ function loginView() {
     h("h1", {}, "Расписание театра"),
     h("p", {class: "sub"}, "Ваши смены и события в одном месте"),
     h("div", {class: "card"},
-      h("ol", {class: "steps"},
-        h("li", {}, h("span", {}, "Получите у директора ID сотрудника")),
-        h("li", {}, h("span", {}, "При первом входе придумайте шестизначный PIN")),
-        h("li", {}, h("span", {}, "Используйте пару ID + PIN во всех каналах"))),
+      h("p", {}, "Получите шестизначный PIN у директора."),
       title,
       h("div", {class: "login-fields"},
-        h("label", {class: "login-field"}, h("span", {}, "ID сотрудника"), idInput),
         h("label", {class: "login-field"}, h("span", {}, "PIN из 6 цифр"), pinInput)),
       err,
       h("div", {class: "stack"}, btn, h("a", {class: "btn light", href: CFG.BOT_URL || "#", target: "_blank", rel: "noopener"}, icon("plane"), "Открыть бота"))));
@@ -1007,7 +991,7 @@ function profileSheet() {
     const on = channels.includes(key);
     return h("div", {class: "drow"}, h("span", {}, label),
       on ? h("b", {class: "okchip"}, icon("check"), "подключён")
-        : (url && me.login ? h("a", {class: "link", href: url + encodeURIComponent(me.login), target: "_blank", rel: "noopener"}, "не подключён · подключить") : h("b", {class: "muted"}, "не подключён")));
+        : (url ? h("a", {class: "link", href: url, target: "_blank", rel: "noopener"}, "не подключён · подключить") : h("b", {class: "muted"}, "не подключён")));
   };
   const calBox = h("div", {class: "offcal"});
   const info = h("div", {class: "hint-line"});
@@ -1070,9 +1054,8 @@ function profileSheet() {
     h("div", {class: "profhead"}, (state.avatars[me.uid] ? avatarEl(me.uid, me.name, "avatar big") : h("img", {class: "avatar big", src: "avatar.webp", alt: ""})), h("div", {}, h("h2", {}, me.name), h("span", {class: "badge " + me.role}, me.roleLabel))),
     h("div", {class: "avatar-actions"}, uploadAvatar, avatarButton),
     h("div", {class: "dmeta"},
-      me.login ? h("div", {class: "drow"}, h("span", {}, "Ваш код входа"), h("b", {class: "mono"}, me.login)) : null,
-      social("telegram", "Telegram", cfg.BOT_URL ? cfg.BOT_URL + "?start=" : ""),
-      social("vk", "ВКонтакте", cfg.VK_URL ? cfg.VK_URL + "?ref=" : "")),
+      social("telegram", "Telegram", cfg.BOT_URL),
+      social("vk", "ВКонтакте", cfg.VK_URL)),
     me.canEdit ? h("button", {class: "btn light report-btn", onclick: () => { close(); reportSheet(); }}, icon("chart"), "Сформировать отчёт") : null,
     h("div", {class: "field"}, h("span", {}, "Когда я не могу работать"), calBox, info),
     h("div", {class: "actions"}, h("button", {class: "btn light", onclick: () => close()}, "Закрыть"), save),

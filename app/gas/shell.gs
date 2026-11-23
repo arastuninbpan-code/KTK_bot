@@ -247,15 +247,21 @@ function owner_() {
     propsMemo_ = null;
     phone = first.phone;
   }
-  return {phone: normPhone(phone), name: prop_("OWNER_NAME") || "", login: prop_("OWNER_LOGIN") || ""};
+  return {phone: normPhone(phone), name: prop_("OWNER_NAME") || "", login: prop_("OWNER_LOGIN") || "", pin: prop_("OWNER_PIN") || ""};
 }
 
 /** Запоминает логин владельца, как только он появился в таблице. */
 function rememberOwnerLogin_(store) {
   const o = store.owner;
-  if (!o || o.login) return;
-  const me = store.users().find((u) => u.phone === o.phone && u.login);
-  if (me) { PropertiesService.getScriptProperties().setProperty("OWNER_LOGIN", me.login); propsMemo_ = null; }
+  if (!o) return;
+  const me = store.users().find((u) => u.row && u.phone === o.phone);
+  if (!me) return;
+  const p = PropertiesService.getScriptProperties();
+  if (!o.login && me.login) { p.setProperty("OWNER_LOGIN", me.login); propsMemo_ = null; }
+  if (validPin(me.pin) && me.pin !== o.pin && store.findByPin(me.pin)) {
+    p.setProperty("OWNER_PIN", me.pin);
+    propsMemo_ = null;
+  }
 }
 
 const store_ = () => new Store(new GasBook(), {secret: secret_(), owner: owner_()});
@@ -1077,7 +1083,7 @@ function seedTestUsers_(p) {
   } catch (err) { diag_("Тестовые пользователи: ОШИБКА — " + String(err && err.message ? err.message : err)); }
 }
 
-const STYLE_VERSION_ = "23"; // поднимайте, когда меняется оформление: таблица перестроится сама при ближайшем срабатывании таймера
+const STYLE_VERSION_ = "24"; // поднимайте, когда меняется оформление: таблица перестроится сама при ближайшем срабатывании таймера
 
 /** После обновления кода один раз оформляет таблицу сама (то же, что ручной запуск styleSheets). */
 function autoStyle_(p) {
@@ -1332,10 +1338,17 @@ function styleStaff_(sheet) {
   const rules = sheet.getConditionalFormatRules();
   const request = SpreadsheetApp.newConditionalFormatRule().whenFormulaSatisfied('=OR(REGEXMATCH($A' + (2 + (sheet.top || 0)) + ',"^(?i)заявка"),REGEXMATCH($C' + (2 + (sheet.top || 0)) + ',"^(?i)заявка"))').setBackground("#FFF2B3").setRanges([whole]).build();
   const off = SpreadsheetApp.newConditionalFormatRule().whenFormulaSatisfied("=AND($A" + (2 + (sheet.top || 0)) + "<>\"\",$" + A(accessCol) + (2 + (sheet.top || 0)) + "=FALSE)").setBackground("#FBE0DF").setFontColor("#8A8A8A").setRanges([whole]).build();
-  const code = sheet.getRange(2, 4, rows, 1);
-  const temporary = SpreadsheetApp.newConditionalFormatRule().whenFormulaSatisfied("=$" + A(pinCol) + (2 + (sheet.top || 0)) + '=\"\"').setBackground("#FFF2B3").setFontColor(C.navy).setBold(true).setRanges([code]).build();
-  const active = SpreadsheetApp.newConditionalFormatRule().whenFormulaSatisfied("=$" + A(pinCol) + (2 + (sheet.top || 0)) + '<>\"\"').setBackground("#D9F5DF").setFontColor(C.navy).setBold(true).setRanges([code]).build();
-  sheet.setConditionalFormatRules(rules.concat([request, off, temporary, active]));
+  const pinRange = sheet.getRange(2, pinCol, rows, 1).setNumberFormat("@");
+  let pinColumn = "";
+  for (let col = pinCol; col > 0; col = Math.floor((col - 1) / 26)) pinColumn = A((col - 1) % 26 + 1) + pinColumn;
+  const firstPinRow = 2 + (sheet.top || 0);
+  const pinCell = pinColumn + firstPinRow;
+  const pinAddress = "$" + pinColumn + "$" + firstPinRow + ":$" + pinColumn + "$" + (firstPinRow + rows - 1);
+  const duplicate = SpreadsheetApp.newConditionalFormatRule()
+    .whenFormulaSatisfied('=AND(' + pinCell + '<>"",COUNTIF(' + pinAddress + ',' + pinCell + ')>1)')
+    .setBackground("#FBE0DF").setFontColor("#A40000").setBold(true).setRanges([pinRange]).build();
+  sheet.setConditionalFormatRules([duplicate, ...rules, request, off]);
+  sheet.hideColumns(4);
   sheet.setColumnWidth(pinCol, 110);
   try { sheet.hideColumns(idCol); } catch (_) {}
   clearTail_(sheet, Math.max(sheet.getLastColumn(), 6));

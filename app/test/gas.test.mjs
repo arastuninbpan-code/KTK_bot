@@ -8,18 +8,20 @@ const SCHEDULE = [HEAD,
   ["04.10\n11.00 и 13.00", "Спектакль «Бука»\n(малая сцена)", "Иванова М.В.", "Морозова Н.М.", "", "", ""],
   ["10.10", "Сказки из старого чемодана", "Петрова Л.Н.", "", "", "", ""]];
 const G = () => loadGas({now: NOW, tabs: {"Расписание": SCHEDULE, "Сотрудники": STAFF},
-  props: {SHEET_ID: "x", STYLE_VER: "23", TOP_ROWS_DONE: "1", TEST_USERS: "1", TELEGRAM_BOT_TOKEN: "TOKEN", WEBHOOK_SECRET: "hook", APP_URL: "https://app.test"}});
+  props: {SHEET_ID: "x", STYLE_VER: "24", TOP_ROWS_DONE: "1", TEST_USERS: "1", TELEGRAM_BOT_TOKEN: "TOKEN", WEBHOOK_SECRET: "hook", APP_URL: "https://app.test"}});
 
 const tg = (g, update) => g.run(`doPost(${JSON.stringify({parameter: {secret: "hook"}, postData: {contents: JSON.stringify(update)}})}).getContent()`);
 const msg = (id, text, contact) => ({update_id: Math.floor(Math.random() * 1e9), message: {chat: {id, type: "private"}, from: {id}, text, contact}});
 const api = (g, req) => JSON.parse(g.run(`doPost(${JSON.stringify({postData: {contents: JSON.stringify(req)}})}).getContent()`));
 const sentTo = (g, chat) => g.fetches.filter((f) => f.url.endsWith("/sendMessage") && String(f.body.chat_id) === String(chat));
 
-test("Telegram: подключение по контакту, ответ красиво оформлен, токен не попал в лог", () => {
+const pinFor = (g, phone) => g.run(`store_().ensureLogins(); store_().users().find((u) => u.phone === "${phone}").pin`);
+
+test("Telegram: подключение по PIN, ответ красиво оформлен, токен не попал в лог", () => {
   const g = G();
   assert.equal(tg(g, msg(5, "/start")), "ok");
-  assert.match(sentTo(g, 5).at(-1).body.text, /ID сотрудника/i);
-  tg(g, msg(5, "", {user_id: 5, phone_number: "+7 900 000-00-01"}));
+  assert.match(sentTo(g, 5).at(-1).body.text, /шестизначный PIN/i);
+  tg(g, msg(5, pinFor(g, "9000000001")));
   const hello = sentTo(g, 5).at(-1).body;
   assert.equal(hello.parse_mode, "HTML");
   assert.match(hello.text, /✈️ <b>Готово, Иванова М\.В\.!<\/b>/);
@@ -38,27 +40,23 @@ test("чужой секрет вебхука игнорируется", () => {
   assert.equal(g.fetches.length, 0);
 });
 
-test("вход по коду из бота и работа приложения: чтение, права, правка админом → сразу уведомление подписчику", () => {
+test("тот же PIN в боте и приложении: чтение, права, правка админом → сразу уведомление подписчику", () => {
   const g = G();
-  tg(g, msg(5, "", {user_id: 5, phone_number: "9000000001"})); // Иванова (Админ)
-  tg(g, msg(6, "", {user_id: 6, phone_number: "9000000002"})); // Петрова (Читатель)
+  tg(g, msg(5, pinFor(g, "9000000001"))); // Иванова (Админ)
+  tg(g, msg(6, pinFor(g, "9000000002"))); // Петрова (Читатель)
   g.run("everyMinute()"); // первый снимок расписания (тихо)
-  tg(g, msg(6, "/login"));
-  const readerText = sentTo(g, 6).at(-1).body.text;
-  const code = readerText.match(/ID: ([^\n<]+)/)[1], readerPin = readerText.match(/PIN: ([^\n<]+)/)[1];
-  const login = api(g, {method: "POST", path: "/api/login", body: {login: code, pin: readerPin}});
+  const readerPin = pinFor(g, "9000000002");
+  const login = api(g, {method: "POST", path: "/api/login", body: {pin: readerPin}});
   assert.equal(login._status, 200); assert.equal(login.user.roleLabel, "Читатель");
-  assert.equal(api(g, {method: "POST", path: "/api/login", body: {login: code, pin: readerPin}})._status, 200);
+  assert.equal(api(g, {method: "POST", path: "/api/login", body: {pin: readerPin}})._status, 200);
 
   const sched = api(g, {method: "GET", path: "/api/schedule", token: login.token});
   assert.deepEqual(sched.events.map((e) => e.title), ["Спектакль «Бука»", "Сказки из старого чемодана"]);
   assert.deepEqual(sched.events[1].mine, ["Администратор/ Капельдинер"]);
   assert.equal(api(g, {method: "POST", path: "/api/events", token: login.token, body: {event: {date: "2026-10-06", title: "X"}}})._status, 403);
 
-  tg(g, msg(5, "/login")); // админ
-  const adminText = sentTo(g, 5).at(-1).body.text;
-  const adminCode = adminText.match(/ID: ([^\n<]+)/)[1], adminPin = adminText.match(/PIN: ([^\n<]+)/)[1];
-  const admin = api(g, {method: "POST", path: "/api/login", body: {login: adminCode, pin: adminPin}});
+  const adminPin = pinFor(g, "9000000001");
+  const admin = api(g, {method: "POST", path: "/api/login", body: {pin: adminPin}});
   assert.equal(admin.user.canEdit, true);
   const before = sentTo(g, 6).length;
   const ev = {date: "2026-10-06", time: "15:00", title: "Экскурсия", hall: "большая сцена", roles: {"Администратор/ Капельдинер": ["Петрова Л.Н."]}};
@@ -76,7 +74,7 @@ test("вход по коду из бота и работа приложения:
 
 test("правка таблицы руками рассылается сразу после паузы, не дожидаясь минутного таймера; версия данных растёт", () => {
   const g = G();
-  tg(g, msg(5, "", {user_id: 5, phone_number: "9000000001"}));
+  tg(g, msg(5, pinFor(g, "9000000001")));
   g.run("everyMinute()");
   const rev0 = g.run("getRev_()");
   g.advance(1000);
@@ -89,7 +87,7 @@ test("правка таблицы руками рассылается сразу
 
 test("быстрая сверка: если за время паузы была ещё правка, лишний запуск не делает рассылку", () => {
   const g = G();
-  tg(g, msg(5, "", {user_id: 5, phone_number: "9000000001"}));
+  tg(g, msg(5, pinFor(g, "9000000001")));
   g.run("everyMinute()");
   g.ss.getSheetByName("Расписание").put(2, 1, "04.10\n12.00 и 14.00");
   // «новая правка» появляется, пока первая обработка спит
@@ -113,7 +111,7 @@ test("setup создаёт таймеры и секреты; setWebhook пока
   assert.equal(hook.body.url, g.properties.RELAY_URL);
   assert.equal(g.run("hostOf_('https://relay.example.workers.dev/секретное-слово?a=1')"), "relay.example.workers.dev");
 
-  tg(g, msg(5, "", {user_id: 5, phone_number: "9000000001"}));
+  tg(g, msg(5, pinFor(g, "9000000001")));
   g.run("everyMinute()");
   g.ss.getSheetByName("Расписание").put(2, 1, "04.10\n12.00");
   g.setFetchStatus(403); // Telegram: «бот заблокирован»
@@ -142,7 +140,7 @@ test("styleSheets: перенос в новый формат (копия сох�
   assert.equal(g.ss.getSheetByName("Расписание").rules[0].calls[0][0], "whenFormulaSatisfied");
   assert.ok(log.some((l) => l[0] === "validation" && l[1].calls.some((c) => c[0] === "requireValueInRange"))); // площадка — выпадающий список
   const staff = g.ss.getSheetByName("Сотрудники");
-  assert.equal(staff.rules.length, 9); // роли, заявка, доступ и два состояния кода
+  assert.equal(staff.rules.length, 8); // роли, заявка, доступ и дубликат PIN
   assert.ok(staff.styleLog.some((l) => l[0] === "validation" && l[1].calls.some((c) => c[0] === "requireCheckbox"))); // галочки групп
   assert.deepEqual(staff.getDataRange().getDisplayValues()[0].slice(4), ["Доступ", "Комментарий", "Статус входа", "PIN", "_ID", "Актёры", "Техника", "Зал"]);
   assert.ok(staff.getDataRange().getDisplayValues().slice(1).every((r) => r[0] === "" || r[4] === "true"), "у внесённых людей доступ включён");
@@ -158,7 +156,7 @@ test("группы: галочки в таблице -> состав групп;
   const staff = g.ss.getSheetByName("Сотрудники");
   staff.put(2, 10, "TRUE"); staff.put(3, 10, "TRUE"); staff.put(3, 11, "TRUE"); // Иванова и Петрова — «Актёры», Петрова — ещё «Техника»
   g.run("store_().ensureLogins()");
-  const admin = api(g, {method: "POST", path: "/api/login", body: {login: g.run("store_().users()[0].login")}});
+  const admin = api(g, {method: "POST", path: "/api/login", body: {pin: g.run("store_().users()[0].pin")}});
   assert.equal(admin._status, 200);
   const sched = api(g, {method: "GET", path: "/api/schedule", token: admin.token});
   assert.deepEqual(sched.groups, [{name: "Актёры", members: ["Иванова М.В.", "Петрова Л.Н."]}, {name: "Техника", members: ["Петрова Л.Н."]}, {name: "Зал", members: []}]);
@@ -172,7 +170,7 @@ test("группы: галочки в таблице -> состав групп;
 // ---------- ВКонтакте ----------
 const VKPROPS = {VK_TOKEN: "VKTOKEN", VK_GROUP_ID: "club123", VK_SECRET: "vksecret", VK_CONFIRM: "abc123", TG_CHANNEL: "@teatr"};
 const GV = (extra = {}) => loadGas({now: NOW, tabs: {"Расписание": SCHEDULE, "Сотрудники": STAFF},
-  props: {SHEET_ID: "x", STYLE_VER: "23", TOP_ROWS_DONE: "1", TEST_USERS: "1", TELEGRAM_BOT_TOKEN: "TOKEN", WEBHOOK_SECRET: "hook", APP_URL: "https://app.test", ...VKPROPS, ...extra}});
+  props: {SHEET_ID: "x", STYLE_VER: "24", TOP_ROWS_DONE: "1", TEST_USERS: "1", TELEGRAM_BOT_TOKEN: "TOKEN", WEBHOOK_SECRET: "hook", APP_URL: "https://app.test", ...VKPROPS, ...extra}});
 const vk = (g, update, secret = "hook") => g.run(`doPost(${JSON.stringify({parameter: {secret, vk: "1"}, postData: {contents: JSON.stringify(update)}})}).getContent()`);
 const vkMsg = (id, text, extra = {}) => ({type: "message_new", event_id: "e" + Math.random(), secret: "vksecret", object: {message: {peer_id: id, from_id: id, text, ...extra}}});
 const vkSent = (g, id) => g.fetches.filter((f) => f.url.endsWith("/messages.send") && String(f.body.user_id) === String(id));
@@ -190,7 +188,7 @@ test("ВК: подтверждение адреса, чужой секрет и�
 test.skip("устаревшая привязка ВК постоянным кодом", () => {
   const g = GV();
   g.run("store_().ensureLogins()");
-  const login = g.run("store_().users()[1].login"); // Петрова
+  const login = g.run("store_().users()[1].pin"); // Петрова
   const ev = vkMsg(7, login.toLowerCase());
   assert.equal(vk(g, ev), "ok");
   const hello = vkSent(g, 7).at(-1).body;
@@ -212,7 +210,7 @@ test.skip("устаревшая привязка ВК постоянным ко�
 
 test.skip("старый сценарий привязки ВК", () => {
   const g = GV();
-  tg(g, msg(5, "", {user_id: 5, phone_number: "9000000001"}));
+  tg(g, msg(5, pinFor(g, "9000000001")));
   vk(g, vkMsg(8, "+7 900 000 00 01"));
   g.run("everyMinute()");
   g.ss.getSheetByName("Расписание").put(2, 1, "04.10\n12.00 и 14.00");
@@ -230,8 +228,8 @@ test.skip("старый сценарий привязки ВК", () => {
 
 test("публикация афиши: сначала предпросмотр без имён, «/post да» — на стену ВК и в Telegram-канал; читателю нельзя", () => {
   const g = GV();
-  tg(g, msg(5, "", {user_id: 5, phone_number: "9000000001"})); // Иванова — Админ
-  tg(g, msg(6, "", {user_id: 6, phone_number: "9000000002"})); // Петрова — Читатель
+  tg(g, msg(5, pinFor(g, "9000000001"))); // Иванова — Админ
+  tg(g, msg(6, pinFor(g, "9000000002"))); // Петрова — Читатель
   tg(g, msg(6, "/post"));
   assert.match(sentTo(g, 6).at(-1).body.text, /только администратор и редактор/);
   const before = g.fetches.length;
@@ -252,11 +250,11 @@ test("публикация афиши: сначала предпросмотр �
 
 test("публикация: не настроено -> понятное сообщение; ошибка ВК показана без токена", () => {
   const g = GV({VK_TOKEN: "", VK_GROUP_ID: "", TG_CHANNEL: ""});
-  tg(g, msg(5, "", {user_id: 5, phone_number: "9000000001"}));
+  tg(g, msg(5, pinFor(g, "9000000001")));
   tg(g, msg(5, "/post"));
   assert.match(sentTo(g, 5).at(-1).body.text, /Публикация пока не настроена/);
   const h = GV();
-  tg(h, msg(5, "", {user_id: 5, phone_number: "9000000001"}));
+  tg(h, msg(5, pinFor(h, "9000000001")));
   h.setFetchReply((url) => (url.endsWith("/wall.post") ? JSON.stringify({error: {error_code: 15, error_msg: "Access denied: no access to call this method"}}) : null));
   tg(h, msg(5, "/post да"));
   const res = sentTo(h, 5).at(-1).body.text;
@@ -287,7 +285,7 @@ const reads = (g, name) => g.ss.getSheetByName(name).reads || 0;
 
 test("кэш: повторные команды не читают листы заново; ответы те же", () => {
   const g = G();
-  tg(g, msg(5, "", {user_id: 5, phone_number: "9000000001"}));
+  tg(g, msg(5, pinFor(g, "9000000001")));
   tg(g, msg(5, "/shifts"));
   const before = ["Расписание", "Сотрудники", "Подписчики"].map((n) => reads(g, n));
   tg(g, msg(5, "/shifts"));
@@ -298,10 +296,10 @@ test("кэш: повторные команды не читают листы з�
 
 test.skip("устаревшая привязка постоянным кодом", () => {
   const g = G();
-  tg(g, msg(5, "", {user_id: 5, phone_number: "9000000001"}));
+  tg(g, msg(5, pinFor(g, "9000000001")));
   tg(g, msg(5, "/shifts")); // кэш заполнен
   // подписался второй человек: его строка в «Подписчиках» видна сразу
-  tg(g, msg(6, "", {user_id: 6, phone_number: "9000000002"}));
+  tg(g, msg(6, pinFor(g, "9000000002")));
   assert.equal(g.run("store_().chats().length"), 2);
   tg(g, msg(6, "/stop"));
   assert.equal(g.run("store_().chats().length"), 1);
@@ -315,7 +313,7 @@ test.skip("устаревшая привязка постоянным кодом
   assert.match(sentTo(g, 5).at(-1).body.text, /⏰ 15:00/);
   // правка на сайте: событие сразу в расписании у следующего запроса
   g.run("store_().ensureLogins()");
-  const login = api(g, {method: "POST", path: "/api/login", body: {login: g.run("store_().users()[0].login")}});
+  const login = api(g, {method: "POST", path: "/api/login", body: {pin: g.run("store_().users()[0].pin")}});
   api(g, {method: "POST", path: "/api/events", token: login.token, body: {event: {date: "2026-10-12", time: "10:00", title: "Новое", roles: {}}}});
   const sched = api(g, {method: "GET", path: "/api/schedule", token: login.token});
   assert.ok(sched.events.some((e) => e.title === "Новое"));
@@ -354,16 +352,17 @@ test("styleSheets: видны только три листа; месяцы — �
   assert.equal(sch.getDataRange().getDisplayValues().filter((r) => r[0] === "ДЕКАБРЬ 2026").length, 1);
 });
 
-test("приложение: me.login и me.channels для кнопок подключения", () => {
+test("приложение: me.channels без раскрытия PIN для кнопок подключения", () => {
   const g = G();
   g.run("styleSheets()");
   g.run("store_().ensureLogins()");
-  const login = g.run("store_().users()[0].login");
-  const t = api(g, {method: "POST", path: "/api/login", body: {login}}).token;
+  const login = g.run("store_().users()[0].pin");
+  const t = api(g, {method: "POST", path: "/api/login", body: {pin: login}}).token;
   const before = api(g, {method: "GET", path: "/api/schedule", token: t}).me;
-  assert.equal(before.login, login);
+  assert.equal(before.login, undefined);
+  assert.equal(before.pin, undefined);
   assert.deepEqual(before.channels, []);
-  tg(g, msg(5, "", {user_id: 5, phone_number: "9000000001"}));
+  tg(g, msg(5, pinFor(g, "9000000001")));
   const after = api(g, {method: "GET", path: "/api/schedule", token: t}).me;
   assert.deepEqual(after.channels, ["telegram"]);
 });
@@ -372,7 +371,7 @@ test("после обновления таблица оформляется са
   const g = G();
   delete g.properties.STYLE_VER;
   g.run("everyMinute()"); // как после выкладки новой версии
-  assert.equal(g.properties.STYLE_VER, "23");
+  assert.equal(g.properties.STYLE_VER, "24");
   const staff = g.ss.getSheetByName("Сотрудники");
   assert.deepEqual(staff.getDataRange().getDisplayValues()[0].slice(4, 6), ["Доступ", "Комментарий"]);
   assert.deepEqual(g.ss.sheets.filter((x) => !x.hidden).map((x) => x.name).sort(), ["Площадки", "Расписание", "Сотрудники"]);
@@ -454,7 +453,7 @@ test("владелец: строку удалили, роль понизили, 
   g.run("styleSheets()");
   g.run("store_().ensureLogins()");
   g.run("runCycle_()");
-  const login = g.run("store_().users().find((u) => u.phone === '9000000001').login");
+  const login = g.run("store_().users().find((u) => u.phone === '9000000001').pin");
   assert.ok(login, "логин запомнен");
   assert.equal(g.properties.OWNER_LOGIN, login);
   const staff = g.ss.getSheetByName("Сотрудники");
@@ -465,7 +464,7 @@ test("владелец: строку удалили, роль понизили, 
   assert.deepEqual([staff.cells[1][2], staff.cells[1][4]], ["Админ", "TRUE"]);
   // 2) строку удалили целиком — возвращается с тем же логином, вход работает
   staff.deleteRow(2); g.run("dropAllCaches_()");
-  assert.equal(api(g, {method: "POST", path: "/api/login", body: {login}})._status, 200);
+  assert.equal(api(g, {method: "POST", path: "/api/login", body: {pin: login}})._status, 200);
   g.run("runCycle_()");
   const back = staff.getDataRange().getDisplayValues().find((r) => r[1] === "9000000001");
   assert.ok(back && back[0] === "Иванова М.В." && back[2] === "Админ" && back[3] === login);
@@ -502,7 +501,7 @@ test("«Сотрудники» как в жизни: тысяча строк-з�
 });
 
 test.skip("устаревшая заявка ВК по номеру", () => {
-  const g = GV({STYLE_VER: "23", TOP_ROWS_DONE: "1"});
+  const g = GV({STYLE_VER: "24", TOP_ROWS_DONE: "1"});
   g.run("styleSheets()");
   g.setFetchReply((url) => (/users\.get/.test(url) ? JSON.stringify({response: [{first_name: "Анна", last_name: "Смирнова"}]}) : ""));
   vk(g, vkMsg(77, "89112223344"));
@@ -578,8 +577,8 @@ test("цвета площадок: в таблице выбираются из �
   assert.equal(venues.rules.length, 20, "цвет: ячейка цвета и название площадки красятся по выбранному цвету");
   const sched = g.ss.getSheetByName("Расписание");
   assert.ok(sched.rules.length >= 2 && sched.rules[0].calls.some((c) => c[0] === "whenFormulaSatisfied" && /LOWER\(TRIM\(\$E2\)\)=LOWER\("Малая сцена"\)/.test(c[1])), "в «Расписании» выбранная площадка подсвечивается её цветом");
-  const login = (() => { g.run("store_().ensureLogins()"); return g.run("store_().users().find((u) => u.phone === '9000000001').login"); })();
-  const t = api(g, {method: "POST", path: "/api/login", body: {login}}).token;
+  const login = (() => { g.run("store_().ensureLogins()"); return g.run("store_().users().find((u) => u.phone === '9000000001').pin"); })();
+  const t = api(g, {method: "POST", path: "/api/login", body: {pin: login}}).token;
   // новая площадка с выбранным цветом и без
   assert.equal(api(g, {method: "POST", path: "/api/venues", token: t, body: {name: "Фойе", color: "Синий"}})._status, 200);
   assert.equal(api(g, {method: "POST", path: "/api/venues", token: t, body: {name: "Двор"}})._status, 200);
@@ -606,9 +605,9 @@ test("«Не могу работать»: отмеченные даты хран
   const g = G();
   g.run("styleSheets()");
   g.run("store_().ensureLogins()");
-  const loginOf = (phone) => g.run(`store_().users().find((u) => u.phone === '${phone}').login`);
-  const admin = api(g, {method: "POST", path: "/api/login", body: {login: loginOf("9000000001")}}).token;
-  const petr = api(g, {method: "POST", path: "/api/login", body: {login: loginOf("9000000002")}}).token;
+  const loginOf = (phone) => g.run(`store_().users().find((u) => u.phone === '${phone}').pin`);
+  const admin = api(g, {method: "POST", path: "/api/login", body: {pin: loginOf("9000000001")}}).token;
+  const petr = api(g, {method: "POST", path: "/api/login", body: {pin: loginOf("9000000002")}}).token;
   // Петрова отмечает даты (прошедшие не принимаются, повторы не плодятся)
   let r = api(g, {method: "POST", path: "/api/off", token: petr, body: {add: ["2026-10-12", "2026-10-12", "2026-10-13", "2026-09-01", "мусор"]}});
   assert.deepEqual(r.off, ["2026-10-12", "2026-10-13"]);
@@ -620,7 +619,7 @@ test("«Не могу работать»: отмеченные даты хран
   assert.deepEqual(r.unavailable, {"Петрова Л.Н.": ["2026-10-12", "2026-10-13"]});
   // назначить её на 12 октября нельзя, на 14 — можно
   const ev = (date, who) => ({title: "Проба", date, dateEnd: "", time: "19:00", end: "", hall: "", roles: {"Актёры": [who]}});
-  const editor = api(g, {method: "POST", path: "/api/login", body: {login: loginOf("9000000004")}}).token;
+  const editor = api(g, {method: "POST", path: "/api/login", body: {pin: loginOf("9000000004")}}).token;
   let res = api(g, {method: "POST", path: "/api/events", token: editor, body: {event: ev("2026-10-12", "Петрова Л.Н.")}});
   assert.equal(res._status, 400, "редактор не может поставить того, кто отметил «не могу»");
   assert.match(res.error, /Петрова Л\.Н\. отметил\(а\), что не может работать 12\.10/);
@@ -647,7 +646,7 @@ test("должности в приложении — группы из «Сот�
   g.run("store_().ensureLogins()");
   const sch = g.ss.getSheetByName("Расписание");
   const staff = g.ss.getSheetByName("Сотрудники");
-  const t = api(g, {method: "POST", path: "/api/login", body: {login: g.run("store_().users().find((u) => u.phone === '9000000001').login")}}).token;
+  const t = api(g, {method: "POST", path: "/api/login", body: {pin: g.run("store_().users().find((u) => u.phone === '9000000001').pin")}}).token;
   let s = api(g, {method: "GET", path: "/api/schedule", token: t});
   assert.deepEqual(s.roles, ["Актёры", "Техника", "Зал"], "выбор только из должностей-групп");
   assert.ok(!s.allRoles.includes("Касса") && s.allRoles.includes("Актёры"), "пустые старые колонки исходной таблицы убраны: остались только должности-группы");
@@ -743,7 +742,7 @@ test("новые виды сотрудников в обе стороны: вп�
   }
   // в приложении все группы доступны, и событие на новую должность сохраняется в свою колонку
   g.run("store_().ensureLogins()");
-  const t = api(g, {method: "POST", path: "/api/login", body: {login: g.run("store_().users().find((u) => u.phone === '9000000001').login")}}).token;
+  const t = api(g, {method: "POST", path: "/api/login", body: {pin: g.run("store_().users().find((u) => u.phone === '9000000001').pin")}}).token;
   const sc = api(g, {method: "GET", path: "/api/schedule", token: t});
   for (const n of ["Посадчики", "Монтажёры", "Костюмеры", "Гримёры", "Реквизиторы"]) assert.ok(sc.roles.includes(n), n);
   const ok = api(g, {method: "POST", path: "/api/events", token: t, body: {event: {title: "Две роли", date: "2026-10-20", dateEnd: "", time: "", end: "", hall: "", roles: {"Гримёры": ["Морозова Н.М."], "Реквизиторы": ["Иванова М.В."]}}}});
@@ -790,7 +789,7 @@ test("удалили все события текущего месяца: шап
 test("событие можно создать совсем без сотрудников (и без времени, и с пустыми списками должностей)", () => {
   const g = G();
   g.run("styleSheets()"); g.run("store_().ensureLogins()");
-  const t = api(g, {method: "POST", path: "/api/login", body: {login: g.run("store_().users().find((u) => u.phone === '9000000001').login")}}).token;
+  const t = api(g, {method: "POST", path: "/api/login", body: {pin: g.run("store_().users().find((u) => u.phone === '9000000001').pin")}}).token;
   for (const [title, roles, time] of [["Без людей", {}, ""], ["Пустые списки", {"Актёры": [], "Техника": []}, "10:00"]]) {
     const r = api(g, {method: "POST", path: "/api/events", token: t, body: {event: {title, date: "2026-10-21", dateEnd: "", time, end: "", hall: "", roles}}});
     assert.equal(r._status, 200, title);
@@ -801,7 +800,7 @@ test("событие можно создать совсем без сотруд�
 
 test("Telegram: после подключения под полем ввода постоянное меню-кнопки; кнопка «Мои смены» работает как команда", () => {
   const g = G();
-  tg(g, msg(5, "", {user_id: 5, phone_number: "+7 900 000-00-01"}));
+  tg(g, msg(5, pinFor(g, "9000000001")));
   const hello = sentTo(g, 5).at(-1).body;
   assert.equal(hello.reply_markup.is_persistent, true);
   assert.deepEqual(hello.reply_markup.keyboard[0].map((b) => b.text), ["📅 Мои смены", "🎭 Расписание"]);
@@ -882,19 +881,19 @@ test("служебная колонка ID: появляется скрытой,
   g.run("ensureEventIds_()");
   assert.match(sch.getDataRange().getDisplayValues()[nr - 1][idc], /^[0-9a-f]{8}$/);
   g.run("store_().ensureLogins()");
-  const t = api(g, {method: "POST", path: "/api/login", body: {login: g.run("store_().users().find((u) => u.phone === '9000000001').login")}}).token;
+  const t = api(g, {method: "POST", path: "/api/login", body: {pin: g.run("store_().users().find((u) => u.phone === '9000000001').pin")}}).token;
   const s = api(g, {method: "GET", path: "/api/schedule", token: t});
   assert.ok(!s.allRoles.includes("ID"));
   assert.ok(s.events.every((e) => /^[0-9a-f]{8}$/.test(e.id)));
 });
 
 test.skip("старый сценарий подключения ВК для собрания", () => {
-  const g = GV({STYLE_VER: "23", TOP_ROWS_DONE: "1", APP_URL: "https://app.test"});
+  const g = GV({STYLE_VER: "24", TOP_ROWS_DONE: "1", APP_URL: "https://app.test"});
   g.run("styleSheets()"); g.run("store_().ensureLogins()");
-  tg(g, msg(5, "", {user_id: 5, phone_number: "9000000002"})); // Петрова в Telegram
+  tg(g, msg(5, pinFor(g, "9000000002"))); // Петрова в Telegram
   vk(g, vkMsg(77, "89000000001"), "hook"); // Иванова в ВК
-  const login = g.run("store_().users().find((u) => u.phone === '9000000001').login");
-  const t = api(g, {method: "POST", path: "/api/login", body: {login}}).token;
+  const login = g.run("store_().users().find((u) => u.phone === '9000000001').pin");
+  const t = api(g, {method: "POST", path: "/api/login", body: {pin: login}}).token;
   const before = g.fetches.length;
   const doc = "Повестка: сезон\n1. Афиша\n2. Репетиции";
   const r = api(g, {method: "POST", path: "/api/events", token: t, body: {event: {title: "Собрание труппы", date: "2026-10-12", dateEnd: "", time: "18:00", end: "", hall: "", roles: {}}, meta: {kind: "meeting", note: doc, publish: true}}});
@@ -917,7 +916,7 @@ test.skip("старый сценарий подключения ВК для со
 });
 
 test.skip("старый сценарий подключения ВК для аватаров", () => {
-  const g = GV({STYLE_VER: "23", TOP_ROWS_DONE: "1"});
+  const g = GV({STYLE_VER: "24", TOP_ROWS_DONE: "1"});
   g.run("styleSheets()");
   g.setFetchReply((url) => {
     if (/getUserProfilePhotos/.test(url)) return JSON.stringify({result: {photos: [[{file_id: "a", width: 160}, {file_id: "b", width: 320}]]}});
@@ -925,7 +924,7 @@ test.skip("старый сценарий подключения ВК для ав
     if (/users\.get/.test(url)) return JSON.stringify({response: [{photo_100: "https://sun1.userapi.com/x.jpg"}]});
     return "";
   });
-  tg(g, msg(5, "", {user_id: 5, phone_number: "9000000002"}));
+  tg(g, msg(5, pinFor(g, "9000000002")));
   vk(g, vkMsg(77, "89000000001"), "hook");
   const rows = g.ss.getSheetByName("_аватары").getDataRange().getDisplayValues();
   assert.ok(rows.some((r) => r[0] === "9000000002" && r[1] === "telegram" && r[2].startsWith("data:image/jpeg;base64,")));
@@ -936,14 +935,14 @@ test.skip("старый сценарий подключения ВК для ав
 });
 
 test("собрание отличается в таблице: строка золотистая по типу из скрытого листа, в занятости площадок — значок и заливка", () => {
-  const g = GV({STYLE_VER: "23", TOP_ROWS_DONE: "1"});
+  const g = GV({STYLE_VER: "24", TOP_ROWS_DONE: "1"});
   g.run("styleSheets()"); g.run("store_().ensureLogins()");
   const sch = g.ss.getSheetByName("Расписание");
   const idc = sch.getDataRange().getDisplayValues()[0].indexOf("ID");
   const formulas = sch.rules.map((r) => (r.calls.find((c) => c[0] === "whenFormulaSatisfied") || [])[1] || "");
   const col = String.fromCharCode(65 + idc);
   assert.ok(formulas.some((f) => f.includes("COUNTIFS") && f.includes("_события") && f.includes("$" + col + "2") && f.includes('"meeting"')), "правило для собраний");
-  const t = api(g, {method: "POST", path: "/api/login", body: {login: g.run("store_().users().find((u) => u.phone === '9000000001').login")}}).token;
+  const t = api(g, {method: "POST", path: "/api/login", body: {pin: g.run("store_().users().find((u) => u.phone === '9000000001').pin")}}).token;
   api(g, {method: "POST", path: "/api/events", token: t, body: {event: {title: "Собрание труппы", date: "2026-10-12", dateEnd: "", time: "18:00", end: "", hall: "Малая сцена", roles: {}}, meta: {kind: "meeting", note: "x", publish: false}}});
   g.run("renderOccupancy_()");
   const occ = g.ss.getSheetByName("Площадки").getDataRange().getDisplayValues().map((r) => r.slice(3, 8));
@@ -968,11 +967,11 @@ test.skip("старые тестовые логины", () => {
   g.run("dropAllCaches_()");
   g.run("store_().ensureLogins()");
   const loginOf = (name) => g.ss.getSheetByName("Сотрудники").getDataRange().getDisplayValues().find((r) => r[0] === name)[3];
-  const ok = api(g, {method: "POST", path: "/api/login", body: {login: loginOf("Читатель Тестовый")}});
+  const ok = api(g, {method: "POST", path: "/api/login", body: {pin: loginOf("Читатель Тестовый")}});
   assert.equal(ok._status, 200);
   assert.equal(ok.user.canEdit, false);
   assert.equal(api(g, {method: "POST", path: "/api/events", token: ok.token, body: {event: {title: "x", date: "2026-10-20"}}})._status, 403);
-  const no = api(g, {method: "POST", path: "/api/login", body: {login: loginOf("Заблокированный Тестовый")}});
+  const no = api(g, {method: "POST", path: "/api/login", body: {pin: loginOf("Заблокированный Тестовый")}});
   assert.equal(no._status, 403);
   assert.match(no.error, /Доступ закрыт/);
   // повторный запуск ничего не добавляет

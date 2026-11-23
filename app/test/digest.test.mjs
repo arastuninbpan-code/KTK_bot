@@ -16,7 +16,8 @@ test("несколько изменений у человека за раз — 
   const tg = fakeChannel("telegram");
   const senders = {telegram: tg};
   runCycle({store, senders, now: NOW, appUrl: APP});
-  handleMessage({store, channel: tg, ev: {chatId: 6, text: "", phone: "9000000002"}, appUrl: APP, now: NOW}); // Петрова
+  store.ensureLogins();
+  handleMessage({store, channel: tg, ev: {chatId: 6, text: store.users()[1].pin}, appUrl: APP, now: NOW}); // Петрова
   tg.sent.length = 0;
   book.setCell(TABS.schedule, 2, 6, "Петрова Л.Н."); // назначили на «Буку»
   book.setCell(TABS.schedule, 3, 6, "Петрова Л.Н."); // назначили на репетицию
@@ -30,10 +31,10 @@ test("несколько изменений у человека за раз — 
 
 test("скрипт Google: правки из приложения подряд дают ОДНО сообщение; если приложение закрыли — разошлёт минутный таймер", () => {
   const tabs = {[TABS.schedule]: [HEAD], [TABS.staff]: STAFF, "Подписчики": [["Канал", "ID чата", "Телефон", "ФИО"], ["telegram", "6", "9000000002", "Петрова Л.Н."]]};
-  const g = loadGas({tabs, props: {SHEET_ID: "x", STYLE_VER: "23", TOP_ROWS_DONE: "1", TELEGRAM_BOT_TOKEN: "TOKEN", WEBHOOK_SECRET: "hook", APP_URL: APP, OWNER_PHONE: "9000000001"}, now: NOW});
+  const g = loadGas({tabs, props: {SHEET_ID: "x", STYLE_VER: "24", TOP_ROWS_DONE: "1", TELEGRAM_BOT_TOKEN: "TOKEN", WEBHOOK_SECRET: "hook", APP_URL: APP, OWNER_PHONE: "9000000001"}, now: NOW});
   const call = (req) => JSON.parse(g.run(`doPost(${JSON.stringify({postData: {contents: JSON.stringify(req)}})}).getContent()`));
   g.run("store_().ensureLogins()");
-  const token = call({method: "POST", path: "/api/login", body: {login: g.run('store_().users().find((u) => u.phone === "9000000001").login')}}).token;
+  const token = call({method: "POST", path: "/api/login", body: {pin: g.run('store_().users().find((u) => u.phone === "9000000001").pin')}}).token;
   call({method: "GET", path: "/api/schedule", token});
   g.run("runCycle_()"); // первый снимок
   const to6 = () => g.fetches.filter((f) => f.url.endsWith("/sendMessage") && String(f.body.chat_id) === "6");

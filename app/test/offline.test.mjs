@@ -12,7 +12,7 @@ function make() {
   const venueTouched = [];
   const deps = {store, secret: "s", now: () => NOW, afterVenues: () => venueTouched.push(1)};
   store.ensureLogins();
-  const login = (phone) => handleApi({method: "POST", path: "/api/login", body: {login: store.users().find((u) => u.phone === phone).login}}, deps).body.token;
+  const login = (phone) => handleApi({method: "POST", path: "/api/login", body: {pin: store.users().find((u) => u.phone === phone).pin}}, deps).body.token;
   const token = login("9000000001");
   return {book, venueTouched, call: (method, path, body = {}) => handleApi({method, path, token, body}, deps)};
 }

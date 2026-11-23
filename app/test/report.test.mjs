@@ -68,7 +68,7 @@ function api() {
   const saved = [];
   const deps = {store, secret: "s", now: () => NOW, saveReport: (r, by) => { saved.push([r, by]); return {number: 7}; }};
   store.ensureLogins();
-  const login = (phone) => handleApi({method: "POST", path: "/api/login", body: {login: store.users().find((u) => u.phone === phone).login}}, deps).body.token;
+  const login = (phone) => handleApi({method: "POST", path: "/api/login", body: {pin: store.users().find((u) => u.phone === phone).pin}}, deps).body.token;
   return {saved, call: (token, body) => handleApi({method: "POST", path: "/api/report", token, body}, deps), login};
 }
 
@@ -111,11 +111,11 @@ test("скорость: повторный запрос расписания н�
     [TABS.meta]: [["ID события", "Тип", "Описание", "—", "Автор", "Создано"], ["a1", "meeting", "x", "", "u", "1"]],
     [TABS.comments]: [["ID события", "ID", "Время", "Телефон", "Имя", "Текст", "Фото"], ["a1", "c1", "1", "9000000001", "И", "привет", "[]"]],
     [TABS.avatars]: [["Телефон", "Канал", "Фото", "Обновлено"], ["9000000001", "telegram", "http://x", "1"]]};
-  const g = loadGas({tabs, props: {SHEET_ID: "x", STYLE_VER: "23", TOP_ROWS_DONE: "1", TEST_USERS: "1", OWNER_PHONE: "9000000001"}, now: NOW});
+  const g = loadGas({tabs, props: {SHEET_ID: "x", STYLE_VER: "24", TOP_ROWS_DONE: "1", TEST_USERS: "1", OWNER_PHONE: "9000000001"}, now: NOW});
   const call = (req) => JSON.parse(g.run(`doPost(${JSON.stringify({postData: {contents: JSON.stringify(req)}})}).getContent()`));
   g.run("store_().ensureLogins()");
-  const login = g.run('store_().users().find((u) => u.phone === "9000000001").login');
-  const token = call({method: "POST", path: "/api/login", body: {login}}).token;
+  const login = g.run('store_().users().find((u) => u.phone === "9000000001").pin');
+  const token = call({method: "POST", path: "/api/login", body: {pin: login}}).token;
   const reads = () => g.ss.sheets.reduce((a, s) => a + (s.reads || 0), 0);
   call({method: "GET", path: "/api/schedule", token});
   const before = reads();

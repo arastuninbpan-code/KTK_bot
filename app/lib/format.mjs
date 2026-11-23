@@ -142,7 +142,7 @@ export const msgNoApp = "💬 Адрес приложения пока не за
 const loginLine = (login) => (login ? `\n\n🪪 Ваш ID сотрудника: <code>${esc(login)}</code>` : "");
 export const msgWelcome = (name, login = "") => `✈️ <b>Готово, ${esc(name)}!</b>\nТеперь я буду присылать уведомления о ваших сменах. Меню — внизу.${loginLine(login)}`;
 export const msgAlreadyLinked = (name, login = "") => `✅ <b>Вы уже авторизованы: ${esc(name)}</b>\n\nЭтот чат защищён и не переключится на другого сотрудника, если сюда случайно отправить чужой код.${loginLine(login)}\n\nЭтот же код работает в приложении, Telegram и ВКонтакте. Чтобы полностью отключить этот чат от уведомлений, используйте /stop.`;
-export const msgIntro = "👋 <b>Добро пожаловать в КТК!</b>\nВведите ID сотрудника, который выдал директор. Затем я попрошу ваш шестизначный PIN.";
+export const msgIntro = "👋 <b>Добро пожаловать в КТК!</b>\nВведите шестизначный PIN, который выдал директор.";
 export const msgAskPhone = "💬 <b>Введите ID сотрудника</b>, который выдал директор.";
 export const msgChoosePin = (name) => `✅ <b>${esc(name)}, ID принят.</b>\n\nПридумайте и отправьте свой шестизначный PIN.`;
 export const msgEnterPin = (name) => `🔐 <b>${esc(name)}, введите ваш шестизначный PIN.</b>`;

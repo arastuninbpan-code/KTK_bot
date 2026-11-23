@@ -16,7 +16,13 @@ function make(staff = STAFF) {
   const book = new MemoryBook({[TABS.staff]: staff, [TABS.schedule]: SCHEDULE});
   const store = new Store(book, {secret: "t", now: () => NOW});
   const ch = fakeChannel("telegram");
-  const say = (chat, text, extra = {}) => handleMessage({store, channel: ch, ev: {chatId: chat, text, phone: null, ...extra}, now: NOW});
+  const say = (chat, text, extra = {}) => {
+    if (!text && extra.phone) {
+      store.ensureLogins();
+      text = store.users().find((user) => user.phone === extra.phone)?.pin || "";
+    }
+    return handleMessage({store, channel: ch, ev: {chatId: chat, text, ...extra}, now: NOW});
+  };
   const last = (chat) => ch.sent.filter((s) => s.chatId === String(chat)).at(-1);
   return {book, store, ch, say, last};
 }
@@ -151,7 +157,7 @@ test("главное меню: после подключения кнопки в
   say(7, MENU_LABELS.schedule);
   assert.match(last(7).text, /./);
   say(7, MENU_LABELS.login);
-  assert.match(last(7).text, /ID сотрудника|Данные для входа/i);
+  assert.match(last(7).text, /PIN.*выдаёт директор/i);
   say(7, "/start");
   assert.match(last(7).text, /уже авторизованы: Петрова|чат защищён/i);
   say(7, "что-то непонятное");

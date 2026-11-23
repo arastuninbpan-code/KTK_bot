@@ -5,7 +5,7 @@ import {platform} from "./platform.mjs";
 import {archiveLine, buildReport, checkParams, parseArchive, reportCsv} from "./report.mjs";
 import {canEdit, cleanPhotoIds, colorName, normLogin, ROLE_LABELS, TABS, VENUE_COLORS} from "./store.mjs";
 
-export const SERVER_VERSION = "2026.11.23-35"; // меняется при каждом выпуске; приложение показывает её в профиле
+export const SERVER_VERSION = "2026.11.23-36"; // меняется при каждом выпуске; приложение показывает её в профиле
 
 class HttpError extends Error {
   constructor(status, message, extra = {}) { super(message); this.status = status; this.extra = extra; }
@@ -53,7 +53,7 @@ const newId = () => platform.sha256hex(`${platform.randomInt(1e9)}:${platform.ra
 const ISO_RE = /^\d{4}-\d{2}-\d{2}$/;
 const publicUser = (u) => ({name: u.name, role: u.role, roleLabel: ROLE_LABELS[u.role], canEdit: canEdit(u.role)});
 /** Для кнопок «Подключить Telegram / ВК»: к каким каналам уже привязан человек и какой у него логин (он идёт в ссылку-подключение). */
-const connections = (store, me) => ({login: me.login, channels: [...new Set(store.chats().filter((c) => c.phone === me.phone).map((c) => c.channel))]});
+const connections = (store, me) => ({channels: [...new Set(store.chats().filter((c) => c.phone === me.phone).map((c) => c.channel))]});
 
 export function handleApi(req, deps) {
   const {store, secret, now = () => Date.now(), afterChange = () => {}, getRev = () => "", bumpRev = () => {}, announce = () => {}, flush = () => ({pending: false}), afterVenues = () => {}, saveReport = () => ({number: 0})} = deps;
@@ -77,52 +77,29 @@ export function handleApi(req, deps) {
         throw new HttpError(429, `Слишком много попыток. Вход заблокирован на ${minutes} минут.`, {blockedUntil: state.blockedUntil});
       }
     };
-    const authFailure = (client, message, person = "") => {
+    const authFailure = (client) => {
       platform.sleep(400);
-      const device = store.authFailed("app", client, person);
-      const account = person ? store.authFailed("person", person, person) : null;
-      const failed = account && (account.permanent || account.blockedUntil) ? account : device;
+      store.recordPinFailure();
+      const failed = store.authFailed("app", client);
       if (failed.permanent) throw new HttpError(423, "Вход полностью заблокирован. Обратитесь к директору для разблокировки.", {permanent: true});
       if (failed.blockedUntil) throw new HttpError(429, `Слишком много попыток. Вход заблокирован на ${failed.minutes} минут.`, {blockedUntil: failed.blockedUntil});
-      throw new HttpError(401, `${message} Осталось попыток: ${5 - failed.attempts}.`);
+      throw new HttpError(401, `Неверный PIN. Осталось попыток: ${5 - failed.attempts}.`);
     };
     // --- без входа ---
-    if (method === "POST" && path === "/api/identify") {
-      const client = authClient(); checkAuthBlock(client);
+    if (method === "POST" && path === "/api/login") {
+      const client = authClient();
+      checkAuthBlock(client);
       store.ensureLogins();
-      const user = store.findByLogin(body.login);
-      if (!user) return authFailure(client, "Не удалось продолжить. Проверьте ID.");
+      const blockedUntil = store.pinThrottle();
+      if (blockedUntil) throw new HttpError(429, "Слишком много попыток входа. Повторите позже.", {blockedUntil});
+      const user = store.findByPin(body.pin);
+      if (!user) return authFailure(client);
       checkAuthBlock(client, user.phone);
       if (user.role === "blocked") throw new HttpError(403, "Доступ закрыт. Обратитесь к администратору.");
       if (user.loginLocked) throw new HttpError(423, "Вход полностью заблокирован. Обратитесь к директору для разблокировки.");
-      // Имя до ввода PIN не отдаём: иначе открытая точка входа позволяла проверять ID и узнавать ФИО.
-      return {status: 200, body: {ok: true, activation: user.temporary || !user.pin}};
-    }
-    if (method === "POST" && path === "/api/login") {
-      const client = authClient(); checkAuthBlock(client);
-      store.ensureLogins();
-      const user = store.findByLogin(body.login);
-      const suppliedPin = String(body.pin == null ? body.login : body.pin).trim(); // старые клиенты передавали одно поле; после миграции это сработает только у старых записей ID=PIN
-      if (user) checkAuthBlock(client, user.phone);
-      if (user && user.role === "blocked") throw new HttpError(403, "Доступ закрыт. Обратитесь к администратору.");
-      if (user && user.loginLocked) throw new HttpError(423, "Вход полностью заблокирован. Обратитесь к директору для разблокировки.");
-      if (!user || user.temporary || !user.pin || normLogin(user.pin) !== normLogin(suppliedPin)) return authFailure(client, "ID или PIN указан неверно.", user && user.phone);
+      store.authSucceeded("app", client);
       store.unlockAuthPerson(user.phone);
       return {status: 200, body: {token: makeToken({sub: user.phone, l: store.loginMark(user.login, user.pin)}, secret, undefined, now()), user: publicUser(user)}};
-    }
-    if (method === "POST" && path === "/api/activate") {
-      const client = authClient(); checkAuthBlock(client);
-      store.ensureLogins();
-      const user = store.findByLogin(body.login);
-      if (user) checkAuthBlock(client, user.phone);
-      if (!user || !user.temporary) return authFailure(client, "Разовый код неверный или уже использован.", user && user.phone);
-      if (user.role === "blocked") throw new HttpError(403, "Доступ закрыт. Обратитесь к администратору.");
-      if (user.loginLocked) throw new HttpError(423, "Вход полностью заблокирован. Обратитесь к директору для разблокировки.");
-      if (normLogin(user.login) === normLogin(body.pin)) throw new HttpError(400, "PIN должен отличаться от ID сотрудника.");
-      if (!store.setPermanentLogin(user.phone, body.pin)) throw new HttpError(400, "PIN должен состоять ровно из шести цифр.");
-      const fresh = store.users().find((u) => u.phone === user.phone);
-      store.unlockAuthPerson(fresh.phone);
-      return {status: 200, body: {token: makeToken({sub: fresh.phone, l: store.loginMark(fresh.login, fresh.pin)}, secret, undefined, now()), user: publicUser(fresh)}};
     }
 
     // --- нужен вход ---

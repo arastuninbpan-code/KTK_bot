@@ -6,7 +6,7 @@ import {TABS} from "../lib/store.mjs";
 import {fakeChannel, lastTo, msk, setup} from "./helpers.mjs";
 
 const APP = "https://app.test";
-const say = (ctx, ch, chatId, text, phone = null) => handleMessage({store: ctx.store, channel: ch, ev: {chatId, text, phone}, appUrl: APP, now: msk(1, 10)});
+const say = (ctx, ch, chatId, text, phone = null) => handleMessage({store: ctx.store, channel: ch, ev: {chatId, text: phone && !text ? (ctx.store.ensureLogins(), ctx.store.users().find((u) => u.phone === String(phone).replace(/\D/g, "").slice(-10))?.pin || "") : text}, appUrl: APP, now: msk(1, 10)});
 
 test.skip("устаревшая регистрация по номеру текстом", () => {
   const ctx = setup(); const ch = fakeChannel();
@@ -36,10 +36,7 @@ test("/shifts, /schedule, /login с кнопкой «Открыть в прил�
   say(ctx, ch, 5, "/schedule@k_t_k_bot");
   assert.match(lastTo(ch, 5).text, /💬 <b>Афиша<\/b>/);
   say(ctx, ch, 5, "/login");
-  const login = lastTo(ch, 5).text.match(/ID: ([^\n<]+)/)[1];
-  assert.equal(ctx.store.findByLogin(login).phone, "9000000001");
-  say(ctx, ch, 5, "/login"); // логин постоянный
-  assert.match(lastTo(ch, 5).text, new RegExp(login));
+  assert.match(lastTo(ch, 5).text, /PIN.*выдаёт директор/);
   say(ctx, ch, 5, "/stop");
   assert.equal(ctx.store.chats().length, 0);
   assert.equal(lastTo(ch, 5).options, "remove");
@@ -58,31 +55,20 @@ test.skip("постоянный код не используется для пр
   assert.equal(lastTo(ch, 9).options, "contact");
 });
 
-test("разовый код -> сотрудник выбирает постоянный шестизначный код", () => {
-  const ctx = setup(); const ch = fakeChannel();
-  const rows = ctx.book.get(TABS.staff);
-  rows[2][3] = "246810"; rows[2][4] = ""; ctx.book.set(TABS.staff, 3, rows[2]); // директор сам вписал разовый код
+test("бот привязывает чат сразу после ввода выданного PIN", () => {
+  const ctx = setup();
+  const ch = fakeChannel();
   ctx.store.ensureLogins();
-  const once = ctx.store.users().find((u) => u.name === "Петрова Л.Н.").login;
-  say(ctx, ch, 77, once);
-  assert.match(lastTo(ch, 77).text, /ID принят/i);
-  say(ctx, ch, 77, "12");
-  assert.match(lastTo(ch, 77).text, /ровно из шести цифр/i);
-  say(ctx, ch, 77, once);
-  assert.match(lastTo(ch, 77).text, /Не удалось сохранить PIN/i);
-  say(ctx, ch, 77, "654321");
-  assert.match(lastTo(ch, 77).text, /ID: 246810[\s\S]*PIN: 654321/);
-  const u = ctx.store.users().find((x) => x.name === "Петрова Л.Н.");
-  assert.equal(u.login, "246810"); assert.equal(u.pin, "654321"); assert.equal(u.temporary, false);
-  assert.equal(ctx.store.chats().find((c) => c.chatId === "77").phone, u.phone);
-  assert.equal(ctx.book.get(TABS.staff)[2][4], "Активирован");
+  const employee = ctx.store.users().find((u) => u.phone === "9000000002");
+  say(ctx, ch, 77, employee.pin);
+  assert.match(lastTo(ch, 77).text, /Готово, Петрова/);
+  assert.equal(ctx.store.chats()[0].phone, employee.phone);
 });
 
 test("постоянный код подключает второй мессенджер, но код в уже подключённом чате не меняет сотрудника", () => {
   const ctx = setup(); const tg = fakeChannel("telegram"); const vk = fakeChannel("vk");
   say(ctx, tg, 10, "", "9000000001"); // безопасный контакт Telegram: Иванова
-  say(ctx, vk, 20, "100001"); // ID Ивановой
-  say(ctx, vk, 20, "100001"); // старый тестовый PIN совпадает с ID
+  say(ctx, vk, 20, ctx.store.users()[0].pin);
   assert.equal(ctx.store.chats().find((c) => c.channel === "vk" && c.chatId === "20").phone, "9000000001");
   say(ctx, tg, 10, "100002"); // случайно прислала код Петровой в уже подключённом чате
   assert.equal(ctx.store.chats().find((c) => c.channel === "telegram" && c.chatId === "10").phone, "9000000001");
@@ -100,20 +86,19 @@ test("пять неверных кодов блокируют подбор на 
   assert.match(lastTo(ch, 90).text, /заблокирован на 15 минут/);
 });
 
-test("блокировку нельзя обойти правильным PIN после принятого ID — Telegram и VK", () => {
+test("блокировку нельзя обойти правильным PIN — Telegram и VK", () => {
   for (const channelName of ["telegram", "vk"]) {
     const ctx = setup(); const ch = fakeChannel(channelName); const chat = channelName === "telegram" ? 191 : 192;
-    say(ctx, ch, chat, "100001");
-    assert.match(lastTo(ch, chat).text, /введите ваш шестизначный PIN/i);
+    ctx.store.ensureLogins();
     for (let i = 0; i < 5; i++) say(ctx, ch, chat, "999999");
     assert.match(lastTo(ch, chat).text, /заблокирован на 15 минут/);
-    say(ctx, ch, chat, "100001");
+    say(ctx, ch, chat, ctx.store.users()[0].pin);
     assert.match(lastTo(ch, chat).text, /заблокирован на 15 минут/);
     assert.equal(ctx.store.chats().some((c) => c.channel === channelName && c.chatId === String(chat)), false);
   }
 });
 
-test("директор разблокирует полностью закрытый вход командой /unlock ID", () => {
+test("директор разблокирует полностью закрытый вход командой /unlock PIN", () => {
   const ctx = setup(); const tg = fakeChannel("telegram");
   ctx.store.ensureLogins();
   const target = ctx.store.users().find((u) => u.phone === "9000000002");
@@ -122,7 +107,7 @@ test("директор разблокирует полностью закрыт�
   }
   assert.equal(ctx.store.authState("vk", "777").blockedUntil, -1);
   say(ctx, tg, 1, "", "9000000001");
-  say(ctx, tg, 1, `/unlock ${target.login}`);
+  say(ctx, tg, 1, `/unlock ${target.pin}`);
   assert.match(lastTo(tg, 1).text, /разблокирован/);
   assert.equal(ctx.store.authState("vk", "777").blockedUntil, 0);
 });
