@@ -30,7 +30,7 @@ export function bundle() {
     chunks.push(`// ===== lib/${name}.mjs =====\n${body.trim()}\n`);
   }
   chunks.push(readFileSync(join(here, "gas", "shell.gs"), "utf8"));
-  const text = chunks.join("\n");
+  const text = chunks.join("\n").replace(/\r\n/g, "\n");
   // Apps Script не понимает «приватные» члены классов (#имя): Node их принимает, а Google падает с ParseError
   const priv = text.match(/this\.#\w+|^\s+#\w+\s*[(=;]/m);
   if (priv) throw new Error(`В коде для Apps Script нельзя использовать приватные члены классов (#): «${priv[0].trim()}»`);
@@ -40,7 +40,7 @@ export function bundle() {
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const text = bundle();
   if (process.argv.includes("--check")) {
-    const cur = (() => { try { return readFileSync(OUT, "utf8"); } catch { return ""; } })();
+    const cur = (() => { try { return readFileSync(OUT, "utf8").replace(/\r\n/g, "\n"); } catch { return ""; } })();
     if (cur !== text) { console.error("apps_script_bot/Code.gs устарел: запустите node app/build-gas.mjs"); process.exit(1); }
     console.log("Code.gs актуален");
   } else {
