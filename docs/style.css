@@ -53,13 +53,12 @@ h1, h2, h3 { font-family: var(--h); font-weight: 700; }
 .login-field .code-input { -webkit-text-security: disc; }
 .code-input::placeholder { color: #8fc5e0; }
 .code-input.bad { border-color: var(--coral); background: #ffe3dd; color: var(--coral); animation: shake .4s; }
-.login-fields { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 12px; align-items: end; }
+.login-fields { display: grid; grid-template-columns: minmax(0, 1fr); }
 .login-field { min-width: 0; display: grid; gap: 7px; color: var(--muted); font-size: 13px; font-weight: 900; text-align: center; }
 .login-field .code-input { min-width: 0; letter-spacing: .08em; font-size: 24px; }
 @media (max-width: 380px) {
   .login { padding-left: 12px; padding-right: 12px; }
   .card { padding: 16px; }
-  .login-fields { grid-template-columns: 1fr; }
 }
 @keyframes shake { 0%, 100% { transform: translateX(0); } 20% { transform: translateX(-8px); } 40% { transform: translateX(8px); } 60% { transform: translateX(-6px); } 80% { transform: translateX(6px); } }
 .error { min-height: 22px; margin: 8px 2px 0; color: var(--coral); font-weight: 800; font-size: 14px; }
