@@ -92,7 +92,7 @@ class Spreadsheet {
 
 const builder = (kind) => {
   const o = {kind};
-  for (const m of ["whenFormulaSatisfied", "whenTextEqualTo", "setBackground", "setFontColor", "setBold", "setRanges", "requireValueInList", "requireValueInRange", "requireCheckbox", "setAllowInvalid"]) o[m] = (...a) => { (o.calls ||= []).push([m, ...a]); return o; };
+  for (const m of ["whenFormulaSatisfied", "whenTextEqualTo", "setBackground", "setFontColor", "setBold", "setRanges", "requireValueInList", "requireValueInRange", "requireCheckbox", "setAllowInvalid", "setHelpText"]) o[m] = (...a) => { (o.calls ||= []).push([m, ...a]); return o; };
   o.build = () => o;
   return o;
 };

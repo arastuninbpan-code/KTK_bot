@@ -426,6 +426,10 @@ function everyMinute() {
   const last = Number(p.getProperty("last_cycle") || 0);
   const dueDirty = dirty && now - dirty >= 15000;
   autoStyle_(p);
+  if (!p.getProperty("people_validation_v2")) {
+    const sheet = tabSheet_(SpreadsheetApp.openById(prop_("SHEET_ID")), TABS.schedule);
+    if (sheet && applyPeopleValidation_(sheet)) p.setProperty("people_validation_v2", "1");
+  }
   seedTestUsers_(p);
   const todayStr = todayIso(Date.now());
   if (p.getProperty("months_day") !== todayStr) { p.setProperty("months_day", todayStr); p.setProperty("regroup", "1"); } // новый день: месяц мог стать прошедшим, перекладываем вниз
@@ -464,7 +468,7 @@ function onSheetChange(e) {
       const headEdit = nm0 === TABS.schedule && e.range.getRow() === topOffset_(e.range.getSheet(), nm0) + 1;
       if (headEdit || (e && e.changeType === "REMOVE_COLUMN")) { syncRoleColumns_(); p.deleteProperty("regroup"); } // убрали или переименовали колонку-должность: то же в «Сотрудниках»
       if (headEdit) { try { styleSchedule_(tabSheet_(e.range.getSheet().getParent(), TABS.schedule)); dropAllCaches_(); } catch (err) { diag_("Оформление новой колонки: " + String(err && err.message ? err.message : err)); } } // новая колонка получает шапку, ширину и список сразу
-      if (headEdit) applyPeopleValidation_(tabSheet_(e.range.getSheet().getParent(), TABS.schedule)); // добавили новую роль-колонку: сразу список
+      if (nm0 === TABS.schedule || nm0 === TABS.staff) applyPeopleValidation_(tabSheet_(e.range.getSheet().getParent(), TABS.schedule)); // добавили новую роль-колонку: сразу список
       syncRestoreButtons_();
       if (e && e.range) { const nm = e.range.getSheet().getName(); if (nm === TABS.venues) fillVenueColors_(); if (nm === TABS.schedule || nm === TABS.venues) renderOccupancy_(); } // занятость площадок обновляем сразу
     } catch (err) { diag_("Таблица: ОШИБКА — " + String(err && err.message ? err.message : err)); }
@@ -1594,7 +1598,26 @@ function applyPeopleValidation_(sheet) {
   if (!plan) return;
   const rule = SpreadsheetApp.newDataValidation().requireValueInRange(people.getRange("A2:A1000"), true).setAllowInvalid(true).build();
   const rows = Math.max(sheet.getMaxRows() - 1, 1);
-  plan.perm.slice(5).filter((col) => !isIdColumn(head[col])).forEach((col) => sheet.getRange(2, col + 1, rows, 1).setDataValidation(rule));
+  const columns = plan.perm.slice(5).filter((col) => !isIdColumn(head[col]));
+  const count = sheet.getLastRow() - 1;
+  const values = count > 0 ? sheet.getRange(2, 1, count, head.length).getDisplayValues() : [];
+  const known = new Set(store_().staffNames().map(norm));
+  for (const col of columns) {
+    sheet.getRange(2, col + 1, rows, 1).setDataValidation(rule);
+    values.forEach((row, i) => {
+      const names = String(row[col] || "").split(/[/;,\n]+/).map((part) => part.trim()).filter(Boolean);
+      if (names.length < 2) return;
+      const missing = names.filter((name) => !known.has(norm(name)));
+      const cell = sheet.getRange(i + 2, col + 1);
+      if (missing.length) {
+        cell.setDataValidation(SpreadsheetApp.newDataValidation().requireValueInRange(people.getRange("A2:A1000"), true)
+          .setAllowInvalid(true).setHelpText("Проверьте имена по листу «Сотрудники»: " + missing.join(", ")).build());
+      } else {
+        cell.clearDataValidations();
+      }
+    });
+  }
+  return true;
 }
 
 /**
