@@ -1058,7 +1058,7 @@ function profileSheet() {
       social("telegram", "Telegram", cfg.BOT_URL),
       social("vk", "ВКонтакте", cfg.VK_URL)),
     me.canEdit ? h("button", {class: "btn light report-btn", onclick: () => { close(); reportSheet(); }}, icon("chart"), "Сформировать отчёт") : null,
-    h("div", {class: "field"}, h("span", {}, "Когда я не могу работать"), calBox, info),
+    h("div", {class: "field"}, h("span", {}, "Когда я не могу работать (сессии)"), calBox, info),
     h("div", {class: "actions"}, h("button", {class: "btn light", onclick: () => close()}, "Закрыть"), save),
     h("div", {class: "ver"}, `Приложение ${window.KTK_VERSION || "?"} · сервер ${state.serverVersion || "?"}`)));
   paint();
