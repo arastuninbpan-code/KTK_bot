@@ -1015,7 +1015,7 @@ function taskBookContent(task = null, onChange = null) {
       const selected = new Set(task ? task.people.map(p => p.id).filter(id => data.people.some(p => p.id === id)) : []);
       const id = task ? task.id : randomHex(16);
       const submit = h("button", {class: "btn", type: "submit"}, task ? "Сохранить" : "Назначить задачу");
-      const form = h("form", {onsubmit: async ev => {
+      const form = h("form", {class: "task-form", onsubmit: async ev => {
         ev.preventDefault();
         if (!selected.size) return toast("Выберите исполнителя", {bad: true});
         submit.disabled = true;
@@ -1025,7 +1025,7 @@ function taskBookContent(task = null, onChange = null) {
           if (onChange) onChange(); else await refresh();
           load();
         } catch (e) { submit.disabled = false; toast(e.message, {bad: true}); }
-      }}, h("label", {class: "field"}, "Что сделать", text), h("label", {class: "field"}, "Срок включительно", due),
+      }}, h("label", {class: "field"}, "Что сделать", text), h("label", {class: "task-deadline"}, h("span", {}, "Срок включительно"), due),
       h("fieldset", {}, h("legend", {}, "Исполнители"), data.people.map(p => h("label", {class: "check"}, h("input", {type: "checkbox", checked: selected.has(p.id), onchange: ev => ev.target.checked ? selected.add(p.id) : selected.delete(p.id)}), p.name))), submit);
       content.replaceChildren(form);
       if (task) content.append(h("button", {class: "btn coral", onclick: () => confirmDialog("Удалить задачу?", task.text, "Удалить", async () => {

@@ -463,3 +463,12 @@ button.task-card { width: 100%; text-align: start; font: inherit; color: inherit
 .task-card b { white-space: pre-wrap; }
 .task-card:has(input:checked) b { text-decoration: line-through; }
 .task-card.late { background: #ffe5e2; border-color: #b32632; }
+.task-form { display: grid; gap: 16px; min-width: 0; }
+.task-form > .field { margin: 0; }
+.task-form textarea { display: block; margin-top: 6px; }
+.task-deadline { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.1fr); align-items: center; gap: 12px; }
+.task-deadline input { min-width: 0; width: 100%; box-sizing: border-box; }
+.task-form fieldset { margin: 0; min-width: 0; padding: 8px 12px; border: 1px solid #b6c8d7; border-radius: 14px; }
+.task-form legend { padding: 0 4px; }
+.task-form .check { align-items: center; }
+.task-form .check input { margin: 0; }
