@@ -168,7 +168,8 @@ const syncEl = (() => { const d = document.createElement("div"); d.className = "
 const syncMark = () => syncEl.classList.toggle("on", queue.length > 0);
 const saveQueue = () => { try { localStorage.setItem(QKEY, JSON.stringify(queue)); } catch (_) {} syncMark(); };
 syncMark();
-const newEventId = () => Array.from(crypto.getRandomValues(new Uint8Array(4)), (b) => b.toString(16).padStart(2, "0")).join("");
+const newEventId = () => randomHex(4);
+const randomHex = (bytes) => Array.from(crypto.getRandomValues(new Uint8Array(bytes)), (b) => b.toString(16).padStart(2, "0")).join("");
 const colorHex = (name) => ((state.palette || []).find((c) => c.name === name) || {}).hex || FALLBACK_HEX;
 const tmpRow = (id) => -((parseInt(id || "0", 16) || Date.now()) + 1); // у ещё не отправленного события временный отрицательный номер строки
 
@@ -981,16 +982,16 @@ function setOffline(on) { if (state.offline !== on) { state.offline = on; render
 
 // ---------- профиль: соцсети и «когда я не могу работать» ----------
 /** Нажали на аватар: кто я, какие соцсети подключены и календарь, где отмечаются дни, когда работать не получится. */
-function taskBook() {
+function taskBookContent() {
   const content = h("div", {}, "Загрузка…");
-  const {close} = overlay(sheet(h("h2", {}, "Задачник"), content, h("button", {class: "btn light", onclick: () => close()}, "Закрыть")));
+
   async function refresh() {
     try {
       const data = await api("GET", "/api/tasks");
       const text = h("textarea", {class: "input", required: true, maxlength: 2000});
       const due = h("input", {class: "input", type: "date", required: true});
       const selected = new Set();
-      const id = crypto.randomUUID();
+      const id = randomHex(16);
       const submit = h("button", {class: "btn", type: "submit"}, "Назначить задачу");
       const form = h("form", {onsubmit: async ev => {
         ev.preventDefault();
@@ -1009,6 +1010,7 @@ function taskBook() {
     } catch (err) { content.textContent = err.message; }
   }
   refresh();
+  return content;
 }
 
 function personalTasks(me) {
@@ -1199,7 +1201,7 @@ function appView() {
         h("button", {class: "icon-btn", "aria-label": "Выйти", onclick: () => confirmDialog("Выйти?", "Чтобы войти снова, понадобится ваш шестизначный код.", "Выйти", logout)}, icon("exit"))),
       h("div", {class: "tabs", role: "tablist"},
         [["all", "Расписание"], ["mine", "Мои смены"], ["venues", "Площадки"]].map(([t, label]) => h("button", {class: "tab", role: "tab", "aria-selected": String(state.tab === t), onclick: () => { state.tab = t; render(); window.scrollTo(0, 0); }}, label)))),
-    offlineBar(), old, state.me.role === "admin" ? h("button", {class: "btn light", onclick: taskBook}, "Задачник") : null, body,
+    offlineBar(), old, body,
     canEdit && state.tab !== "venues" ? h("button", {class: "fab", "aria-label": "Добавить событие", onclick: () => editor(null)}, icon("plus")) : null);
 }
 
@@ -1266,7 +1268,18 @@ function editor(e) {
     ? {row: e.row, rev: e.rev, kind: (e.meta && e.meta.kind) || "event", note: (e.meta && e.meta.note) || "", sendDm: false, publish: false, title: e.title, date: e.date, dateEnd: e.dateEnd || "", time: times[0] || "", extra: times.slice(1), end: e.end || "", hall: e.hall || "", roles: JSON.parse(JSON.stringify(e.roles))}
     : {kind: "event", note: "", sendDm: true, publish: true, title: "", date: state.today, dateEnd: "", time: "", extra: [], end: "", hall: "", roles: {}};
   const {ov, close} = overlay("");
+  let taskContent;
   const paint = () => {
+    const kinds = [["event", "Событие"], ["meeting", "Собрание"]];
+    if (!e && isAdmin()) kinds.push(["tasks", "Задачник"]);
+    const kindSwitch = h("div", {class: "seg2", role: "tablist"}, kinds.map(([key, label]) =>
+      h("button", {class: "segb" + (draft.kind === key ? " on" : ""), role: "tab", "aria-selected": String(draft.kind === key),
+        onclick: () => { draft.kind = key; paint(); }}, label)));
+    if (draft.kind === "tasks") {
+      if (!taskContent) taskContent = taskBookContent();
+      ov.replaceChildren(sheet(h("h2", {}, "Задачник"), kindSwitch, taskContent, h("button", {class: "btn light", onclick: close}, "Закрыть")));
+      return;
+    }
     const venues = [...new Set([...state.venues, draft.hall].filter(Boolean))];
     const err = h("div", {class: "error", role: "alert"});
     const title = h("input", {class: "input", value: draft.title, placeholder: "Например, Спектакль «Бука»", oninput: (ev) => { draft.title = ev.target.value; ev.target.classList.remove("bad"); err.textContent = ""; }});
@@ -1319,8 +1332,6 @@ function editor(e) {
           h("button", {class: "chip add", onclick: () => picker(role, names, (sel) => { if (sel.length) draft.roles[role] = sel; else delete draft.roles[role]; paint(); }, {row: draft.row, date: draft.date, dateEnd: draft.dateEnd, time: [draft.time, ...draft.extra].filter(Boolean).join(", "), end: draft.end})}, "+ добавить")));
     });
     const meeting = draft.kind === "meeting";
-    const kindSwitch = h("div", {class: "seg2", role: "tablist"},
-      [["event", "Событие"], ["meeting", "📋 Собрание"]].map(([k, label]) => h("button", {class: "segb" + (draft.kind === k ? " on" : ""), role: "tab", "aria-selected": String(draft.kind === k), onclick: () => { draft.kind = k; paint(); }}, label)));
     const note = h("textarea", {class: "input", rows: "6", placeholder: "О чём собрание, повестка, что подготовить. Можно вставить текст или взять его из документа ниже.", oninput: (ev) => (draft.note = ev.target.value)}, draft.note);
     note.value = draft.note;
     const docBtn = h("button", {class: "btn light attach", disabled: Boolean(draft.reading), onclick: () => chooseFiles(false, async ([f]) => {
