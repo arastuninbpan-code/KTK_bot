@@ -34,4 +34,16 @@ test("Задачи приватны, отметки независимы, пов
   assert.equal(post("/status", first, {...mark, done: false}), 200);
   assert.equal(notices.length, 2);
   assert.ok(notices.every(([phone]) => phone === "9000000001"));
+  const edit = {...task, text: "Новый текст", version: 0};
+  assert.equal(call("PUT", "/api/tasks", first, edit).status, 403);
+  assert.equal(call("DELETE", "/api/tasks", other, edit).status, 403);
+  assert.equal(post("/status", first, mark), 200);
+  assert.equal(call("PUT", "/api/tasks", admin, edit).status, 200);
+  assert.equal(schedule(first).me.tasks[0].done, true);
+  assert.equal(schedule(second).me.tasks[0].text, edit.text);
+  assert.equal(call("DELETE", "/api/tasks", admin, edit).status, 409);
+  assert.equal(call("DELETE", "/api/tasks", admin, {...edit, version: 1}).status, 200);
+  assert.deepEqual(schedule(first).me.tasks, []);
+  assert.deepEqual(call("GET", "/api/tasks", admin).body.tasks, []);
+  assert.equal(post("/status", first, mark), 404);
 });

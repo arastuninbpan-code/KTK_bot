@@ -1597,7 +1597,7 @@ function readToken(token, secret, now = Date.now()) {
 // ===== lib/api.mjs =====
 // API приложения. Чистая функция: запрос -> {status, body}. Синхронный код, никакой привязки к платформе.
 
-const SERVER_VERSION = "2026.11.26-1"; // меняется при каждом выпуске; приложение показывает её в профиле
+const SERVER_VERSION = "2026.11.26-4"; // меняется при каждом выпуске; приложение показывает её в профиле
 
 class HttpError extends Error {
   constructor(status, message, extra = {}) { super(message); this.status = status; this.extra = extra; }
@@ -1710,17 +1710,35 @@ function handleApi(req, deps) {
       const rows = taskRows();
       if (path === "/api/tasks" && method === "GET") {
         if (me.role !== "admin") throw new HttpError(403, "Только для администратора");
-        return {status: 200, body: {tasks: rows, people: users.filter(u => u.role !== "blocked").map(u => ({id: store.uid(u.phone), name: u.name}))}};
+        return {status: 200, body: {tasks: body.peopleOnly ? [] : rows.filter(t => !t.deleted), people: users.filter(u => u.role !== "blocked").map(u => ({id: store.uid(u.phone), name: u.name}))}};
       }
-      if (method === "POST" && path === "/api/tasks") {
+      if (["POST", "PUT", "DELETE"].includes(method) && path === "/api/tasks") {
         if (me.role !== "admin") throw new HttpError(403, "Только для администратора");
         const {id, due} = body;
+        const index = rows.findIndex(t => t.id === id);
+        const existing = rows[index];
+        if (method !== "POST") {
+          if (!existing || existing.deleted) throw new HttpError(404, "Задача уже удалена");
+          if (body.version !== (existing.version || 0)) throw new HttpError(409, "Задачу уже изменили. Откройте её заново.");
+          if (method === "DELETE") {
+            existing.deleted = true;
+            store.book.set(TABS.tasks, index + 2, [JSON.stringify(existing)]);
+            bumpRev();
+            return {status: 200, body: {ok: true}};
+          }
+        }
         const text = String(body.text || "").trim();
         if (!/^[a-zA-Z0-9-]{16,64}$/.test(id || "") || !text || text.length > 2000 || !ISO_RE.test(due) || !Number.isFinite(Date.parse(due)) || new Date(due).toISOString().slice(0,10) !== due) throw new HttpError(400, "Введите текст задачи и дату срока");
         const ids = new Set(Array.isArray(body.people) ? body.people : []);
         const people = users.filter(u => u.role !== "blocked" && ids.has(store.uid(u.phone))).map(u => ({id: store.uid(u.phone), name: u.name, seen: false, done: false}));
         if (!people.length || people.length !== ids.size) throw new HttpError(400, "Выберите действующих сотрудников");
-        const existing = rows.find(t => t.id === id);
+        if (method === "PUT") {
+          const previous = new Map(existing.people.map(p => [p.id, p]));
+          const updated = {...existing, text, due, people: people.map(p => previous.get(p.id) || p), version: (existing.version || 0) + 1};
+          store.book.set(TABS.tasks, index + 2, [JSON.stringify(updated)]);
+          bumpRev();
+          return {status: 200, body: {ok: true}};
+        }
         if (existing && (existing.owner !== actor || existing.text !== text || existing.due !== due || existing.people.length !== ids.size || existing.people.some(p => !ids.has(p.id)))) throw new HttpError(409, "Задача уже сохранена с другими данными");
         if (!existing) {
           store.book.ensure(TABS.tasks, ["Задача"]);
@@ -1734,7 +1752,7 @@ function handleApi(req, deps) {
         let changed = false;
         rows.forEach((task, index) => {
           const person = task.people.find(p => p.id === actor);
-          if (ids.has(task.id) && person && !person.seen) {
+          if (!task.deleted && ids.has(task.id) && person && !person.seen) {
             person.seen = true;
             store.book.set(TABS.tasks, index + 2, [JSON.stringify(task)]);
             changed = true;
@@ -1745,7 +1763,7 @@ function handleApi(req, deps) {
       }
       if (method === "POST" && path === "/api/tasks/status") {
         const i = rows.findIndex(t => t.id === body.id);
-        const task = rows[i], person = task && task.people.find(p => p.id === actor);
+        const task = rows[i], person = task && !task.deleted && task.people.find(p => p.id === actor);
         if (!person) throw new HttpError(404, "Задача не найдена");
         if (typeof body.done !== "boolean") throw new HttpError(400, "Некорректная отметка");
         if (person.done !== body.done) {
@@ -1773,7 +1791,7 @@ function handleApi(req, deps) {
       const venues = [...store.venues()];
       for (const e of events) if (e.hall && !venues.some((v) => norm(v) === norm(e.hall))) venues.push(e.hall);
       const editor = canEdit(me.role);
-      return {status: 200, body: {version: SERVER_VERSION, today, me: {...publicUser(me), tasks: taskRows().filter(t => t.people.some(p => p.id === actor)).map(({id, text, due, people}) => { const {seen, done} = people.find(p => p.id === actor); return {id, text, due, seen, done}; }), ...connections(store, me), uid: store.uid(me.phone), avatarHidden: store.avatarHidden(me.phone), off: store.offDates(me.phone).filter((d) => d >= today)}, roles: editableRoles(store, table), allRoles: headerRoles(table), layout: layoutOf(table).v, rev: getRev(), events, venues, venueColors: venueColorMap(store), palette: VENUE_COLORS,
+      return {status: 200, body: {version: SERVER_VERSION, today, me: {...publicUser(me), tasks: taskRows().filter(t => !t.deleted && t.people.some(p => p.id === actor)).map(({id, text, due, people}) => { const {seen, done} = people.find(p => p.id === actor); return {id, text, due, seen, done}; }), ...connections(store, me), uid: store.uid(me.phone), avatarHidden: store.avatarHidden(me.phone), off: store.offDates(me.phone).filter((d) => d >= today)}, roles: editableRoles(store, table), allRoles: headerRoles(table), layout: layoutOf(table).v, rev: getRev(), events, venues, venueColors: venueColorMap(store), palette: VENUE_COLORS,
         staff: editor ? store.staffNames() : undefined, groups: editor ? store.groups() : undefined,
         unavailable: editor ? unavailableMap(store, today) : undefined, avatarKey: avatarKey(store)}};
     }

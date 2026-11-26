@@ -982,41 +982,58 @@ function setOffline(on) { if (state.offline !== on) { state.offline = on; render
 
 // ---------- профиль: соцсети и «когда я не могу работать» ----------
 /** Нажали на аватар: кто я, какие соцсети подключены и календарь, где отмечаются дни, когда работать не получится. */
-function allTaskCards(tasks) {
+function allTaskCards(tasks, onEdit) {
   return h("section", {}, h("h3", {}, "Все задачи"), tasks.length ? null : h("p", {class: "muted"}, "Задач пока нет"), tasks.sort((a,b) => a.due.localeCompare(b.due)).map(t => {
     const late = t.due < state.today && t.people.some(p => !p.done);
-    return h("article", {class: "task-card" + (late ? " late" : "")}, h("b", {}, t.text), h("div", {}, (late ? "Просрочено · " : "Срок · ") + dayTitle(t.due) + " " + t.due.slice(0,4)), ...t.people.map(p => h("div", {}, p.name + (p.done ? " · выполнено" : " · в работе"))));
+    return h("button", {type: "button", onclick: () => onEdit(t), class: "task-card" + (late ? " late" : "")}, h("b", {}, t.text), h("div", {}, (late ? "Просрочено · " : "Срок · ") + dayTitle(t.due) + " " + t.due.slice(0,4)), ...t.people.map(p => h("div", {}, p.name + (p.done ? " · выполнено" : " · в работе"))));
   }));
 }
 
 function adminProfileTasks() {
   const box = h("section", {}, h("h3", {}, "Все задачи"), "Загрузка…");
-  api("GET", "/api/tasks").then(data => box.replaceChildren(allTaskCards(data.tasks)))
-    .catch(err => box.replaceChildren(h("h3", {}, "Все задачи"), h("p", {role: "alert"}, err.message)));
+  async function refresh() {
+    try {
+      const data = await api("GET", "/api/tasks");
+      box.replaceChildren(allTaskCards(data.tasks, task => {
+        const {close} = overlay(sheet(h("h2", {}, "Редактировать задачу"), taskBookContent(task, () => { close(); refresh(); }), h("button", {class: "btn light", onclick: () => close()}, "Закрыть")));
+      }));
+    } catch (err) { box.replaceChildren(h("h3", {}, "Все задачи"), h("p", {role: "alert"}, err.message)); }
+  }
+  refresh();
   return box;
 }
-function taskBookContent() {
+function taskBookContent(task = null, onChange = null) {
   const content = h("div", {}, "Загрузка…");
 
   async function refresh() {
     try {
-      const data = await api("GET", "/api/tasks");
+      const data = await api("GET", "/api/tasks", {peopleOnly: true});
       const text = h("textarea", {class: "input", required: true, maxlength: 2000});
       const due = h("input", {class: "input", type: "date", required: true});
-      const selected = new Set();
-      const id = randomHex(16);
-      const submit = h("button", {class: "btn", type: "submit"}, "Назначить задачу");
+      text.value = task ? task.text : "";
+      due.value = task ? task.due : "";
+      const selected = new Set(task ? task.people.map(p => p.id).filter(id => data.people.some(p => p.id === id)) : []);
+      const id = task ? task.id : randomHex(16);
+      const submit = h("button", {class: "btn", type: "submit"}, task ? "Сохранить" : "Назначить задачу");
       const form = h("form", {onsubmit: async ev => {
         ev.preventDefault();
         if (!selected.size) return toast("Выберите исполнителя", {bad: true});
         submit.disabled = true;
         try {
-          await api("POST", "/api/tasks", {id, text: text.value, due: due.value, people: [...selected]});
-          toast("Задача назначена"); await refresh(); load();
+          await api(task ? "PUT" : "POST", "/api/tasks", {id, version: task && (task.version || 0), text: text.value, due: due.value, people: [...selected]});
+          toast(task ? "Задача сохранена" : "Задача назначена");
+          if (onChange) onChange(); else await refresh();
+          load();
         } catch (e) { submit.disabled = false; toast(e.message, {bad: true}); }
       }}, h("label", {class: "field"}, "Что сделать", text), h("label", {class: "field"}, "Срок включительно", due),
-      h("fieldset", {}, h("legend", {}, "Исполнители"), data.people.map(p => h("label", {class: "check"}, h("input", {type: "checkbox", onchange: ev => ev.target.checked ? selected.add(p.id) : selected.delete(p.id)}), p.name))), submit);
-      content.replaceChildren(form, allTaskCards(data.tasks));
+      h("fieldset", {}, h("legend", {}, "Исполнители"), data.people.map(p => h("label", {class: "check"}, h("input", {type: "checkbox", checked: selected.has(p.id), onchange: ev => ev.target.checked ? selected.add(p.id) : selected.delete(p.id)}), p.name))), submit);
+      content.replaceChildren(form);
+      if (task) content.append(h("button", {class: "btn coral", onclick: () => confirmDialog("Удалить задачу?", task.text, "Удалить", async () => {
+        try {
+          await api("DELETE", "/api/tasks", {id, version: task.version || 0});
+          onChange(); load(); toast("Задача удалена");
+        } catch (err) { toast(err.message, {bad: true}); }
+      })}, "Удалить задачу"));
     } catch (err) { content.textContent = err.message; }
   }
   refresh();
