@@ -982,6 +982,19 @@ function setOffline(on) { if (state.offline !== on) { state.offline = on; render
 
 // ---------- профиль: соцсети и «когда я не могу работать» ----------
 /** Нажали на аватар: кто я, какие соцсети подключены и календарь, где отмечаются дни, когда работать не получится. */
+function allTaskCards(tasks) {
+  return h("section", {}, h("h3", {}, "Все задачи"), tasks.length ? null : h("p", {class: "muted"}, "Задач пока нет"), tasks.sort((a,b) => a.due.localeCompare(b.due)).map(t => {
+    const late = t.due < state.today && t.people.some(p => !p.done);
+    return h("article", {class: "task-card" + (late ? " late" : "")}, h("b", {}, t.text), h("div", {}, (late ? "Просрочено · " : "Срок · ") + dayTitle(t.due) + " " + t.due.slice(0,4)), ...t.people.map(p => h("div", {}, p.name + (p.done ? " · выполнено" : " · в работе"))));
+  }));
+}
+
+function adminProfileTasks() {
+  const box = h("section", {}, h("h3", {}, "Все задачи"), "Загрузка…");
+  api("GET", "/api/tasks").then(data => box.replaceChildren(allTaskCards(data.tasks)))
+    .catch(err => box.replaceChildren(h("h3", {}, "Все задачи"), h("p", {role: "alert"}, err.message)));
+  return box;
+}
 function taskBookContent() {
   const content = h("div", {}, "Загрузка…");
 
@@ -1003,10 +1016,7 @@ function taskBookContent() {
         } catch (e) { submit.disabled = false; toast(e.message, {bad: true}); }
       }}, h("label", {class: "field"}, "Что сделать", text), h("label", {class: "field"}, "Срок включительно", due),
       h("fieldset", {}, h("legend", {}, "Исполнители"), data.people.map(p => h("label", {class: "check"}, h("input", {type: "checkbox", onchange: ev => ev.target.checked ? selected.add(p.id) : selected.delete(p.id)}), p.name))), submit);
-      content.replaceChildren(form, h("h3", {}, "Все задачи"), ...data.tasks.sort((a,b) => a.due.localeCompare(b.due)).map(t => {
-        const late = t.due < state.today && t.people.some(p => !p.done);
-        return h("article", {class: "task-card" + (late ? " late" : "")}, h("b", {}, t.text), h("div", {}, (late ? "Просрочено · " : "Срок · ") + dayTitle(t.due) + " " + t.due.slice(0,4)), ...t.people.map(p => h("div", {}, p.name + (p.done ? " · выполнено" : " · в работе"))));
-      }));
+      content.replaceChildren(form, allTaskCards(data.tasks));
     } catch (err) { content.textContent = err.message; }
   }
   refresh();
@@ -1117,7 +1127,8 @@ function profileSheet() {
       social("telegram", "Telegram", cfg.BOT_URL),
       social("vk", "ВКонтакте", cfg.VK_URL)),
     me.canEdit ? h("button", {class: "btn light report-btn", onclick: () => { close(); reportSheet(); }}, icon("chart"), "Сформировать отчёт") : null,
-    personalTasks(me),
+    me.role === "admin" ? adminProfileTasks() : null,
+    me.role !== "admin" || (me.tasks || []).length ? personalTasks(me) : null,
     h("div", {class: "field"}, h("span", {}, "Когда я не могу работать (сессии)"), calBox, info),
     h("div", {class: "actions"}, h("button", {class: "btn light", onclick: () => close()}, "Закрыть"), save),
     h("div", {class: "ver"}, `Приложение ${window.KTK_VERSION || "?"} · сервер ${state.serverVersion || "?"}`)));
