@@ -1,0 +1,37 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+import {handleApi} from "../lib/api.mjs";
+import {setup, msk} from "./helpers.mjs";
+
+test("Задачи приватны, отметки независимы, повтор запроса не дублирует уведомление", () => {
+  const {store} = setup();
+  const notices = [];
+  const deps = {store, secret: "test-secret", now: () => msk(1), notifyTask: (...args) => notices.push(args)};
+  const call = (method, path, token, body) => handleApi({method, path, token, body}, deps);
+  store.ensureLogins();
+  const login = phone => call("POST", "/api/login", "", {pin: store.users().find(u => u.phone === phone).pin}).body.token;
+  const admin = login("9000000001"), first = login("9000000002"), second = login("9000000003"), other = login("9000000004");
+  const schedule = token => call("GET", "/api/schedule", token).body;
+  const initial = schedule(other);
+  const task = {id: "test-id-task-123456", text: "Разобрать сцену", due: "2026-10-02", people: [schedule(first).me.uid, schedule(second).me.uid]};
+  const post = (path, token, body) => call("POST", "/api/tasks" + path, token, body).status;
+  assert.equal(post("", other, task), 403);
+  assert.equal(post("", admin, task), 200);
+  assert.equal(post("", admin, task), 200);
+  assert.equal(call("GET", "/api/tasks", admin).body.tasks.length, 1);
+  assert.equal(call("GET", "/api/tasks", other).status, 403);
+  assert.deepEqual(schedule(other).me.tasks, []);
+  assert.deepEqual(schedule(other).events, initial.events);
+  assert.equal(post("/seen", first, {ids: [task.id]}), 200);
+  assert.equal(schedule(first).me.tasks[0].seen, true);
+  assert.equal(schedule(second).me.tasks[0].seen, false);
+  const mark = {id: task.id, done: true};
+  assert.equal(post("/status", other, mark), 404);
+  assert.equal(post("/status", first, mark), 200);
+  assert.equal(post("/status", first, mark), 200);
+  assert.equal(schedule(first).me.tasks[0].done, true);
+  assert.equal(schedule(second).me.tasks[0].done, false);
+  assert.equal(post("/status", first, {...mark, done: false}), 200);
+  assert.equal(notices.length, 2);
+  assert.ok(notices.every(([phone]) => phone === "9000000001"));
+});

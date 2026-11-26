@@ -981,6 +981,63 @@ function setOffline(on) { if (state.offline !== on) { state.offline = on; render
 
 // ---------- профиль: соцсети и «когда я не могу работать» ----------
 /** Нажали на аватар: кто я, какие соцсети подключены и календарь, где отмечаются дни, когда работать не получится. */
+function taskBook() {
+  const content = h("div", {}, "Загрузка…");
+  const {close} = overlay(sheet(h("h2", {}, "Задачник"), content, h("button", {class: "btn light", onclick: () => close()}, "Закрыть")));
+  async function refresh() {
+    try {
+      const data = await api("GET", "/api/tasks");
+      const text = h("textarea", {class: "input", required: true, maxlength: 2000});
+      const due = h("input", {class: "input", type: "date", required: true});
+      const selected = new Set();
+      const id = crypto.randomUUID();
+      const submit = h("button", {class: "btn", type: "submit"}, "Назначить задачу");
+      const form = h("form", {onsubmit: async ev => {
+        ev.preventDefault();
+        if (!selected.size) return toast("Выберите исполнителя", {bad: true});
+        submit.disabled = true;
+        try {
+          await api("POST", "/api/tasks", {id, text: text.value, due: due.value, people: [...selected]});
+          toast("Задача назначена"); await refresh(); load();
+        } catch (e) { submit.disabled = false; toast(e.message, {bad: true}); }
+      }}, h("label", {class: "field"}, "Что сделать", text), h("label", {class: "field"}, "Срок включительно", due),
+      h("fieldset", {}, h("legend", {}, "Исполнители"), data.people.map(p => h("label", {class: "check"}, h("input", {type: "checkbox", onchange: ev => ev.target.checked ? selected.add(p.id) : selected.delete(p.id)}), p.name))), submit);
+      content.replaceChildren(form, h("h3", {}, "Все задачи"), ...data.tasks.sort((a,b) => a.due.localeCompare(b.due)).map(t => {
+        const late = t.due < state.today && t.people.some(p => !p.done);
+        return h("article", {class: "task-card" + (late ? " late" : "")}, h("b", {}, t.text), h("div", {}, (late ? "Просрочено · " : "Срок · ") + dayTitle(t.due) + " " + t.due.slice(0,4)), ...t.people.map(p => h("div", {}, p.name + (p.done ? " · выполнено" : " · в работе"))));
+      }));
+    } catch (err) { content.textContent = err.message; }
+  }
+  refresh();
+}
+
+function personalTasks(me) {
+  const list = me.tasks || [];
+  const box = h("section", {}, h("h3", {}, "Мои задачи"));
+  if (!list.length) box.append(h("p", {class: "muted"}, "Назначенных задач пока нет"));
+  list.forEach(t => {
+    const check = h("input", {type: "checkbox", checked: t.done, onchange: async () => {
+      const done = check.checked;
+      check.disabled = true;
+      try { await api("POST", "/api/tasks/status", {id: t.id, done}); t.done = done; }
+      catch (err) { check.checked = t.done; toast(err.message, {bad: true}); }
+      finally { check.disabled = false; }
+    }});
+    box.append(h("label", {class: "task-card check"}, check, h("span", {}, h("b", {}, t.text), h("small", {}, "До " + dayTitle(t.due) + " " + t.due.slice(0,4)))));
+  });
+  const unseen = list.filter(t => !t.seen);
+  if (unseen.length) {
+    const observer = new IntersectionObserver(entries => {
+      if (!box.isConnected) { observer.disconnect(); return; }
+      if (!entries.some(e => e.isIntersecting)) return;
+      observer.disconnect();
+      api("POST", "/api/tasks/seen", {ids: unseen.map(t => t.id)}).then(() => { unseen.forEach(t => t.seen = true); load(); }).catch(e => toast(e.message, {bad: true}));
+    });
+    observer.observe(box);
+  }
+  return box;
+}
+
 function profileSheet() {
   const me = state.me, cfg = window.KTK || {};
   const channels = me.channels || [];
@@ -1058,6 +1115,7 @@ function profileSheet() {
       social("telegram", "Telegram", cfg.BOT_URL),
       social("vk", "ВКонтакте", cfg.VK_URL)),
     me.canEdit ? h("button", {class: "btn light report-btn", onclick: () => { close(); reportSheet(); }}, icon("chart"), "Сформировать отчёт") : null,
+    personalTasks(me),
     h("div", {class: "field"}, h("span", {}, "Когда я не могу работать (сессии)"), calBox, info),
     h("div", {class: "actions"}, h("button", {class: "btn light", onclick: () => close()}, "Закрыть"), save),
     h("div", {class: "ver"}, `Приложение ${window.KTK_VERSION || "?"} · сервер ${state.serverVersion || "?"}`)));
@@ -1135,12 +1193,13 @@ function appView() {
       h("div", {class: "bar"},
         h("button", {class: "whobtn", "aria-label": "Мой профиль", onclick: () => profileSheet()},
           (state.avatars[state.me.uid] ? avatarEl(state.me.uid, state.me.name, "avatar") : h("img", {class: "avatar", src: "avatar.webp", alt: ""})),
+          (state.me.tasks || []).some(t => !t.seen) ? h("span", {class: "task-dot", "aria-label": "Есть новые задачи"}) : null,
           h("div", {class: "who"}, h("b", {}, state.me.name), h("span", {class: "badge " + state.me.role}, state.me.roleLabel))),
         h("button", {class: "icon-btn", "aria-label": "Обновить", onclick: () => load(true)}, icon("refresh")),
         h("button", {class: "icon-btn", "aria-label": "Выйти", onclick: () => confirmDialog("Выйти?", "Чтобы войти снова, понадобится ваш шестизначный код.", "Выйти", logout)}, icon("exit"))),
       h("div", {class: "tabs", role: "tablist"},
         [["all", "Расписание"], ["mine", "Мои смены"], ["venues", "Площадки"]].map(([t, label]) => h("button", {class: "tab", role: "tab", "aria-selected": String(state.tab === t), onclick: () => { state.tab = t; render(); window.scrollTo(0, 0); }}, label)))),
-    offlineBar(), old, body,
+    offlineBar(), old, state.me.role === "admin" ? h("button", {class: "btn light", onclick: taskBook}, "Задачник") : null, body,
     canEdit && state.tab !== "venues" ? h("button", {class: "fab", "aria-label": "Добавить событие", onclick: () => editor(null)}, icon("plus")) : null);
 }
 

@@ -544,6 +544,12 @@ function apiCall_(req) {
     store: store_(),
     secret: secret_(),
     announce: announce_,
+    notifyTask: (phone, text) => {
+      store_().chats().filter(c => c.phone === phone).forEach(c => {
+        try { SENDERS[c.channel].send(c.chatId, esc(text), appButton(prop_("APP_URL"))); }
+        catch (err) { console.error("Уведомление о задаче: " + String(err)); }
+      });
+    },
     saveReport: saveReport_,
     afterVenues: () => { PropertiesService.getScriptProperties().setProperty("regroup", "1"); occupancyNow_(); }, // цвета в таблице занятости обновляются сразу
     getRev: getRev_,

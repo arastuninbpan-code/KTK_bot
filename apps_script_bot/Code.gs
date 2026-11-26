@@ -948,7 +948,7 @@ const archiveCutoff = (today, months = 12) => new Date(Date.UTC(+today.slice(0, 
 // ===== lib/store.mjs =====
 // Хранилище поверх таблицы: сотрудники и роли, чаты, снимок расписания, коды входа, блокировка.
 
-const TABS = {schedule: "Расписание", staff: "Сотрудники", venues: "Площадки", reports: "Отчёты", archive: "Архив", deleted: "_удалённое", chats: "Подписчики", requests: "_заявки", activation: "_активация", auth: "_попытки_входа", people: "_люди", off: "_недоступность", comments: "_комментарии", meta: "_события", avatars: "_аватары", photos: "_фото", state: "_служебное", lock: "_замок"};
+const TABS = {schedule: "Расписание", staff: "Сотрудники", venues: "Площадки", reports: "Отчёты", archive: "Архив", tasks: "_задачник", deleted: "_удалённое", chats: "Подписчики", requests: "_заявки", activation: "_активация", auth: "_попытки_входа", people: "_люди", off: "_недоступность", comments: "_комментарии", meta: "_события", avatars: "_аватары", photos: "_фото", state: "_служебное", lock: "_замок"};
 const REQUESTS_HEADER = ["Канал", "ID чата", "Телефон"];
 const COMMENT_HEADER = ["ID события", "ID", "Время", "Телефон", "Имя", "Текст", "Фото"];
 const META_HEADER = ["ID события", "Тип", "Описание", "—", "Автор", "Создано"];
@@ -1597,7 +1597,7 @@ function readToken(token, secret, now = Date.now()) {
 // ===== lib/api.mjs =====
 // API приложения. Чистая функция: запрос -> {status, body}. Синхронный код, никакой привязки к платформе.
 
-const SERVER_VERSION = "2026.11.23-36"; // меняется при каждом выпуске; приложение показывает её в профиле
+const SERVER_VERSION = "2026.11.26-1"; // меняется при каждом выпуске; приложение показывает её в профиле
 
 class HttpError extends Error {
   constructor(status, message, extra = {}) { super(message); this.status = status; this.extra = extra; }
@@ -1704,6 +1704,60 @@ function handleApi(req, deps) {
     if (!me || me.role === "blocked" || !me.login || !me.pin || session.l !== store.loginMark(me.login, me.pin)) throw new HttpError(401, "Нужно войти");
     const today = todayIso(now());
 
+    const actor = store.uid(me.phone);
+    const taskRows = () => store.book.has(TABS.tasks) ? store.book.get(TABS.tasks).slice(1).map(([json]) => JSON.parse(json)) : [];
+    if (path === "/api/tasks" || path.startsWith("/api/tasks/")) {
+      const rows = taskRows();
+      if (path === "/api/tasks" && method === "GET") {
+        if (me.role !== "admin") throw new HttpError(403, "Только для администратора");
+        return {status: 200, body: {tasks: rows, people: users.filter(u => u.role !== "blocked").map(u => ({id: store.uid(u.phone), name: u.name}))}};
+      }
+      if (method === "POST" && path === "/api/tasks") {
+        if (me.role !== "admin") throw new HttpError(403, "Только для администратора");
+        const {id, due} = body;
+        const text = String(body.text || "").trim();
+        if (!/^[a-zA-Z0-9-]{16,64}$/.test(id || "") || !text || text.length > 2000 || !ISO_RE.test(due) || !Number.isFinite(Date.parse(due)) || new Date(due).toISOString().slice(0,10) !== due) throw new HttpError(400, "Введите текст задачи и дату срока");
+        const ids = new Set(Array.isArray(body.people) ? body.people : []);
+        const people = users.filter(u => u.role !== "blocked" && ids.has(store.uid(u.phone))).map(u => ({id: store.uid(u.phone), name: u.name, seen: false, done: false}));
+        if (!people.length || people.length !== ids.size) throw new HttpError(400, "Выберите действующих сотрудников");
+        const existing = rows.find(t => t.id === id);
+        if (existing && (existing.owner !== actor || existing.text !== text || existing.due !== due || existing.people.length !== ids.size || existing.people.some(p => !ids.has(p.id)))) throw new HttpError(409, "Задача уже сохранена с другими данными");
+        if (!existing) {
+          store.book.ensure(TABS.tasks, ["Задача"]);
+          store.book.append(TABS.tasks, [JSON.stringify({id, owner: actor, text, due, people})]);
+          bumpRev();
+        }
+        return {status: 200, body: {ok: true}};
+      }
+      if (method === "POST" && path === "/api/tasks/seen") {
+        const ids = new Set(Array.isArray(body.ids) ? body.ids : []);
+        let changed = false;
+        rows.forEach((task, index) => {
+          const person = task.people.find(p => p.id === actor);
+          if (ids.has(task.id) && person && !person.seen) {
+            person.seen = true;
+            store.book.set(TABS.tasks, index + 2, [JSON.stringify(task)]);
+            changed = true;
+          }
+        });
+        if (changed) bumpRev();
+        return {status: 200, body: {ok: true}};
+      }
+      if (method === "POST" && path === "/api/tasks/status") {
+        const i = rows.findIndex(t => t.id === body.id);
+        const task = rows[i], person = task && task.people.find(p => p.id === actor);
+        if (!person) throw new HttpError(404, "Задача не найдена");
+        if (typeof body.done !== "boolean") throw new HttpError(400, "Некорректная отметка");
+        if (person.done !== body.done) {
+          person.done = body.done;
+          store.book.set(TABS.tasks, i + 2, [JSON.stringify(task)]);
+          bumpRev();
+          const owner = users.find(u => store.uid(u.phone) === task.owner && u.role === "admin");
+          if (owner && deps.notifyTask) deps.notifyTask(owner.phone, me.name + (person.done ? " отметил(а) выполнение: " : " снял(а) отметку выполнения: ") + task.text);
+        }
+        return {status: 200, body: {ok: true}};
+      }
+    }
     if (method === "GET" && path === "/api/schedule") {
       const table = store.book.get(TABS.schedule);
       const metaMap = store.metaMap();
@@ -1719,7 +1773,7 @@ function handleApi(req, deps) {
       const venues = [...store.venues()];
       for (const e of events) if (e.hall && !venues.some((v) => norm(v) === norm(e.hall))) venues.push(e.hall);
       const editor = canEdit(me.role);
-      return {status: 200, body: {version: SERVER_VERSION, today, me: {...publicUser(me), ...connections(store, me), uid: store.uid(me.phone), avatarHidden: store.avatarHidden(me.phone), off: store.offDates(me.phone).filter((d) => d >= today)}, roles: editableRoles(store, table), allRoles: headerRoles(table), layout: layoutOf(table).v, rev: getRev(), events, venues, venueColors: venueColorMap(store), palette: VENUE_COLORS,
+      return {status: 200, body: {version: SERVER_VERSION, today, me: {...publicUser(me), tasks: taskRows().filter(t => t.people.some(p => p.id === actor)).map(({id, text, due, people}) => { const {seen, done} = people.find(p => p.id === actor); return {id, text, due, seen, done}; }), ...connections(store, me), uid: store.uid(me.phone), avatarHidden: store.avatarHidden(me.phone), off: store.offDates(me.phone).filter((d) => d >= today)}, roles: editableRoles(store, table), allRoles: headerRoles(table), layout: layoutOf(table).v, rev: getRev(), events, venues, venueColors: venueColorMap(store), palette: VENUE_COLORS,
         staff: editor ? store.staffNames() : undefined, groups: editor ? store.groups() : undefined,
         unavailable: editor ? unavailableMap(store, today) : undefined, avatarKey: avatarKey(store)}};
     }
@@ -2646,6 +2700,12 @@ function apiCall_(req) {
     store: store_(),
     secret: secret_(),
     announce: announce_,
+    notifyTask: (phone, text) => {
+      store_().chats().filter(c => c.phone === phone).forEach(c => {
+        try { SENDERS[c.channel].send(c.chatId, esc(text), appButton(prop_("APP_URL"))); }
+        catch (err) { console.error("Уведомление о задаче: " + String(err)); }
+      });
+    },
     saveReport: saveReport_,
     afterVenues: () => { PropertiesService.getScriptProperties().setProperty("regroup", "1"); occupancyNow_(); }, // цвета в таблице занятости обновляются сразу
     getRev: getRev_,
