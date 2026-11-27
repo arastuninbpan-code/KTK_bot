@@ -181,3 +181,17 @@ test("несколько должностей на одном событии: в
   assert.match(added[0].text, /Вам назначена смена/);
   assert.match(added[0].text, /Касса, Монтировка/);
 });
+
+test("ВК сохраняет привязку сотрудника без телефона между командами", () => {
+  const ctx = setup(), ch = fakeChannel("vk");
+  ctx.book.setCell(TABS.staff, 2, 2, "");
+  ctx.store.ensureLogins();
+  const employee = ctx.store.users()[0];
+  say(ctx, ch, 5, employee.pin);
+  assert.equal(ctx.store.chats()[0].phone, employee.phone);
+  say(ctx, ch, 5, "📅 Мои смены");
+  assert.doesNotMatch(lastTo(ch, 5).text, /Введите шестизначный PIN/);
+  say(ctx, ch, 5, "🔕 Отключить");
+  assert.match(lastTo(ch, 5).text, /Уведомления отключены/);
+  assert.equal(ctx.store.chats().length, 0);
+});
