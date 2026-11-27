@@ -1732,11 +1732,19 @@ function handleApi(req, deps) {
         const ids = new Set(Array.isArray(body.people) ? body.people : []);
         const people = users.filter(u => u.role !== "blocked" && ids.has(store.uid(u.phone))).map(u => ({id: store.uid(u.phone), name: u.name, seen: false, done: false}));
         if (!people.length || people.length !== ids.size) throw new HttpError(400, "Выберите действующих сотрудников");
+        const notifyAssigned = (previous) => {
+          if (!deps.notifyTask) return;
+          for (const u of users) {
+            const uid = store.uid(u.phone);
+            if (ids.has(uid) && !previous.has(uid)) deps.notifyTask(u.phone, "Вам назначена задача: " + text + "\nСрок: " + due.split("-").reverse().join("."));
+          }
+        };
         if (method === "PUT") {
           const previous = new Map(existing.people.map(p => [p.id, p]));
           const updated = {...existing, text, due, people: people.map(p => previous.get(p.id) || p), version: (existing.version || 0) + 1};
           store.book.set(TABS.tasks, index + 2, [JSON.stringify(updated)]);
           bumpRev();
+          notifyAssigned(previous);
           return {status: 200, body: {ok: true}};
         }
         if (existing && (existing.owner !== actor || existing.text !== text || existing.due !== due || existing.people.length !== ids.size || existing.people.some(p => !ids.has(p.id)))) throw new HttpError(409, "Задача уже сохранена с другими данными");
@@ -1744,6 +1752,7 @@ function handleApi(req, deps) {
           store.book.ensure(TABS.tasks, ["Задача"]);
           store.book.append(TABS.tasks, [JSON.stringify({id, owner: actor, text, due, people})]);
           bumpRev();
+          notifyAssigned(new Set());
         }
         return {status: 200, body: {ok: true}};
       }

@@ -32,6 +32,7 @@ test("Задачи приватны, отметки независимы, пов
   assert.equal(schedule(first).me.tasks[0].done, true);
   assert.equal(schedule(second).me.tasks[0].done, false);
   assert.equal(post("/status", first, {...mark, done: false}), 200);
+  assert.deepEqual(notices.splice(0, 2).map(([phone]) => phone).sort(), ["9000000002", "9000000003"]);
   assert.equal(notices.length, 2);
   assert.ok(notices.every(([phone]) => phone === "9000000001"));
   const edit = {...task, text: "Новый текст", version: 0};
